@@ -1,21 +1,25 @@
 # xbbg
+
 Bloomberg data toolkit
 
-Installation:
-=============
+## Installation:
 
-From pypi:
-----------
+### Bloomberg Binaries:
 
-    pip install xbbg
+- https://www.bloomberg.com/professional/support/api-library/
 
-From github (recommended):
---------------------------
+```bash
+python -m pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
+```
 
-    pip install git+https://github.com/alpha-xone/xbbg.git -U
+### From pypi:
 
-Bloomberg Binaries:
--------------------
+```bash
+pip install xbbg
+```
 
-- For python 3.x support:
-    - https://bintray.com/bloomberg/BLPAPI-Experimental-pip/blpapi_python#files/simple/blpapi
+### From github (recommended):
+
+```bash
+pip install git+https://github.com/alpha-xone/xbbg.git -U
+```
