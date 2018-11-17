@@ -1,0 +1,10 @@
+[build-system]
+requires = ["flit"]
+build-backend = "flit.buildapi"
+
+[tool.flit.metadata]
+module = "xbbg"
+author = "alpha.xone"
+author-email = "alpha.xone@outlook.com"
+home-page = "https://github.com/alpha-xone"
+classifiers = ["License :: OSI Approved :: Apache Software License"]
