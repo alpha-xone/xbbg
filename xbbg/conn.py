@@ -11,9 +11,9 @@ def with_bloomberg(func):
         func: function to wrap
     """
     @wraps(func)
-    def wrapper(**kwargs):
+    def wrapper(*args, **kwargs):
         con, new = create_connection()
-        res = func(**kwargs)
+        res = func(*args, **kwargs)
         if new: delete_connection()
         return res
     return wrapper
