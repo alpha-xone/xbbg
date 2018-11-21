@@ -1,0 +1,23 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[[source]]
+name = "bbg"
+url = "https://bloomberg.bintray.com/pip/simple"
+verify_ssl = true
+
+[dev-packages]
+
+[packages]
+numpy = "*"
+pandas = "*"
+blpapi = "*"
+pdblp = "*"
+pyarrow = "*"
+ipykernel = "*"
+xone = "*"
+
+[requires]
+python_version = "3.6"
