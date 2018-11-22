@@ -66,6 +66,14 @@ there are multiple queries in the same scope**.
       ...:     start_date='2018-09-26', end_date='2018-10-20',
       ...:     Per='W', Fill='P', Days='A',
       ...: )
+    Out[4]:
+    ticker     SHCOMP Index
+    field              High      Low Last_Price
+    date
+    2018-09-28     2,827.34 2,771.16   2,821.35
+    2018-10-05     2,827.34 2,771.16   2,821.35
+    2018-10-12     2,771.94 2,536.66   2,606.91
+    2018-10-19     2,611.97 2,449.20   2,550.47
 
 ``BDS`` example:
 
