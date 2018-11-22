@@ -16,6 +16,9 @@ On top of other dependencies, Bloomberg API is required:
 Tutorial
 ========
 
+Creation of connection is not necessary - only need to do this when
+there are multiple queries in same scope.
+
 .. code-block:: python
 
     In[1]: from xbbg import blp, conn
