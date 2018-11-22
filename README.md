@@ -177,8 +177,18 @@ This will create Bloomberg connection on the backend to be shared by all queries
 
 ## Storage
 
-If `ROOT_DATA_PATH` is available in `os.environ`, data can be saved.
-Next time the same query will be loaded from local rather than Bloomberg
+If `ROOT_DATA_PATH` is provided in `os.environ`, data can be saved locally.
+Next time the same query will be loaded from local rather than Bloomberg.
+
+Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
+(full description in `DAPI<GO>`):
+
+> To access Bloomberg data via the API (and use that data in Microsoft Excel), 
+> your company must sign the 'Datafeed Addendum' to the Bloomberg Agreement. 
+> This legally binding contract describes the terms and conditions of your use 
+> of the data and information available via the API (the “Data”). 
+> The most fundamental requirement regarding your use of Data is that it cannot 
+> leave the local PC you use to access the BLOOMBERG PROFESSIONAL service.
 
 # Reference
 
