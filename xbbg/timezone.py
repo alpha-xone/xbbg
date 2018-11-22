@@ -1,8 +1,11 @@
 import pandas as pd
 
+import time
+import pytz
+
 from xone import logs
 
-DEFAULT_TZ = 'Asia/Hong_Kong'
+DEFAULT_TZ = pytz.FixedOffset(-time.timezone / 60)
 
 
 def get_tz(tz):
