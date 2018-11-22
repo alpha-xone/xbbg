@@ -1,5 +1,7 @@
 # xbbg
 
+[![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/en/latest/?badge=latest)
+
 Bloomberg data toolkit for humans
 
 # Installation:
