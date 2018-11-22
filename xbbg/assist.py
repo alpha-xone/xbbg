@@ -10,6 +10,98 @@ from xbbg import const
 from xbbg.conn import with_bloomberg, create_connection
 from xbbg.timezone import DEFAULT_TZ
 
+ELEMENTS = [
+    'periodicityAdjustment', 'periodicitySelection', 'currency',
+    'nonTradingDayFillOption', 'nonTradingDayFillMethod',
+    'maxDataPoints', 'returnEIDs', 'returnRelativeDate',
+    'overrideOption', 'pricingOption',
+    'adjustmentNormal', 'adjustmentAbnormal', 'adjustmentSplit',
+    'adjustmentFollowDPDF', 'calendarCodeOverride',
+]
+
+ELEM_KEYS = dict(
+    PeriodAdj='periodicityAdjustment', PerAdj='periodicityAdjustment',
+    Period='periodicitySelection', Per='periodicitySelection',
+    Currency='currency', Curr='currency', FX='currency',
+    Days='nonTradingDayFillOption', Fill='nonTradingDayFillMethod', Points='maxDataPoints',
+    # 'returnEIDs', 'returnRelativeDate',
+    Quote='overrideOption', QuoteType='pricingOption', QtTyp='pricingOption',
+    CshAdjNormal='adjustmentNormal', CshAdjAbnormal='adjustmentAbnormal',
+    CapChg='adjustmentSplit', UseDPDF='adjustmentFollowDPDF',
+    Calendar='calendarCodeOverride',
+)
+
+ELEM_VALS = dict(
+    periodicityAdjustment=dict(
+        A='ACTUAL', C='CALENDAR', F='FISCAL',
+    ),
+    periodicitySelection=dict(
+        D='DAILY', W='WEEKLY', M='MONTHLY', Q='QUARTERLY', S='SEMI_ANNUALLY', Y='YEARLY'
+    ),
+    nonTradingDayFillOption=dict(
+        N='NON_TRADING_WEEKDAYS', W='NON_TRADING_WEEKDAYS', Weekdays='NON_TRADING_WEEKDAYS',
+        C='ALL_CALENDAR_DAYS', A='ALL_CALENDAR_DAYS', All='ALL_CALENDAR_DAYS',
+        T='ACTIVE_DAYS_ONLY', Trading='ACTIVE_DAYS_ONLY',
+    ),
+    nonTradingDayFillMethod=dict(
+        C='PREVIOUS_VALUE', P='PREVIOUS_VALUE', Previous='PREVIOUS_VALUE',
+        B='NIL_VALUE', Blank='NIL_VALUE', NA='NIL_VALUE',
+    ),
+    overrideOption=dict(
+        A='OVERRIDE_OPTION_GPA', G='OVERRIDE_OPTION_GPA', Average='OVERRIDE_OPTION_GPA',
+        C='OVERRIDE_OPTION_CLOSE', Close='OVERRIDE_OPTION_CLOSE',
+    ),
+    pricingOption=dict(
+        P='PRICING_OPTION_PRICE', Price='PRICING_OPTION_PRICE',
+        Y='PRICING_OPTION_YIELD', Yield='PRICING_OPTION_YIELD',
+    ),
+)
+
+
+def _proc_ovrds_(**kwargs):
+    """
+    Bloomberg overrides
+
+    Args:
+        **kwargs: overrides
+
+    Returns:
+        list of tuples
+    """
+    return [
+        (k, v) for k, v in kwargs.items()
+        if k not in list(ELEM_KEYS.keys()) + list(ELEM_KEYS.values())
+    ]
+
+
+def _proc_elms_(**kwargs):
+    """
+    Bloomberg overrides for elements
+
+    Args:
+        **kwargs: overrides
+
+    Returns:
+        list of tuples
+
+    Examples:
+        >>> _proc_elms_(PerAdj='A', Per='W')
+        [('periodicityAdjustment', 'ACTUAL'), ('periodicitySelection', 'WEEKLY')]
+        >>> _proc_elms_(Days='A', Fill='B')
+        [('nonTradingDayFillOption', 'ALL_CALENDAR_DAYS'), ('nonTradingDayFillMethod', 'NIL_VALUE')]
+        >>> _proc_elms_(CshAdjNormal=False, CshAdjAbnormal=True)
+        [('adjustmentNormal', False), ('adjustmentAbnormal', True)]
+        >>> _proc_elms_(Per='W', Quote='Average', start_date='2018-01-10')
+        [('periodicitySelection', 'WEEKLY'), ('overrideOption', 'OVERRIDE_OPTION_GPA')]
+        >>> _proc_elms_(QuoteType='Y')
+        [('pricingOption', 'PRICING_OPTION_YIELD')]
+    """
+    return [
+        (ELEM_KEYS.get(k, k), ELEM_VALS.get(ELEM_KEYS.get(k, k), dict()).get(v, v))
+        for k, v in kwargs.items()
+        if k in list(ELEM_KEYS.keys()) + list(ELEM_KEYS.values())
+    ]
+
 
 @with_bloomberg
 def check_hours(tickers, tz_exch, tz_loc=DEFAULT_TZ):
