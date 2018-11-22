@@ -16,8 +16,8 @@ On top of other dependencies, Bloomberg API is required:
 Tutorial
 ========
 
-Creation of connection is not necessary - only need to do this when
-there are multiple queries in same scope.
+Creation of connection is not necessary - **only need to do this when
+there are multiple queries in the same scope**.
 
 .. code-block:: python
 
