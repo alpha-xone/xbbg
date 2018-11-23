@@ -26,7 +26,7 @@ author = 'Alpha x1'
 # The short X.Y version
 version = ''
 # The full version, including alpha/beta/rc tags
-release = '0.1.0'
+release = '0.1.2'
 
 # -- General configuration ---------------------------------------------------
 
@@ -107,12 +107,10 @@ html_static_path = ['_static']
 #
 # html_sidebars = {}
 
-
 # -- Options for HTMLHelp output ---------------------------------------------
 
 # Output file base name for HTML help builder.
 htmlhelp_basename = 'xbbgdoc'
-
 
 # -- Options for LaTeX output ------------------------------------------------
 
@@ -137,33 +135,27 @@ latex_elements = {
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
-latex_documents = [
-    (master_doc, 'xbbg.tex', 'xbbg Documentation',
-     'Alpha x1', 'manual'),
-]
-
+latex_documents = [(
+    master_doc, 'xbbg.tex', 'xbbg Documentation', 'Alpha x1', 'manual'
+)]
 
 # -- Options for manual page output ------------------------------------------
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [
-    (master_doc, 'xbbg', 'xbbg Documentation',
-     [author], 1)
-]
-
+man_pages = [(
+    master_doc, 'xbbg', 'xbbg Documentation', [author], 1
+)]
 
 # -- Options for Texinfo output ----------------------------------------------
 
 # Grouping the document tree into Texinfo files. List of tuples
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
-texinfo_documents = [
-    (master_doc, 'xbbg', 'xbbg Documentation',
-     author, 'xbbg', 'One line description of project.',
-     'Miscellaneous'),
-]
-
+texinfo_documents = [(
+    master_doc, 'xbbg', 'xbbg Documentation',
+    author, 'xbbg', 'One line description of project.', 'Miscellaneous'
+)]
 
 # -- Options for Epub output -------------------------------------------------
 
@@ -181,6 +173,5 @@ epub_title = project
 
 # A list of files that should not be packed into the epub file.
 epub_exclude_files = ['search.html']
-
 
 # -- Extension configuration -------------------------------------------------
