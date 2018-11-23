@@ -1,7 +1,7 @@
 # xbbg
 
 [![PyPI version](https://badge.fury.io/py/xbbg.svg)](https://badge.fury.io/py/xbbg)
-[![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/en/latest/?badge=latest)
+[![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/en/latest)
 
 Bloomberg data toolkit for humans
 
