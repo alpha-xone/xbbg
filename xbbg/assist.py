@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import inflection
 
 import pandas as pd
 import pdblp
@@ -58,7 +59,7 @@ ELEM_VALS = dict(
 )
 
 
-def _proc_ovrds_(**kwargs):
+def proc_ovrds(**kwargs):
     """
     Bloomberg overrides
 
@@ -74,7 +75,7 @@ def _proc_ovrds_(**kwargs):
     ]
 
 
-def _proc_elms_(**kwargs):
+def proc_elms(**kwargs):
     """
     Bloomberg overrides for elements
 
@@ -85,15 +86,15 @@ def _proc_elms_(**kwargs):
         list of tuples
 
     Examples:
-        >>> _proc_elms_(PerAdj='A', Per='W')
+        >>> proc_elms(PerAdj='A', Per='W')
         [('periodicityAdjustment', 'ACTUAL'), ('periodicitySelection', 'WEEKLY')]
-        >>> _proc_elms_(Days='A', Fill='B')
+        >>> proc_elms(Days='A', Fill='B')
         [('nonTradingDayFillOption', 'ALL_CALENDAR_DAYS'), ('nonTradingDayFillMethod', 'NIL_VALUE')]
-        >>> _proc_elms_(CshAdjNormal=False, CshAdjAbnormal=True)
+        >>> proc_elms(CshAdjNormal=False, CshAdjAbnormal=True)
         [('adjustmentNormal', False), ('adjustmentAbnormal', True)]
-        >>> _proc_elms_(Per='W', Quote='Average', start_date='2018-01-10')
+        >>> proc_elms(Per='W', Quote='Average', start_date='2018-01-10')
         [('periodicitySelection', 'WEEKLY'), ('overrideOption', 'OVERRIDE_OPTION_GPA')]
-        >>> _proc_elms_(QuoteType='Y')
+        >>> proc_elms(QuoteType='Y')
         [('pricingOption', 'PRICING_OPTION_YIELD')]
     """
     return [
@@ -134,7 +135,7 @@ def check_hours(tickers, tz_exch, tz_loc=DEFAULT_TZ):
     return hours
 
 
-def _hist_file_(ticker: str, dt: (str, pd.Timestamp), typ='TRADE'):
+def hist_file(ticker: str, dt: (str, pd.Timestamp), typ='TRADE'):
     """
     Data file location for Bloomberg historical data
 
@@ -148,7 +149,7 @@ def _hist_file_(ticker: str, dt: (str, pd.Timestamp), typ='TRADE'):
 
     Examples:
         >>> data_path = os.environ.get('ROOT_DATA_PATH', '')
-        >>> d_file = _hist_file_(ticker='ES1 Index', dt='2018-08-01')
+        >>> d_file = hist_file(ticker='ES1 Index', dt='2018-08-01')
         >>> root = f'{data_path}/Index/ES1 Index'
         >>> if d_file: assert d_file == f'{root}/TRADE/2018-08-01.parq'
     """
@@ -160,7 +161,7 @@ def _hist_file_(ticker: str, dt: (str, pd.Timestamp), typ='TRADE'):
     return f'{data_path}/{asset}/{proper_ticker}/{typ}/{cur_dt}.parq'
 
 
-def _ref_file_(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq', **kwargs):
+def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq', **kwargs):
     """
     Data file location for Bloomberg reference data
 
@@ -177,21 +178,24 @@ def _ref_file_(ticker: str, fld: str, has_date=False, from_cache=False, ext='par
 
     Examples:
         >>> data_path = os.environ.get('ROOT_DATA_PATH', '')
-        >>> d_file = _ref_file_('BLT LN Equity', fld='Crncy')
+        >>> d_file = ref_file('BLT LN Equity', fld='Crncy')
         >>> root = f'{data_path}/Equity/BLT LN Equity'
         >>> if d_file: assert d_file == f'{root}/Crncy/ovrd=None.parq'
     """
     data_path = os.environ.get('ROOT_DATA_PATH', '')
     if not data_path: return ''
+
     proper_ticker = ticker.replace('/', '_')
     root = f'{data_path}/{ticker.split()[-1]}/{proper_ticker}/{fld}'
+
     if len(kwargs) > 0: info = utils.to_str(kwargs)[1:-1]
     else: info = 'ovrd=None'
 
     # Check date info
     if has_date:
         cur_files = []
-        missing = f'{root}/asof={utils.cur_time(trading=False)}, {info}.{ext}'
+        if len(kwargs) == 0: missing = f'{root}/asof={utils.cur_time(trading=False)}.{ext}'
+        else: missing = f'{root}/asof={utils.cur_time(trading=False)}, {info}.{ext}'
         if from_cache: cur_files = files.all_files(path_name=root, keyword=info, ext=ext)
         if len(cur_files) > 0:
             upd_dt = [val for val in sorted(cur_files)[-1][:-4].split(', ') if 'asof=' in val]
@@ -203,7 +207,7 @@ def _ref_file_(ticker: str, fld: str, has_date=False, from_cache=False, ext='par
     else: return f'{root}/{info}.{ext}'
 
 
-def _save_intraday_(data: pd.DataFrame, ticker: str, dt: (str, pd.Timestamp), typ='TRADE'):
+def save_intraday(data: pd.DataFrame, ticker: str, dt: (str, pd.Timestamp), typ='TRADE'):
     """
     Check whether data is done for the day and save
 
@@ -214,9 +218,9 @@ def _save_intraday_(data: pd.DataFrame, ticker: str, dt: (str, pd.Timestamp), ty
         typ: [TRADE, BID, ASK, BID_BEST, ASK_BEST, BEST_BID, BEST_ASK]
     """
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
-    logger = logs.get_logger(_save_intraday_, level='debug')
+    logger = logs.get_logger(save_intraday, level='debug')
     info = f'{ticker} / {cur_dt} / {typ}'
-    data_file = _hist_file_(ticker=ticker, dt=dt, typ=typ)
+    data_file = hist_file(ticker=ticker, dt=dt, typ=typ)
     if not data_file: return
 
     if data.empty:
@@ -243,7 +247,7 @@ def _save_intraday_(data: pd.DataFrame, ticker: str, dt: (str, pd.Timestamp), ty
     data.to_parquet(data_file)
 
 
-def _query_(con, func: str, **kwargs):
+def query(con, func: str, **kwargs):
     """
     Make Bloomberg query with active connection to save time
 
@@ -321,6 +325,77 @@ def info_key(ticker: str, dt: (str, pd.Timestamp), typ='TRADE', **kwargs):
     return utils.to_str(dict(
         ticker=ticker, dt=pd.Timestamp(dt).strftime('%Y-%m-%d'), typ=typ, **kwargs
     ))
+
+
+def format_earnings(data: pd.DataFrame, header: pd.DataFrame):
+    """
+    Standardized earning outputs and add percentage by each blocks
+
+    Args:
+        data: earning data block
+        header: earning headers
+
+    Returns:
+        pd.DataFrame
+    """
+    if data.dropna(subset=['value']).empty: return pd.DataFrame()
+
+    res = pd.concat([
+        grp.loc[:, ['value']].set_index(header.value)
+        for _, grp in data.groupby(data.position)
+    ], axis=1)
+    res.columns = res.iloc[0]
+    res.index.name = None
+    res = res.iloc[1:].transpose().reset_index().apply(
+        pd.to_numeric, downcast='float', errors='ignore'
+    )
+    res.rename(columns=lambda vv: '_'.join(vv.split()), inplace=True)
+
+    years = res.columns[res.columns.str.startswith('FY_')]
+    lvl_1 = res.Level == 1
+    for yr in years:
+        res.loc[:, yr] = res.loc[:, yr].round(1)
+        pct = f'{yr}_Pct'
+        res.loc[:, pct] = 0.
+        res.loc[lvl_1, pct] = res.loc[lvl_1, pct].astype(float).round(1)
+        res.loc[lvl_1, pct] = res.loc[lvl_1, yr] / res.loc[lvl_1, yr].sum() * 100
+        sub_pct = []
+        for _, snap in res[::-1].iterrows():
+            if snap.Level > 2: continue
+            if snap.Level == 1:
+                if len(sub_pct) == 0: continue
+                sub = pd.concat(sub_pct, axis=1).transpose()
+                res.loc[sub.index, pct] = \
+                    res.loc[sub.index, yr] / res.loc[sub.index, yr].sum() * 100
+                sub_pct = []
+            if snap.Level == 2: sub_pct.append(snap)
+
+    res.set_index('Segment_Name', inplace=True)
+    res.index.name = None
+    return res
+
+
+def format_dvd(data: pd.DataFrame):
+    """
+    Generate block data from reference data
+
+    Args:
+        data: bulk reference data from Bloomberg
+
+    Returns:
+        pd.DataFrame
+    """
+    if data.empty: return pd.DataFrame()
+    if data.dropna(subset=['value']).empty: return pd.DataFrame()
+
+    ticker = data.ticker.values[0]
+    data = pd.DataFrame(pd.concat([
+        grp.loc[:, ['name', 'value']].set_index('name').transpose().reset_index(drop=True)
+        for _, grp in data.groupby('position')
+    ], sort=False)).reset_index(drop=True).assign(ticker=ticker).set_index('ticker')
+    data.columns.name = None
+    data.columns = [inflection.underscore(col.replace(' ', '_')) for col in data.columns]
+    return data
 
 
 if __name__ == '__main__':

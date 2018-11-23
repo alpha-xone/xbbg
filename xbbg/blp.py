@@ -32,7 +32,7 @@ def bdp(tickers: (str, list), flds: (str, list), cache=False, **kwargs):
     tickers = utils.flatten(tickers)
     flds = utils.flatten(flds)
     con, _ = create_connection()
-    ovrds = assist._proc_ovrds_(**kwargs)
+    ovrds = assist.proc_ovrds(**kwargs)
 
     if not cache:
         full_list = '\n'.join([f'tickers: {tickers[:8]}'] + [
@@ -49,7 +49,7 @@ def bdp(tickers: (str, list), flds: (str, list), cache=False, **kwargs):
 
     loaded = pd.DataFrame(data=0, index=tickers, columns=flds)
     for ticker, fld in product(tickers, flds):
-        data_file = assist._ref_file_(
+        data_file = assist.ref_file(
             ticker=ticker, fld=fld, has_date=has_date, from_cache=from_cache, **kwargs
         )
         if files.exists(data_file):
@@ -68,7 +68,7 @@ def bdp(tickers: (str, list), flds: (str, list), cache=False, **kwargs):
 
     for r, snap in ref_data.iterrows():
         subset = [r]
-        data_file = assist._ref_file_(ticker=snap.ticker, fld=snap.field, **kwargs)
+        data_file = assist.ref_file(ticker=snap.ticker, fld=snap.field, **kwargs)
         if data_file:
             files.create_folder(data_file, is_file=True)
             ref_data.iloc[subset].to_parquet(data_file)
@@ -113,8 +113,8 @@ def bdh(
     """
     logger = logs.get_logger(bdh)
     con, _ = create_connection()
-    elms = assist._proc_elms_(**kwargs)
-    ovrds = assist._proc_ovrds_(**kwargs)
+    elms = assist.proc_elms(**kwargs)
+    ovrds = assist.proc_ovrds(**kwargs)
 
     if isinstance(tickers, str): tickers = [tickers]
     if isinstance(flds, str): flds = [flds]
@@ -171,7 +171,7 @@ def bds(tickers: (str, list), flds: (str, list), cached=False, **kwargs):
     tickers = utils.flatten(tickers, unique=True)
     flds = utils.flatten(flds, unique=True)
     con, _ = create_connection()
-    ovrds = assist._proc_ovrds_(**kwargs)
+    ovrds = assist.proc_ovrds(**kwargs)
 
     if not cached:
         return con.bulkref(tickers=tickers, flds=flds, ovrds=ovrds)
@@ -179,7 +179,7 @@ def bds(tickers: (str, list), flds: (str, list), cached=False, **kwargs):
     cache_data = []
     loaded = pd.DataFrame(data=0, index=tickers, columns=flds)
     for ticker, fld in product(tickers, flds):
-        data_file = assist._ref_file_(
+        data_file = assist.ref_file(
             ticker=ticker, fld=fld, has_date=True, from_cache=cached, ext='pkl', **kwargs
         )
         logger.debug(f'checking file: {data_file}')
@@ -199,7 +199,7 @@ def bds(tickers: (str, list), flds: (str, list), cached=False, **kwargs):
         logger.info(f'loading block data for\ntickers: {full_list}\nfields: {ref_flds}')
         data = con.bulkref(tickers=ref_tcks, flds=ref_flds, ovrds=ovrds)
         for (ticker, fld), grp in data.groupby(['ticker', 'field']):
-            data_file = assist._ref_file_(
+            data_file = assist.ref_file(
                 ticker=ticker, fld=fld, has_date=True, ext='pkl', **kwargs
             )
             if data_file:
@@ -235,7 +235,7 @@ def bdib(ticker: (str, list), dt: (str, pd.Timestamp), typ='TRADE', batch=False)
 
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
     asset = ticker.split()[-1]
-    data_file = assist._hist_file_(ticker=ticker, dt=dt, typ=typ)
+    data_file = assist.hist_file(ticker=ticker, dt=dt, typ=typ)
     info_log = f'{ticker} / {cur_dt} / {typ}'
 
     if files.exists(data_file):
@@ -297,7 +297,7 @@ def bdib(ticker: (str, list), dt: (str, pd.Timestamp), typ='TRADE', batch=False)
         return pd.DataFrame()
 
     data = data.tz_localize('UTC').tz_convert(exch.tz)
-    assist._save_intraday_(data=data, ticker=ticker, dt=dt, typ=typ)
+    assist.save_intraday(data=data, ticker=ticker, dt=dt, typ=typ)
 
     return None if batch else data
 
@@ -336,6 +336,78 @@ def intraday(
         return cur_data.between_time(start_time=start_time, end_time=end_time)
 
     return cur_data
+
+
+@with_bloomberg
+def earnings(ticker, typ='Geo', cached=False, **kwargs):
+    """
+    Earning exposures by Geo or Products
+
+    Args:
+        ticker: ticker name
+        typ: [G(eo), P(roduct)]
+        cached: whether to load from cache
+
+    Returns:
+        pd.DataFrame
+
+    Examples:
+        >>> data = earnings('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
+        >>> data.round(2)
+                         Level  FY_2017  FY_2017_Pct
+        Asia-Pacific       1.0   3540.0        66.43
+           China           2.0   1747.0        49.35
+           Japan           2.0   1242.0        35.08
+           Singapore       2.0    551.0        15.56
+        United States      1.0   1364.0        25.60
+        Europe             1.0    263.0         4.94
+        Other Countries    1.0    162.0         3.04
+    """
+    ovrd = 'G' if typ[0].upper() == 'G' else 'P'
+    new_kw = dict(cached=cached, Product_Geo_Override=ovrd)
+    header = bds(tickers=ticker, flds='PG_Bulk_Header', **new_kw, **kwargs)
+    data = bds(tickers=ticker, flds='PG_Revenue', **new_kw, **kwargs)
+    return assist.format_earnings(data=data, header=header)
+
+
+@with_bloomberg
+def dividend(tickers, start_date=None, end_date=None, cached=False):
+    """
+    Dividend history
+
+    Args:
+        tickers: list of tickers
+        start_date: start date
+        end_date: end date
+        cached: whether to use cache if exists
+
+    Returns:
+        pd.DataFrame
+
+    Examples:
+        >>> tickers = ['C US Equity', 'NVDA US Equity', 'MS US Equity']
+        >>> s_dt, e_dt = '2018-01-01', '2018-05-01'
+        >>> dvd = dividend(tickers=tickers, start_date=s_dt, end_date=e_dt)
+        >>> dvd.index.name = None
+        >>> dvd.loc[:, ['ex_date', 'record_date', 'dividend_amount']].round(2)
+                           ex_date record_date dividend_amount
+        C US Equity     2018-02-02  2018-02-05            0.32
+        MS US Equity    2018-04-27  2018-04-30            0.25
+        MS US Equity    2018-01-30  2018-01-31            0.25
+        NVDA US Equity  2018-02-22  2018-02-23            0.15
+    """
+    if isinstance(tickers, str): tickers = [tickers]
+    tickers = [t for t in tickers if ('Equity' in t) and ('=' not in t)]
+
+    kwargs = dict()
+    if start_date: kwargs['DVD_Start_Dt'] = utils.fmt_dt(start_date, fmt='%Y%m%d')
+    if end_date: kwargs['DVD_End_Dt'] = utils.fmt_dt(end_date, fmt='%Y%m%d')
+
+    dvd = bds(tickers=tickers, flds='DVD_Hist_All', cached=cached, **kwargs)
+    if dvd.empty: return pd.DataFrame()
+    return pd.DataFrame(pd.concat([
+        assist.format_dvd(grp) for _, grp in dvd.groupby('ticker')
+    ], sort=False))
 
 
 @with_bloomberg

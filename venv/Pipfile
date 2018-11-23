@@ -18,6 +18,7 @@ pdblp = "*"
 pyarrow = "*"
 ipykernel = "*"
 xone = "*"
+inflection = "*"
 
 [requires]
 python_version = "3.6"
