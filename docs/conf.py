@@ -14,8 +14,22 @@
 
 import os
 import sys
+
+ROOT_PATH = os.path.abspath('../')
+
 # sys.path.insert(0, os.path.abspath('.'))
-sys.path.append(os.path.abspath('../'))
+sys.path.append(ROOT_PATH)
+
+
+def parse_version(package):
+
+    init_file = '%s/%s/__init__.py' % (ROOT_PATH, package)
+    with open(init_file, 'r', encoding='utf-8') as f:
+        for line in f.readlines():
+            if '__version__' in line:
+                return line.split('=')[1].strip()[1:-1]
+    return ''
+
 
 # -- Project information -----------------------------------------------------
 
@@ -26,7 +40,7 @@ author = 'Alpha x1'
 # The short X.Y version
 version = ''
 # The full version, including alpha/beta/rc tags
-release = '0.1.2'
+release = parse_version(project)
 
 # -- General configuration ---------------------------------------------------
 

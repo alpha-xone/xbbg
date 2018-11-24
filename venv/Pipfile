@@ -9,6 +9,7 @@ url = "https://bloomberg.bintray.com/pip/simple"
 verify_ssl = true
 
 [dev-packages]
+ipykernel = "*"
 
 [packages]
 numpy = "*"
@@ -16,7 +17,6 @@ pandas = "*"
 blpapi = "*"
 pdblp = "*"
 pyarrow = "*"
-ipykernel = "*"
 xone = "*"
 inflection = "*"
 

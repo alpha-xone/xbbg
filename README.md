@@ -7,6 +7,12 @@ Bloomberg data toolkit for humans
 
 # Installation:
 
+## Bloomberg API
+
+```
+pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
+```
+
 ## From pypi:
 
 ```
@@ -18,7 +24,7 @@ pip install xbbg
 ```
 pip install git+https://github.com/alpha-xone/xbbg.git -U
 ```
-
+ 
 # Documentation
 
 ## Examples

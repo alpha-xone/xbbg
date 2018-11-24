@@ -6,5 +6,5 @@ build-backend = "flit.buildapi"
 module = "xbbg"
 author = "alpha.xone"
 author-email = "alpha.xone@outlook.com"
-home-page = "https://github.com/alpha-xone"
+home-page = "https://github.com/alpha-xone/xbbg"
 classifiers = ["License :: OSI Approved :: Apache Software License"]
