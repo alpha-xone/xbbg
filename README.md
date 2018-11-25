@@ -31,6 +31,9 @@ there are multiple queries in the same scope**.
 In[1]: from xbbg import blp, conn
 
 In[2]: conn.create_connection()
+```
+
+```
 Out[2]: (<pdblp.pdblp.BCon at 0x1c35cd0e898>, True)
 ```
 
@@ -38,6 +41,9 @@ Out[2]: (<pdblp.pdblp.BCon at 0x1c35cd0e898>, True)
 
 ```python
 In[3]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Name'])
+```
+
+```
 Out[3]:
            ticker             field                   value
 0  NVDA US Equity     Security_Name             NVIDIA Corp
@@ -51,6 +57,9 @@ In[4]: blp.bdh(
   ...:     tickers='SPX Index', flds=['High', 'Low', 'Last_Price'],
   ...:     start_date='2018-10-10', end_date='2018-10-20',
   ...: )
+```
+
+```
 Out[4]:
 ticker     SPX Index
 field           High      Low Last_Price
@@ -73,6 +82,9 @@ In[4]: blp.bdh(
   ...:     start_date='2018-09-26', end_date='2018-10-20',
   ...:     Per='W', Fill='P', Days='A',
   ...: )
+```
+
+```
 Out[4]:
 ticker     SHCOMP Index
 field              High      Low Last_Price
@@ -87,6 +99,9 @@ date
 
 ```python
 In[5]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_End_Dt='20180531')
+```
+
+```
 Out[5]:
             ticker         field                name         value  position
 0   AAPL US Equity  DVD_Hist_All       Declared Date    2018-05-01         0
@@ -109,6 +124,9 @@ Out[5]:
 
 ```python
 In[6]: blp.bdib(ticker='BHP AU Equity', dt='2018-10-17').tail()
+```
+
+```
 Out[6]:
                            open  high   low  close   volume  numEvents
 2018-10-17 15:56:00+11:00 33.62 33.65 33.62  33.64    16660        126
@@ -122,6 +140,9 @@ Out[6]:
 
 ```python
 In[7]: blp.intraday(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
+```
+
+```
 Out[7]:
                                open      high       low     close  volume  numEvents
 2018-10-17 09:27:00+09:00 39,970.00 40,020.00 39,970.00 39,990.00   10800         44
@@ -135,6 +156,9 @@ Out[7]:
 
 ```python
 In[8]: blp.earnings('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
+```
+
+```
 Out[8]:
 
                  Level   FY_2017  FY_2017_Pct
@@ -151,6 +175,9 @@ Other Countries   1.00    162.00         3.04
 
 ```python
 In[9]: blp.dividend(['C US Equity', 'MS US Equity'], start_date='2018-01-01', end_date='2018-05-01')
+```
+
+```
 Out[9]:
                declared_date     ex_date record_date payable_date dividend_amount dividend_frequency dividend_type
 ticker
