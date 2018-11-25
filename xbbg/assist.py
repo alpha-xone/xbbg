@@ -11,6 +11,10 @@ from xbbg import const
 from xbbg.conn import with_bloomberg, create_connection
 from xbbg.timezone import DEFAULT_TZ
 
+# Set os.environ['BBG_ROOT'] = '/your/bbg/data/path'
+#     to enable xbbg saving data locally
+BBG_ROOT = 'BBG_ROOT'
+
 ELEMENTS = [
     'periodicityAdjustment', 'periodicitySelection', 'currency',
     'nonTradingDayFillOption', 'nonTradingDayFillMethod',
@@ -148,12 +152,12 @@ def hist_file(ticker: str, dt: (str, pd.Timestamp), typ='TRADE'):
         file location
 
     Examples:
-        >>> data_path = os.environ.get('ROOT_DATA_PATH', '')
+        >>> data_path = os.environ.get(BBG_ROOT, '')
         >>> d_file = hist_file(ticker='ES1 Index', dt='2018-08-01')
         >>> root = f'{data_path}/Index/ES1 Index'
         >>> if d_file: assert d_file == f'{root}/TRADE/2018-08-01.parq'
     """
-    data_path = os.environ.get('ROOT_DATA_PATH', '')
+    data_path = os.environ.get(BBG_ROOT, '')
     if not data_path: return ''
     asset = ticker.split()[-1]
     proper_ticker = ticker.replace('/', '_')
@@ -177,12 +181,12 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
         file location
 
     Examples:
-        >>> data_path = os.environ.get('ROOT_DATA_PATH', '')
+        >>> data_path = os.environ.get(BBG_ROOT, '')
         >>> d_file = ref_file('BLT LN Equity', fld='Crncy')
         >>> root = f'{data_path}/Equity/BLT LN Equity'
         >>> if d_file: assert d_file == f'{root}/Crncy/ovrd=None.parq'
     """
-    data_path = os.environ.get('ROOT_DATA_PATH', '')
+    data_path = os.environ.get(BBG_ROOT, '')
     if not data_path: return ''
 
     proper_ticker = ticker.replace('/', '_')
@@ -274,7 +278,7 @@ def current_missing(**kwargs):
     Returns:
         dict
     """
-    data_path = os.environ.get('ROOT_DATA_PATH', '')
+    data_path = os.environ.get(BBG_ROOT, '')
     empty_log = f'{data_path}/Logs/EmptyQueries.json'
     if not files.exists(empty_log): return 0
     with open(empty_log, 'r') as fp:
@@ -292,7 +296,7 @@ def update_missing(**kwargs):
     """
     key = info_key(**kwargs)
 
-    data_path = os.environ.get('ROOT_DATA_PATH', '')
+    data_path = os.environ.get(BBG_ROOT, '')
     empty_log = f'{data_path}/Logs/EmptyQueries.json'
 
     cur_miss = dict()

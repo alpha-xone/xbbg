@@ -24,8 +24,10 @@ pip install xbbg
 
 ## Tutorial
 
-Creation of connection `conn.create_connection()` is not necessary - **only need to do this when
-there are multiple queries in the same scope**.
+Creation of connection `conn.create_connection()` is not necessary.
+Quries will create new connections without live connections on the backend.
+Since each initiation of connection takes time, we can manually connect
+before we want to do multiple queries - just like examples below.
 
 ```python
 In[1]: from xbbg import blp, conn
@@ -188,29 +190,21 @@ MS US Equity      2018-01-18  2018-01-30  2018-01-31   2018-02-15            0.2
 
 ## Optimizations
 
-This library uses a global Bloomberg connection on the backend.
-Specically, `_xcon_` in `globals()` variable.
-Each time when a Bloomberg function is called:
-
-- If there's no live connections, a new connection will be initiated
-    - But this new connection will be disconnected and deleted before exiting function
-- If there's already a live connection, the existing connection will be used
-    - This live connection will be kept untouched before exiting function
-
-Since initiating connections takes time, if multiple queries are expected,
-manually initiating a new connection is helpful before calling any queries:
+This library uses a global Bloomberg connection on the backend - 
+more specically, `_xcon_` in `globals()` variable.
+Since initiation of connections takes time, if multiple queries are expected,
+manually create a new connection (which will be shared by all following queries)
+is helpful before calling any queries:
 
 ```python
-from xbbg.conn import create_connection
+from xbbg import conn
 
-create_connection()
+conn.create_connection()
 ```
-
-This will create Bloomberg connection on the backend to be shared by all queries followed.
 
 ## Data Storage
 
-If `ROOT_DATA_PATH` is provided in `os.environ`, data can be saved locally.
+If `BBG_ROOT` is provided in `os.environ`, data can be saved locally.
 By default, local storage is preferred than Bloomberg for all queries.
 
 Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
