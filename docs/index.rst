@@ -16,7 +16,7 @@ On top of other dependencies, Bloomberg API is required:
 Tutorial
 ========
 
-Creation of connection is not necessary - **only need to do this when
+Creation of connection ``conn.create_connection()`` is not necessary - **only need to do this when
 there are multiple queries in the same scope**.
 
 .. code-block:: python
@@ -150,3 +150,19 @@ Dividends:
     C US Equity       2018-01-18  2018-02-02  2018-02-05   2018-02-23            0.32            Quarter  Regular Cash
     MS US Equity      2018-04-18  2018-04-27  2018-04-30   2018-05-15            0.25            Quarter  Regular Cash
     MS US Equity      2018-01-18  2018-01-30  2018-01-31   2018-02-15            0.25            Quarter  Regular Cash
+
+Data Storage
+------------
+
+If `ROOT_DATA_PATH` is provided in `os.environ`, data can be saved locally.
+By default, local storage is preferred than Bloomberg for all queries.
+
+Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
+(full description in `DAPI<GO>`):
+
+> To access Bloomberg data via the API (and use that data in Microsoft Excel),
+> your company must sign the 'Datafeed Addendum' to the Bloomberg Agreement.
+> This legally binding contract describes the terms and conditions of your use
+> of the data and information available via the API (the “Data”).
+> The most fundamental requirement regarding your use of Data is that it cannot
+> leave the local PC you use to access the BLOOMBERG PROFESSIONAL service.

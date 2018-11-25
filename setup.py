@@ -1,7 +1,7 @@
 import pathlib
 from os import path
 from io import open
-from setuptools import setup
+from setuptools import setup, find_packages
 
 # for pip >= 10
 try:
@@ -23,10 +23,23 @@ def parse_version(package):
     return ''
 
 
-def parse_description():
+def parse_markdown():
+    """
+    Parse markdown as description
+    """
+    readme_file = f'{PACKAGE_ROOT}/README.md'
+    if path.exists(readme_file):
+        with open(readme_file, 'r', encoding='utf-8') as f:
+            long_description = f.read()
+        return long_description
+
+
+def parse_description(markdown=True):
     """
     Parse the description in the README file
     """
+    if markdown: return parse_markdown()
+
     try:
         from pypandoc import convert
 
@@ -36,13 +49,7 @@ def parse_description():
         return convert(readme_file, 'rst')
 
     except ImportError:
-        readme_file = f'{PACKAGE_ROOT}/README.md'
-        if path.exists(readme_file):
-            with open(readme_file, 'r', encoding='utf-8') as f:
-                long_description = f.read()
-            return long_description
-
-    return ''
+        return parse_markdown()
 
 
 if __name__ == '__main__':
@@ -68,7 +75,7 @@ if __name__ == '__main__':
                 f'{PACKAGE_ROOT}/venv/reqs.txt', session='hack'
             )
         ],
-        packages=['xbbg'],
+        packages=find_packages(include=['xbbg', 'xbbg.*']),
         dependency_links=[
             'https://bloomberg.bintray.com/pip/simple',
         ],

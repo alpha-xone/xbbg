@@ -3,6 +3,15 @@ import pandas as pd
 from itertools import product
 from xone import utils, files, logs
 
+try:
+    import blpapi
+except ImportError:
+    logs.get_logger('xbbg.blp').critical(
+        '\n\nPlease install Bloomberg Open API:\n'
+        '^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n'
+        'pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi\n'
+    )
+
 from xbbg import const, intervals, assist
 from xbbg.conn import with_bloomberg, create_connection
 from xbbg.timezone import DEFAULT_TZ
