@@ -14,7 +14,9 @@ PACKAGE_ROOT = pathlib.Path(__file__).parent
 
 
 def parse_version(package):
-
+    """
+    Parse versions
+    """
     init_file = f'{PACKAGE_ROOT}/{package}/__init__.py'
     with open(init_file, 'r', encoding='utf-8') as f:
         for line in f.readlines():
