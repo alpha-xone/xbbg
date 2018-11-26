@@ -15,7 +15,7 @@
 import os
 import sys
 
-ROOT_PATH = os.path.abspath('../')
+ROOT_PATH = '/'.join(os.path.abspath(__file__).replace('\\', '/').split('/')[:-2])
 
 # sys.path.insert(0, os.path.abspath('.'))
 sys.path.append(ROOT_PATH)
