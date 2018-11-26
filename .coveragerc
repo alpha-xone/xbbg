@@ -1,0 +1,11 @@
+[run]
+omit =
+    xbbg/blp.py
+    xbbg/conn.py
+    xbbg/asset/*
+    xbbg/ccy.py
+    xbbg/exchange.py
+    */__init__.py
+
+[html]
+directory = htmlcov

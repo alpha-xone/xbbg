@@ -1,0 +1,32 @@
+language: python
+
+python:
+  - "3.6"
+
+install:
+  - pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
+  - pip install -r venv/reqs.txt
+  - pip install pytest pytest-cov
+
+script:
+  - flake8 --extend-ignore=E701,E501 xbbg
+  - pytest --doctest-modules --cov xbbg
+
+after_success:
+  - coverage report
+  - coverage combine
+  - cat .coverage
+  - coveralls
+
+#deploy:
+#  provider: pypi
+#  user: alpha.xone
+#  password:
+#    secure: ""
+#  skip_existing: true
+#  on:
+#    tags: true
+#    distributions: sdist bdist_wheel
+#    repo: alpha.xone/xbbg
+#    branch: master
+#    condition: $TRAVIS_PYTHON_VERSION == 3.6
