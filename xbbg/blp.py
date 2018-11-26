@@ -5,9 +5,6 @@ from xone import utils, files, logs
 
 try:
     import blpapi
-    logs.get_logger('xbbg.blp').debug(
-        f'using blpapi version: {blpapi.__version__}'
-    )
 except ImportError:
     import sys
     logs.get_logger('xbbg.blp').critical(
@@ -24,6 +21,8 @@ from xbbg.exchange import TradingHours, SessNA
 import pytest
 
 pytest.skip()
+
+logs.get_logger('xbbg.blp').debug(f'blpapi version: {blpapi.__version__}')
 
 
 @with_bloomberg
