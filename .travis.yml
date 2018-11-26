@@ -4,12 +4,28 @@ python:
   - "3.6"
 
 env:
-  - BLPAPI_ROOT = /home/bbg
+  global:
+    - BLPAPI_ROOT = /home/bbg
 
 install:
-  - pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
-  - pip install -r venv/reqs.txt
-  - pip install pytest pytest-cov
+  - sudo apt-get update
+  - wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
+  - bash miniconda.sh -b -p $HOME/miniconda
+  - export PATH="$HOME/miniconda/bin:$PATH"
+  - hash -r
+  - conda config --set always_yes yes --set changeps1 no
+  - conda update -q conda
+  - conda info -a
+
+  - conda create -q -n test-environment -c conda-forge python=$TRAVIS_PYTHON_VERSION pip flake8
+    pyparsing pytest pytest-cov conda-build anaconda-client conda-verify blpapi
+
+  - source activate test-environment
+  - python setup.py install
+
+#  - pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
+#  - pip install -r venv/reqs.txt
+#  - pip install pytest pytest-cov
 
 script:
   - flake8 --extend-ignore=E701,E501 xbbg
