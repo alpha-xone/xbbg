@@ -685,12 +685,3 @@ ALL_TIMEZONES = [
     'WET',
     'Zulu',
 ]
-
-
-if __name__ == '__main__':
-    """
-    CommandLine:
-        python -m xbbg.timezone all
-    """
-    import xdoctest
-    xdoctest.doctest_module(__file__)

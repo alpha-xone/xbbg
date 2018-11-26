@@ -139,7 +139,7 @@ def check_hours(tickers, tz_exch, tz_loc=DEFAULT_TZ):
     return hours
 
 
-def hist_file(ticker: str, dt: (str, pd.Timestamp), typ='TRADE'):
+def hist_file(ticker: str, dt, typ='TRADE'):
     """
     Data file location for Bloomberg historical data
 
@@ -211,7 +211,7 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
     else: return f'{root}/{info}.{ext}'
 
 
-def save_intraday(data: pd.DataFrame, ticker: str, dt: (str, pd.Timestamp), typ='TRADE'):
+def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE'):
     """
     Check whether data is done for the day and save
 
@@ -313,7 +313,7 @@ def update_missing(**kwargs):
     return cur_miss
 
 
-def info_key(ticker: str, dt: (str, pd.Timestamp), typ='TRADE', **kwargs):
+def info_key(ticker: str, dt, typ='TRADE', **kwargs):
     """
     Generate key from given info
 
@@ -331,7 +331,7 @@ def info_key(ticker: str, dt: (str, pd.Timestamp), typ='TRADE', **kwargs):
     ))
 
 
-def format_earnings(data: pd.DataFrame, header: pd.DataFrame):
+def format_earning(data: pd.DataFrame, header: pd.DataFrame):
     """
     Standardized earning outputs and add percentage by each blocks
 
@@ -399,13 +399,9 @@ def format_dvd(data: pd.DataFrame):
     ], sort=False)).reset_index(drop=True).assign(ticker=ticker).set_index('ticker')
     data.columns.name = None
     data.columns = [inflection.underscore(col.replace(' ', '_')) for col in data.columns]
+
+    amt = [col for col in data.columns if 'amount' in col]
+    if amt: data.loc[:, amt] = data.loc[:, amt].apply(
+        pd.to_numeric, downcast='float', errors='ignore'
+    )
     return data
-
-
-if __name__ == '__main__':
-    """
-    CommandLine:
-        python -m xbbg.assit all
-    """
-    import xdoctest
-    xdoctest.doctest_module(__file__)

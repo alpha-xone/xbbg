@@ -172,12 +172,3 @@ class Intervals(object):
 
         if same_day and (s_time > e_time): return SessNA
         return Session(start_time=s_time, end_time=e_time)
-
-
-if __name__ == '__main__':
-    """
-    CommandLine:
-        python -m xbbg.intervals all
-    """
-    import xdoctest
-    xdoctest.doctest_module(__file__)

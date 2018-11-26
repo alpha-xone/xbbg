@@ -9,4 +9,3 @@ python-dateutil>=2.7.5
 pytz>=2018.7
 six>=1.11.0
 xone>=0.0.7
-xdoctest>=0.6.1

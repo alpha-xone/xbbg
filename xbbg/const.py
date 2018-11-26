@@ -201,12 +201,3 @@ def market_timing(ticker, dt, timing='EOD', tz='local'):
     cur_dt = pd.Timestamp(str(dt)).strftime('%Y-%m-%d')
     if tz == 'local': return f'{cur_dt} {mkt_time}'
     return timezone.tz_convert(f'{cur_dt} {mkt_time}', to_tz=tz, from_tz=info.tz)
-
-
-if __name__ == '__main__':
-    """
-    CommandLine:
-        python -m xbbg.const all
-    """
-    import xdoctest
-    xdoctest.doctest_module(__file__)

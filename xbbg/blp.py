@@ -19,7 +19,7 @@ from xbbg.exchange import TradingHours, SessNA
 
 
 @with_bloomberg
-def bdp(tickers: (str, list), flds: (str, list), cache=False, **kwargs):
+def bdp(tickers, flds, cache=False, **kwargs):
     """
     Get reference data and save to
 
@@ -90,10 +90,7 @@ def bdp(tickers: (str, list), flds: (str, list), cache=False, **kwargs):
 
 
 @with_bloomberg
-def bdh(
-        tickers: (str, list), flds: (str, list),
-        start_date: (str, pd.Timestamp), end_date: (str, pd.Timestamp), **kwargs
-):
+def bdh(tickers, flds, start_date, end_date, **kwargs):
     """
     Bloomberg historical data
 
@@ -142,7 +139,7 @@ def bdh(
 
 
 @with_bloomberg
-def bds(tickers: (str, list), flds: (str, list), cached=False, **kwargs):
+def bds(tickers, flds, cached=False, **kwargs):
     """
     Download block data from Bloomberg
 
@@ -221,7 +218,7 @@ def bds(tickers: (str, list), flds: (str, list), cached=False, **kwargs):
 
 
 @with_bloomberg
-def bdib(ticker: (str, list), dt: (str, pd.Timestamp), typ='TRADE', batch=False):
+def bdib(ticker, dt, typ='TRADE', batch=False):
     """
     Download intraday data and save to cache
 
@@ -311,10 +308,7 @@ def bdib(ticker: (str, list), dt: (str, pd.Timestamp), typ='TRADE', batch=False)
     return None if batch else data
 
 
-def intraday(
-        ticker: (str, list), dt: (str, pd.Timestamp), session='',
-        start_time=None, end_time=None, typ='TRADE'
-):
+def intraday(ticker, dt, session='', start_time=None, end_time=None, typ='TRADE'):
     """
     Retrieve interval data for ticker
 
@@ -348,7 +342,7 @@ def intraday(
 
 
 @with_bloomberg
-def earnings(ticker, typ='Geo', cached=False, **kwargs):
+def earning(ticker, typ='Geo', cached=False, **kwargs):
     """
     Earning exposures by Geo or Products
 
@@ -361,7 +355,7 @@ def earnings(ticker, typ='Geo', cached=False, **kwargs):
         pd.DataFrame
 
     Examples:
-        >>> data = earnings('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
+        >>> data = earning('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
         >>> data.round(2)
                          Level  FY_2017  FY_2017_Pct
         Asia-Pacific       1.0   3540.0        66.43
@@ -376,7 +370,7 @@ def earnings(ticker, typ='Geo', cached=False, **kwargs):
     new_kw = dict(cached=cached, Product_Geo_Override=ovrd)
     header = bds(tickers=ticker, flds='PG_Bulk_Header', **new_kw, **kwargs)
     data = bds(tickers=ticker, flds='PG_Revenue', **new_kw, **kwargs)
-    return assist.format_earnings(data=data, header=header)
+    return assist.format_earning(data=data, header=header)
 
 
 @with_bloomberg
@@ -507,12 +501,3 @@ def fut_ticker(gen_ticker: str, dt, freq: str):
     logger.debug(f'futures full chain:\n{fut_matu.to_string()}')
     logger.debug(f'getting index {idx} from:\n{sub_fut.to_string()}')
     return sub_fut.ticker.values[idx]
-
-
-if __name__ == '__main__':
-    """
-    CommandLine:
-        python -m xbbg.blp all
-    """
-    import xdoctest
-    xdoctest.doctest_module(__file__)
