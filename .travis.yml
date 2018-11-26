@@ -3,6 +3,9 @@ language: python
 python:
   - "3.6"
 
+env:
+  - BLPAPI_ROOT = /home/bbg
+
 install:
   - pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
   - pip install -r venv/reqs.txt
