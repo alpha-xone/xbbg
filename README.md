@@ -213,7 +213,7 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 > To access Bloomberg data via the API (and use that data in Microsoft Excel), 
 > your company must sign the 'Datafeed Addendum' to the Bloomberg Agreement. 
 > This legally binding contract describes the terms and conditions of your use 
-> of the data and information available via the API (the “Data”). 
+> of the data and information available via the API (the "Data"). 
 > The most fundamental requirement regarding your use of Data is that it cannot 
 > leave the local PC you use to access the BLOOMBERG PROFESSIONAL service.
 
