@@ -39,6 +39,10 @@ def get_interval(ticker, session):
         Session(start_time='21:30', end_time='22:30')
         >>> get_interval('ES1 Index', 'allday_exact_2130_0230')
         Session(start_time='21:30', end_time='02:30')
+        >>> get_interval('AMLP US', 'day_open_30')
+        Session(start_time=None, end_time=None)
+        >>> get_interval('7974 JP Equity', 'day_normal_180_300') is SessNA
+        True
     """
     interval = Intervals(ticker=ticker)
     ss_info = session.split('_')

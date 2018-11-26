@@ -71,6 +71,10 @@ def proc_ovrds(**kwargs):
 
     Returns:
         list of tuples
+
+    Examples:
+        >>> proc_ovrds(DVD_Start_Dt='20180101')
+        [('DVD_Start_Dt', '20180101')]
     """
     return [
         (k, v) for k, v in kwargs.items()
@@ -151,10 +155,12 @@ def hist_file(ticker: str, dt, typ='TRADE'):
         file location
 
     Examples:
-        >>> data_path = os.environ.get(BBG_ROOT, '')
-        >>> d_file = hist_file(ticker='ES1 Index', dt='2018-08-01')
-        >>> root = f'{data_path}/Index/ES1 Index'
-        >>> if d_file: assert d_file == f'{root}/TRADE/2018-08-01.parq'
+        >>> os.environ['BBG_ROOT'] = ''
+        >>> hist_file(ticker='ES1 Index', dt='2018-08-01') == ''
+        True
+        >>> os.environ['BBG_ROOT'] = '/data/bbg'
+        >>> hist_file(ticker='ES1 Index', dt='2018-08-01')
+        '/data/bbg/Index/ES1 Index/TRADE/2018-08-01.parq'
     """
     data_path = os.environ.get(BBG_ROOT, '')
     if not data_path: return ''
@@ -180,10 +186,21 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
         file location
 
     Examples:
-        >>> data_path = os.environ.get(BBG_ROOT, '')
-        >>> d_file = ref_file('BLT LN Equity', fld='Crncy')
-        >>> root = f'{data_path}/Equity/BLT LN Equity'
-        >>> if d_file: assert d_file == f'{root}/Crncy/ovrd=None.parq'
+        >>> os.environ['BBG_ROOT'] = ''
+        >>> ref_file('BLT LN Equity', fld='Crncy') == ''
+        True
+        >>> os.environ['BBG_ROOT'] = '/data/bbg'
+        >>> ref_file('BLT LN Equity', fld='Crncy')
+        '/data/bbg/Equity/BLT LN Equity/Crncy/ovrd=None.parq'
+        >>> cur_dt = utils.cur_time(trading=False, tz=DEFAULT_TZ)
+        >>> ref_file(
+        ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True
+        ... ).replace(cur_dt, '[cur_date]')
+        '/data/bbg/Equity/BLT LN Equity/DVD_Hist_All/asof=[cur_date].parq'
+        >>> ref_file(
+        ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True, DVD_Start_Dt='20180101'
+        ... ).replace(cur_dt, '[cur_date]')[:-5]
+        '/data/bbg/Equity/BLT LN Equity/DVD_Hist_All/asof=[cur_date], DVD_Start_Dt=20180101'
     """
     data_path = os.environ.get(BBG_ROOT, '')
     if not data_path: return ''
@@ -325,6 +342,10 @@ def info_key(ticker: str, dt, typ='TRADE', **kwargs):
 
     Returns:
         str
+
+    Examples:
+        >>> info_key('X US Equity', '2018-02-01', OtherInfo='Any')
+        '{ticker=X US Equity, dt=2018-02-01, typ=TRADE, OtherInfo=Any}'
     """
     return utils.to_str(dict(
         ticker=ticker, dt=pd.Timestamp(dt).strftime('%Y-%m-%d'), typ=typ, **kwargs
@@ -341,6 +362,20 @@ def format_earning(data: pd.DataFrame, header: pd.DataFrame):
 
     Returns:
         pd.DataFrame
+
+    Examples:
+        >>> format_earning(
+        ...     data=pd.read_pickle('xbbg/tests/data/sample_earning.pkl'),
+        ...     header=pd.read_pickle('xbbg/tests/data/sample_earning_header.pkl')
+        ... ).round(2)
+                         Level  FY_2017  FY_2017_Pct
+        Asia-Pacific       1.0   3540.0        66.43
+           China           2.0   1747.0        49.35
+           Japan           2.0   1242.0        35.08
+           Singapore       2.0    551.0        15.56
+        United States      1.0   1364.0        25.60
+        Europe             1.0    263.0         4.94
+        Other Countries    1.0    162.0         3.04
     """
     if data.dropna(subset=['value']).empty: return pd.DataFrame()
 
@@ -388,6 +423,15 @@ def format_dvd(data: pd.DataFrame):
 
     Returns:
         pd.DataFrame
+
+    Examples:
+        >>> res = format_dvd(
+        ...     data=pd.read_pickle('xbbg/tests/data/sample_dvd.pkl')
+        ... ).loc[:, ['ex_date', 'rec_date', 'dvd_amt']].round(2)
+        >>> res.index.name = None
+        >>> res
+                        ex_date    rec_date  dvd_amt
+        C US Equity  2018-02-02  2018-02-05     0.32
     """
     if data.empty: return pd.DataFrame()
     if data.dropna(subset=['value']).empty: return pd.DataFrame()

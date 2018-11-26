@@ -8,6 +8,8 @@ from xbbg.asset.comdty import Comdty
 from xbbg.asset.index import Index
 from xbbg.asset.corp import Corp
 
+from xone import logs
+
 Futures = dict(
     Jan='F', Feb='G', Mar='H', Apr='J', May='K', Jun='M',
     Jul='N', Aug='Q', Sep='U', Oct='V', Nov='X', Dec='Z',
@@ -32,9 +34,26 @@ def market_info(ticker: str):
         True
         >>> info.tz
         'Asia/Shanghai'
+        >>> info = market_info('ICICIC=1 IS Equity')
+        >>> info['freq'], info['is_fut']
+        ('M', True)
+        >>> info = market_info('INT1 Curncy')
+        >>> info['freq'], info['is_fut']
+        ('M', True)
         >>> info = market_info('CL1 Comdty')
         >>> info['freq'], info['is_fut']
         ('M', True)
+        >>> # Wrong tickers
+        >>> market_info('C XX Equity')
+        {}
+        >>> market_info('XXX Comdty')
+        {}
+        >>> market_info('Bond_ISIN Corp')
+        {}
+        >>> market_info('XYZ Index')
+        {}
+        >>> market_info('XYZ Curncy')
+        {}
     """
     t_info = ticker.split()
 
@@ -113,6 +132,8 @@ def ccy_pair(local, base='USD'):
         CurrencyPair(ticker='GBP Curncy', factor=100.0, reversal=-1)
         >>> ccy_pair(local='USD', base='GBp')
         CurrencyPair(ticker='GBP Curncy', factor=0.01, reversal=1)
+        >>> ccy_pair(local='XYZ', base='USD')
+        CurrencyPair(ticker='', factor=1.0, reversal=1)
     """
     if f'{local}{base}' in Currencies:
         return Currencies[f'{local}{base}']
@@ -124,7 +145,9 @@ def ccy_pair(local, base='USD'):
         )
 
     else:
-        raise NameError(f'incorrect currency - local {local} / base {base}')
+        logger = logs.get_logger(ccy_pair)
+        logger.error(f'incorrect currency - local {local} / base {base}')
+        return CurrencyPair(ticker='', factor=1., reversal=1)
 
 
 def market_timing(ticker, dt, timing='EOD', tz='local'):

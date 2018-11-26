@@ -18,7 +18,7 @@ install:
   - conda info -a
 
   - conda create -q -n test-environment -c conda-forge python=$TRAVIS_PYTHON_VERSION pip flake8
-    pyparsing pytest pytest-cov conda-build anaconda-client conda-verify blpapi
+    pyparsing pytest pytest-cov codecov conda-build anaconda-client conda-verify blpapi
 
   - source activate test-environment
   - python setup.py install
@@ -33,9 +33,8 @@ script:
 
 after_success:
   - coverage report
-  - coverage combine
   - cat .coverage
-  - coveralls
+  - codecov --token=ff17768d-30bd-4917-98f2-a011606597ea
 
 #deploy:
 #  provider: pypi
