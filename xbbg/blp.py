@@ -392,12 +392,12 @@ def dividend(tickers, start_date=None, end_date=None, cached=False):
         >>> s_dt, e_dt = '2018-01-01', '2018-05-01'
         >>> dvd = dividend(tickers=tickers, start_date=s_dt, end_date=e_dt)
         >>> dvd.index.name = None
-        >>> dvd.loc[:, ['ex_date', 'record_date', 'dividend_amount']].round(2)
-                           ex_date record_date dividend_amount
-        C US Equity     2018-02-02  2018-02-05            0.32
-        MS US Equity    2018-04-27  2018-04-30            0.25
-        MS US Equity    2018-01-30  2018-01-31            0.25
-        NVDA US Equity  2018-02-22  2018-02-23            0.15
+        >>> dvd.loc[:, ['ex_date', 'rec_date', 'dvd_amt']].round(2)
+                           ex_date    rec_date  dvd_amt
+        C US Equity     2018-02-02  2018-02-05     0.32
+        MS US Equity    2018-04-27  2018-04-30     0.25
+        MS US Equity    2018-01-30  2018-01-31     0.25
+        NVDA US Equity  2018-02-22  2018-02-23     0.15
     """
     if isinstance(tickers, str): tickers = [tickers]
     tickers = [t for t in tickers if ('Equity' in t) and ('=' not in t)]

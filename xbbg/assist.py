@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import inflection
 
 import pandas as pd
 import pdblp
@@ -198,8 +197,9 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
     # Check date info
     if has_date:
         cur_files = []
-        if len(kwargs) == 0: missing = f'{root}/asof={utils.cur_time(trading=False)}.{ext}'
-        else: missing = f'{root}/asof={utils.cur_time(trading=False)}, {info}.{ext}'
+        cur_dt = utils.cur_time(trading=False, tz=DEFAULT_TZ)
+        if len(kwargs) == 0: missing = f'{root}/asof={cur_dt}.{ext}'
+        else: missing = f'{root}/asof={cur_dt}, {info}.{ext}'
         if from_cache: cur_files = files.all_files(path_name=root, keyword=info, ext=ext)
         if len(cur_files) > 0:
             upd_dt = [val for val in sorted(cur_files)[-1][:-4].split(', ') if 'asof=' in val]
@@ -392,16 +392,22 @@ def format_dvd(data: pd.DataFrame):
     if data.empty: return pd.DataFrame()
     if data.dropna(subset=['value']).empty: return pd.DataFrame()
 
+    col_maps = {
+        'Declared Date': 'dec_date', 'Ex-Date': 'ex_date',
+        'Record Date': 'rec_date', 'Payable Date': 'pay_date',
+        'Dividend Amount': 'dvd_amt', 'Dividend Frequency': 'dvd_freq',
+        'Dividend Type': 'dvd_type'
+    }
+
     ticker = data.ticker.values[0]
     data = pd.DataFrame(pd.concat([
         grp.loc[:, ['name', 'value']].set_index('name').transpose().reset_index(drop=True)
         for _, grp in data.groupby('position')
-    ], sort=False)).reset_index(drop=True).assign(ticker=ticker).set_index('ticker')
+    ], sort=False)).reset_index(drop=True)\
+        .assign(ticker=ticker).set_index('ticker').rename(columns=col_maps)
     data.columns.name = None
-    data.columns = [inflection.underscore(col.replace(' ', '_')) for col in data.columns]
 
-    amt = [col for col in data.columns if 'amount' in col]
-    if amt: data.loc[:, amt] = data.loc[:, amt].apply(
-        pd.to_numeric, downcast='float', errors='ignore'
-    )
+    if 'dvd_amt' in data.columns:
+        data.loc[:, 'dvd_amt'] = data.loc[:, 'dvd_amt'].apply(pd.to_numeric, errors='ignore')
+
     return data

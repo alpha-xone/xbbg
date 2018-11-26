@@ -14,7 +14,7 @@ pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
 ```
 
 - [pdbdp](https://github.com/matthewgilbert/pdblp) - pandas wrapper for Bloomberg Open API
-- numpy, pandas, pyarrow, [xone](https://github.com/alpha-xone/xone), etc.
+- numpy, pandas, pyarrow, and [xone](https://github.com/alpha-xone/xone)
 
 ## Installation
 

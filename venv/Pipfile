@@ -19,7 +19,6 @@ blpapi = "*"
 pdblp = "*"
 pyarrow = "*"
 xone = "*"
-inflection = "*"
 
 [requires]
 python_version = "3.6"
