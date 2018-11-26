@@ -16,8 +16,8 @@ On top of other dependencies, Bloomberg API is required:
 Tutorial
 ========
 
-Creation of connection ``conn.create_connection()`` is not necessary.
-Quries will create new connections without live connections on the backend.
+Creation of connection ``create_connection()`` is not necessary.
+Quries will create new connections if there's no live connections on the backend.
 Since each initiation of connection takes time, we can manually connect
 before we want to do multiple queries - just like examples below.
 
@@ -129,7 +129,7 @@ Corporate earnings:
 
 .. code-block:: python
 
-    In[8]: blp.earnings('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
+    In[8]: blp.earning('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
     Out[8]:
 
                      Level   FY_2017  FY_2017_Pct
