@@ -5,17 +5,25 @@ from xone import utils, files, logs
 
 try:
     import blpapi
+    logs.get_logger('xbbg.blp').debug(
+        f'using blpapi version: {blpapi.__version__}'
+    )
 except ImportError:
+    import sys
     logs.get_logger('xbbg.blp').critical(
-        '\n\nPlease install Bloomberg Open API:\n'
-        '^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n'
+        '\n\nPlease install Bloomberg Open API:\n\n'
         'pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi\n'
     )
+    sys.exit()
 
-from xbbg import const, intervals, assist
+from xbbg.core import intervals, assist, const
 from xbbg.conn import with_bloomberg, create_connection
-from xbbg.timezone import DEFAULT_TZ
+from xbbg.core.timezone import DEFAULT_TZ
 from xbbg.exchange import TradingHours, SessNA
+
+import pytest
+
+pytest.skip()
 
 
 @with_bloomberg
@@ -51,7 +59,7 @@ def bdp(tickers, flds, cache=False, **kwargs):
         return con.ref(tickers=tickers, flds=flds, ovrds=ovrds)
 
     cached_data = []
-    cur_data, ref_data = pd.DataFrame(), pd.DataFrame()
+    ref_data = pd.DataFrame()
 
     has_date = kwargs.pop('has_date', False)
     from_cache = kwargs.pop('from_cache', False)

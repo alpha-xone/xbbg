@@ -6,9 +6,9 @@ import pandas as pd
 import pdblp
 from xone import utils, files, logs
 
-from xbbg import const
+from xbbg.core import const
 from xbbg.conn import with_bloomberg, create_connection
-from xbbg.timezone import DEFAULT_TZ
+from xbbg.core.timezone import DEFAULT_TZ
 
 # Set os.environ['BBG_ROOT'] = '/your/bbg/data/path'
 #     to enable xbbg saving data locally

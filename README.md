@@ -223,7 +223,7 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 - Install with `pip`
 
 ```
-python -m pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
+pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
 ```
 
 - Install in `pipenv`

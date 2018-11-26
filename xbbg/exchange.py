@@ -1,5 +1,5 @@
 from collections import namedtuple
-from xbbg.timezone import TimeZone
+from xbbg.core.timezone import TimeZone
 
 Session = namedtuple('Session', ['start_time', 'end_time'])
 MarketSessions = namedtuple('MarketSessions', [

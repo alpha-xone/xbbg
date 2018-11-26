@@ -26,7 +26,7 @@ def get_tz(tz):
         >>> get_tz('BHP AU Equity')
         'Australia/Sydney'
     """
-    from xbbg.const import market_info
+    from xbbg.core.const import market_info
 
     if tz is None: return DEFAULT_TZ
 

@@ -3,7 +3,7 @@ import numpy as np
 
 from xone import logs
 
-from xbbg import const
+from xbbg.core import const
 from xbbg.exchange import Session, SessNA
 
 ValidSessions = ['allday', 'day', 'am', 'pm', 'night']
