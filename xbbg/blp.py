@@ -1,12 +1,14 @@
 import pandas as pd
 
+import sys
+import pytest
+
 from itertools import product
 from xone import utils, files, logs
 
 try:
     import blpapi
 except ImportError:
-    import sys
     logs.get_logger('xbbg.blp').critical(
         '\n\nPlease install Bloomberg Open API:\n\n'
         'pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi\n'
@@ -18,10 +20,9 @@ from xbbg.conn import with_bloomberg, create_connection
 from xbbg.core.timezone import DEFAULT_TZ
 from xbbg.exchange import TradingHours, SessNA
 
-import pytest
-
 if not hasattr(blpapi, '__version__'): pytest.skip('no Bloomberg')
 print(f'blpapi version: {blpapi.__version__}')
+if 'pytest' in sys.modules: create_connection()
 
 
 @with_bloomberg

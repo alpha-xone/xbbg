@@ -152,6 +152,8 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
         file location
 
     Examples:
+        >>> import shutil
+        >>>
         >>> os.environ['BBG_ROOT'] = ''
         >>> ref_file('BLT LN Equity', fld='Crncy') == ''
         True
@@ -167,12 +169,31 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
         ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True, DVD_Start_Dt='20180101'
         ... ).replace(cur_dt, '[cur_date]')[:-5]
         '/data/bbg/Equity/BLT LN Equity/DVD_Hist_All/asof=[cur_date], DVD_Start_Dt=20180101'
-        >>> os.environ['BBG_ROOT'] = 'xbbg/tests/data'
-        >>> ref_file(
+        >>> sample = 'asof=2018-11-02, DVD_Start_Dt=20180101, DVD_End_Dt=20180501.pkl'
+        >>> root_path = 'xbbg/tests/data'
+        >>> sub_path = f'{root_path}/Equity/AAPL US Equity/DVD_Hist_All'
+        >>> os.environ['BBG_ROOT'] = root_path
+        >>> for tmp_file in files.all_files(sub_path): os.remove(tmp_file)
+        >>> files.create_folder(sub_path)
+        >>> sample in shutil.copy(f'{root_path}/{sample}', sub_path)
+        True
+        >>> new_file = ref_file(
         ...     'AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101',
         ...     has_date=True, from_cache=True, ext='pkl'
-        ... ).split('/')[-1]
-        'asof=2018-11-23, DVD_Start_Dt=20180101, DVD_End_Dt=20180501.pkl'
+        ... )
+        >>> new_file.split('/')[-1] == f'asof={cur_dt}, DVD_Start_Dt=20180101.pkl'
+        True
+        >>> old_file = 'asof=2018-11-02, DVD_Start_Dt=20180101, DVD_End_Dt=20180501.pkl'
+        >>> old_full = '/'.join(new_file.split('/')[:-1] + [old_file])
+        >>> updated_file = old_full.replace('2018-11-02', cur_dt)
+        >>> updated_file in shutil.copy(old_full, updated_file)
+        True
+        >>> exist_file = ref_file(
+        ...     'AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101',
+        ...     has_date=True, from_cache=True, ext='pkl'
+        ... )
+        >>> exist_file == updated_file
+        True
     """
     data_path = os.environ.get(BBG_ROOT, '')
     if not data_path: return ''
