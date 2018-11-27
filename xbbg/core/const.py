@@ -66,7 +66,7 @@ def market_info(ticker: str):
         for info in Equity:
             if 'exch_codes' not in info: continue
             if exch in info['exch_codes']: return info.copy()
-        else: return dict()
+        return dict()
 
     # ============================ #
     #           Currency           #
@@ -78,13 +78,13 @@ def market_info(ticker: str):
             if (t_info[0].split('+')[0] in info['tickers']) or \
                     (t_info[0][-1].isdigit() and (t_info[0][:-1] in info['tickers'])):
                 return info.copy()
-        else: return dict()
+        return dict()
 
     if t_info[-1] == 'Comdty':
         for info in Comdty:
             if 'tickers' not in info: continue
             if t_info[0][:-1] in info['tickers']: return info.copy()
-        else: return dict()
+        return dict()
 
     # =================================== #
     #           Index / Futures           #
@@ -105,7 +105,7 @@ def market_info(ticker: str):
                 if not info.get('is_fut', False): return info.copy()
             if tck[:-1].rstrip() in info['tickers']:
                 if info.get('is_fut', False): return info.copy()
-        else: return dict()
+        return dict()
 
     if t_info[-1] == 'Corp':
         for info in Corp:

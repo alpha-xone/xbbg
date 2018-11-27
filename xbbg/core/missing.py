@@ -41,8 +41,7 @@ def update_missing(**kwargs):
 
     cur_miss[key] = cur_miss.get(key, 0) + 1
     while not os.access(empty_log, os.W_OK): time.sleep(1)
-    else:
-        with open(empty_log, 'w') as fp:
-            json.dump(cur_miss, fp=fp, indent=2)
+    with open(empty_log, 'w') as fp:
+        json.dump(cur_miss, fp=fp, indent=2)
 
     return cur_miss
