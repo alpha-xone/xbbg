@@ -13,7 +13,7 @@ except ImportError:
     )
     sys.exit()
 
-from xbbg.core import intervals, assist, const
+from xbbg.core import intervals, assist, const, missing
 from xbbg.conn import with_bloomberg, create_connection
 from xbbg.core.timezone import DEFAULT_TZ
 from xbbg.exchange import TradingHours, SessNA
@@ -288,7 +288,7 @@ def bdib(ticker, dt, typ='TRADE', batch=False):
                 return pd.DataFrame()
 
     info_log = f'{q_tckr} / {cur_dt} / {typ}'
-    cur_miss = assist.current_missing(ticker=ticker, dt=dt, typ=typ, func=bdib.__name__)
+    cur_miss = missing.current_missing(ticker=ticker, dt=dt, typ=typ, func=bdib.__name__)
     if cur_miss >= 2:
         if batch: return
         logger.info(f'{cur_miss} trials with no data {info_log}')
@@ -305,7 +305,7 @@ def bdib(ticker, dt, typ='TRADE', batch=False):
     assert isinstance(data, pd.DataFrame)
     if data.empty:
         logger.warning(f'no data for {info_log} ...')
-        assist.update_missing(ticker=ticker, dt=dt, typ=typ, func=bdib.__name__)
+        missing.update_missing(ticker=ticker, dt=dt, typ=typ, func=bdib.__name__)
         return pd.DataFrame()
 
     data = data.tz_localize('UTC').tz_convert(exch.tz)
@@ -507,3 +507,34 @@ def fut_ticker(gen_ticker: str, dt, freq: str):
     logger.debug(f'futures full chain:\n{fut_matu.to_string()}')
     logger.debug(f'getting index {idx} from:\n{sub_fut.to_string()}')
     return sub_fut.ticker.values[idx]
+
+
+@with_bloomberg
+def check_hours(tickers, tz_exch, tz_loc=DEFAULT_TZ):
+    """
+    Check exchange hours for tickers
+
+    Args:
+        tickers: list of tickers
+        tz_exch: exchange timezone
+        tz_loc: local timezone
+
+    Returns:
+        Local and exchange hours
+    """
+    cols = ['Trading_Day_Start_Time_EOD', 'Trading_Day_End_Time_EOD']
+    con, _ = create_connection()
+    hours = con.ref(tickers=tickers, flds=cols)
+    cur_dt = pd.Timestamp('today').strftime('%Y-%m-%d ')
+    hours.loc[:, 'local'] = hours.value.astype(str).str[:-3]
+    hours.loc[:, 'exch'] = pd.DatetimeIndex(
+        cur_dt + hours.value.astype(str)
+    ).tz_localize(tz_loc).tz_convert(tz_exch).strftime('%H:%M')
+
+    hours = pd.concat([
+        hours.set_index(['ticker', 'field']).exch.unstack().loc[:, cols],
+        hours.set_index(['ticker', 'field']).local.unstack().loc[:, cols],
+    ], axis=1)
+    hours.columns = ['Exch_Start', 'Exch_End', 'Local_Start', 'Local_End']
+
+    return hours

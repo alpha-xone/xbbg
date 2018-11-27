@@ -5,3 +5,4 @@ pandas>=0.23.4
 pdblp>=0.1.7
 pyarrow>=0.11.1
 xone>=0.0.7
+pytest>=4.0.1

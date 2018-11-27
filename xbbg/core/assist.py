@@ -1,13 +1,10 @@
-import json
-import os
-import time
-
 import pandas as pd
-import pdblp
+
+import os
+
 from xone import utils, files, logs
 
 from xbbg.core import const
-from xbbg.conn import with_bloomberg, create_connection
 from xbbg.core.timezone import DEFAULT_TZ
 
 # Set os.environ['BBG_ROOT'] = '/your/bbg/data/path'
@@ -111,37 +108,6 @@ def proc_elms(**kwargs):
     ]
 
 
-@with_bloomberg
-def check_hours(tickers, tz_exch, tz_loc=DEFAULT_TZ):
-    """
-    Check exchange hours for tickers
-
-    Args:
-        tickers: list of tickers
-        tz_exch: exchange timezone
-        tz_loc: local timezone
-
-    Returns:
-        Local and exchange hours
-    """
-    cols = ['Trading_Day_Start_Time_EOD', 'Trading_Day_End_Time_EOD']
-    con, _ = create_connection()
-    hours = con.ref(tickers=tickers, flds=cols)
-    cur_dt = pd.Timestamp('today').strftime('%Y-%m-%d ')
-    hours.loc[:, 'local'] = hours.value.astype(str).str[:-3]
-    hours.loc[:, 'exch'] = pd.DatetimeIndex(
-        cur_dt + hours.value.astype(str)
-    ).tz_localize(tz_loc).tz_convert(tz_exch).strftime('%H:%M')
-
-    hours = pd.concat([
-        hours.set_index(['ticker', 'field']).exch.unstack().loc[:, cols],
-        hours.set_index(['ticker', 'field']).local.unstack().loc[:, cols],
-    ], axis=1)
-    hours.columns = ['Exch_Start', 'Exch_End', 'Local_Start', 'Local_End']
-
-    return hours
-
-
 def hist_file(ticker: str, dt, typ='TRADE'):
     """
     Data file location for Bloomberg historical data
@@ -237,6 +203,18 @@ def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE'):
         ticker: ticker
         dt: date
         typ: [TRADE, BID, ASK, BID_BEST, ASK_BEST, BEST_BID, BEST_ASK]
+
+    Examples:
+        >>> os.environ['BBG_ROOT'] = 'xbbg/tests/data'
+        >>> sample = pd.read_parquet('xbbg/tests/data/aapl.parq')
+        >>> save_intraday(sample, 'AAPL US Equity', '2018-11-02')
+        >>> # Invalid exchange
+        >>> save_intraday(sample, 'AAPL XX Equity', '2018-11-02')
+        >>> # Invalid empty data
+        >>> save_intraday(pd.DataFrame(), 'AAPL US Equity', '2018-11-02')
+        >>> # Invalid date - too close
+        >>> cur_dt = utils.cur_time(trading=False)
+        >>> save_intraday(sample, 'AAPL US Equity', cur_dt)
     """
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
     logger = logs.get_logger(save_intraday, level='debug')
@@ -266,68 +244,6 @@ def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE'):
     logger.info(f'saving data to {data_file} ...')
     files.create_folder(data_file, is_file=True)
     data.to_parquet(data_file)
-
-
-def query(con, func: str, **kwargs):
-    """
-    Make Bloomberg query with active connection to save time
-
-    Args:
-        con: Bloomberg active connection
-        func: function name
-        **kwargs: to be passed to query
-
-    Returns:
-        pd.DataFrame: query result
-    """
-    if isinstance(con, pdblp.BCon):
-        if con.debug: con.debug = False
-        return getattr(con, func)(**kwargs)
-    else:
-        with pdblp.bopen(port=8194, timeout=5000) as bb:
-            return getattr(bb, func)(**kwargs)
-
-
-def current_missing(**kwargs):
-    """
-    Check number of trials for missing values
-
-    Returns:
-        dict
-    """
-    data_path = os.environ.get(BBG_ROOT, '')
-    empty_log = f'{data_path}/Logs/EmptyQueries.json'
-    if not files.exists(empty_log): return 0
-    with open(empty_log, 'r') as fp:
-        cur_miss = json.load(fp=fp)
-
-    return cur_miss.get(info_key(**kwargs), 0)
-
-
-def update_missing(**kwargs):
-    """
-    Update number of trials for missing values
-
-    Returns:
-        dict
-    """
-    key = info_key(**kwargs)
-
-    data_path = os.environ.get(BBG_ROOT, '')
-    empty_log = f'{data_path}/Logs/EmptyQueries.json'
-
-    cur_miss = dict()
-    if files.exists(empty_log):
-        with open(empty_log, 'r') as fp:
-            cur_miss = json.load(fp=fp)
-
-    cur_miss[key] = cur_miss.get(key, 0) + 1
-    while not os.access(empty_log, os.W_OK): time.sleep(1)
-    else:
-        with open(empty_log, 'w') as fp:
-            json.dump(cur_miss, fp=fp, indent=2)
-
-    return cur_miss
 
 
 def info_key(ticker: str, dt, typ='TRADE', **kwargs):
