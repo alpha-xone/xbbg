@@ -162,11 +162,17 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
         >>> ref_file(
         ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True
         ... ).replace(cur_dt, '[cur_date]')
-        '/data/bbg/Equity/BLT LN Equity/DVD_Hist_All/asof=[cur_date].parq'
+        '/data/bbg/Equity/BLT LN Equity/DVD_Hist_All/asof=[cur_date], ovrd=None.parq'
         >>> ref_file(
         ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True, DVD_Start_Dt='20180101'
         ... ).replace(cur_dt, '[cur_date]')[:-5]
         '/data/bbg/Equity/BLT LN Equity/DVD_Hist_All/asof=[cur_date], DVD_Start_Dt=20180101'
+        >>> os.environ['BBG_ROOT'] = 'xbbg/tests/data'
+        >>> ref_file(
+        ...     'AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101',
+        ...     has_date=True, from_cache=True, ext='pkl'
+        ... ).split('/')[-1]
+        'asof=2018-11-23, DVD_Start_Dt=20180101, DVD_End_Dt=20180501.pkl'
     """
     data_path = os.environ.get(BBG_ROOT, '')
     if not data_path: return ''
@@ -181,9 +187,11 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
     if has_date:
         cur_files = []
         cur_dt = utils.cur_time(trading=False, tz=DEFAULT_TZ)
-        if len(kwargs) == 0: missing = f'{root}/asof={cur_dt}.{ext}'
-        else: missing = f'{root}/asof={cur_dt}, {info}.{ext}'
-        if from_cache: cur_files = files.all_files(path_name=root, keyword=info, ext=ext)
+
+        if from_cache:
+            cur_files = files.all_files(path_name=root, keyword=info, ext=ext)
+
+        missing = f'{root}/asof={cur_dt}, {info}.{ext}'
         if len(cur_files) > 0:
             upd_dt = [val for val in sorted(cur_files)[-1][:-4].split(', ') if 'asof=' in val]
             if len(upd_dt) > 0:
@@ -191,6 +199,7 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
                 if diff >= pd.Timedelta('10D'): return missing
             return sorted(cur_files)[-1]
         else: return missing
+
     else: return f'{root}/{info}.{ext}'
 
 
