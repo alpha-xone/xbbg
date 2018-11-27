@@ -3,12 +3,22 @@ xbbg
 
 .. image:: https://badge.fury.io/py/xbbg.svg
     :target: https://badge.fury.io/py/xbbg
-.. image:: https://readthedocs.org/projects/xbbg/badge/?version=latest
-    :target: https://xbbg.readthedocs.io/en/latest
-.. image:: https://travis-ci.com/alpha-xone/xbbg.svg?branch=master
+.. image:: https://img.shields.io/pypi/pyversions/xbbg.svg
+    :target: https://badge.fury.io/py/xbbg
+.. image:: https://img.shields.io/travis/alpha-xone/xbbg/master.svg?label=Travis%20CI
     :target: https://travis-ci.com/alpha-xone/xbbg
+    :alt: Travis CI
 .. image:: https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg
     :target: https://codecov.io/gh/alpha-xone/xbbg
+    :alt: Codecov
+.. image:: https://readthedocs.org/projects/xbbg/badge/?version=latest
+    :target: https://xbbg.readthedocs.io/en/latest
+.. image:: https://www.codefactor.io/repository/github/alpha-xone/xbbg/badge
+   :target: https://www.codefactor.io/repository/github/alpha-xone/xbbg
+   :alt: CodeFactor
+.. image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
+    :alt: GitHub license
+    :target: https://github.com/alpha-xone/xbbg/blob/master/LICENSE
 
 Bloomberg data toolkit for humans
 

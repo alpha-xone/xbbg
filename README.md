@@ -1,9 +1,12 @@
 # xbbg
 
 [![PyPI version](https://badge.fury.io/py/xbbg.svg)](https://badge.fury.io/py/xbbg)
-[![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/en/latest)
-[![Build Status](https://travis-ci.com/alpha-xone/xbbg.svg?branch=master)](https://travis-ci.com/alpha-xone/xbbg)
+[![PyPI version](https://img.shields.io/pypi/pyversions/xbbg.svg)](https://badge.fury.io/py/xbbg)
+[![Travis CI](https://img.shields.io/travis/alpha-xone/xbbg/master.svg?label=Travis%20CI)](https://travis-ci.com/alpha-xone/xbbg)
 [![codecov](https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg)](https://codecov.io/gh/alpha-xone/xbbg)
+[![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/en/latest)
+[![CodeFactor](https://www.codefactor.io/repository/github/alpha-xone/xbbg/badge)](https://www.codefactor.io/repository/github/alpha-xone/xbbg)
+[![GitHub license](https://img.shields.io/github/license/alpha-xone/xbbg.svg)](https://github.com/alpha-xone/xbbg/blob/master/LICENSE)
 
 Bloomberg data toolkit for humans
 
