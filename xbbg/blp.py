@@ -20,7 +20,7 @@ from xbbg.exchange import TradingHours, SessNA
 
 import pytest
 
-if hasattr(blpapi, '__version__'): pytest.skip('no Bloomberg')
+if not hasattr(blpapi, '__version__'): pytest.skip('no Bloomberg')
 print(f'blpapi version: {blpapi.__version__}')
 
 
