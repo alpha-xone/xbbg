@@ -1,6 +1,15 @@
 xbbg
 ====
 
+.. image:: https://badge.fury.io/py/xbbg.svg
+    :target: https://badge.fury.io/py/xbbg
+.. image:: https://readthedocs.org/projects/xbbg/badge/?version=latest
+    :target: https://xbbg.readthedocs.io/en/latest
+.. image:: https://travis-ci.com/alpha-xone/xbbg.svg?branch=master
+    :target: https://travis-ci.com/alpha-xone/xbbg
+.. image:: https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg
+    :target: https://codecov.io/gh/alpha-xone/xbbg
+
 Bloomberg data toolkit for humans
 
 Installation
