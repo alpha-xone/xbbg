@@ -21,7 +21,7 @@ from xbbg.conn import with_bloomberg, create_connection
 from xbbg.core.timezone import DEFAULT_TZ
 from xbbg.exchange import TradingHours, SessNA
 
-DEBUG = True
+DEBUG = False
 
 if DEBUG or (not hasattr(blpapi, '__version__')): pytest.skip('no Bloomberg')
 print(f'blpapi version: {blpapi.__version__}')

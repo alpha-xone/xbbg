@@ -4,7 +4,6 @@ import os
 
 from xbbg.core import utils, const
 from xbbg.io import files, logs
-from xbbg.core.timezone import DEFAULT_TZ
 
 # Set os.environ['BBG_ROOT'] = '/your/bbg/data/path'
 #     to enable xbbg saving data locally
@@ -159,7 +158,7 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
         >>> os.environ['BBG_ROOT'] = '/data/bbg'
         >>> ref_file('BLT LN Equity', fld='Crncy')
         '/data/bbg/Equity/BLT LN Equity/Crncy/ovrd=None.parq'
-        >>> cur_dt = utils.cur_time(tz=DEFAULT_TZ)
+        >>> cur_dt = utils.cur_time(tz=utils.DEFAULT_TZ)
         >>> ref_file(
         ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True
         ... ).replace(cur_dt, '[cur_date]')
