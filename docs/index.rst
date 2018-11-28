@@ -1,24 +1,15 @@
 xbbg
 ====
 
-.. image:: https://badge.fury.io/py/xbbg.svg
-    :target: https://badge.fury.io/py/xbbg
-.. image:: https://img.shields.io/pypi/pyversions/xbbg.svg
-    :target: https://badge.fury.io/py/xbbg
-.. image:: https://img.shields.io/travis/alpha-xone/xbbg/master.svg?label=Travis%20CI
-    :target: https://travis-ci.com/alpha-xone/xbbg
-    :alt: Travis CI
-.. image:: https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg
-    :target: https://codecov.io/gh/alpha-xone/xbbg
-    :alt: Codecov
-.. image:: https://readthedocs.org/projects/xbbg/badge/?version=latest
-    :target: https://xbbg.readthedocs.io/en/latest
-.. image:: https://www.codefactor.io/repository/github/alpha-xone/xbbg/badge
-   :target: https://www.codefactor.io/repository/github/alpha-xone/xbbg
-   :alt: CodeFactor
-.. image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
-    :alt: GitHub license
-    :target: https://github.com/alpha-xone/xbbg/blob/master/LICENSE
+============== ======================
+Latest Release |pypi|
+\              |version|
+Build          |travis|
+Coverage       |codecov|
+Docs           |docs|
+Quality        |codeFactor|
+License        |license|
+============== ======================
 
 Bloomberg data toolkit for humans
 
@@ -257,3 +248,22 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
     of the data and information available via the API (the "Data").
     The most fundamental requirement regarding your use of Data is that it cannot
     leave the local PC you use to access the BLOOMBERG PROFESSIONAL service.
+
+.. |pypi| image:: https://img.shields.io/pypi/v/xbbg.svg
+    :target: https://badge.fury.io/py/xbbg
+.. |version| image:: https://img.shields.io/pypi/pyversions/xbbg.svg
+    :target: https://badge.fury.io/py/xbbg
+.. |travis| image:: https://img.shields.io/travis/alpha-xone/xbbg/master.svg?label=Travis%20CI
+    :target: https://travis-ci.com/alpha-xone/xbbg
+    :alt: Travis CI
+.. |codecov| image:: https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg
+    :target: https://codecov.io/gh/alpha-xone/xbbg
+    :alt: Codecov
+.. |docs| image:: https://readthedocs.org/projects/xbbg/badge/?version=latest
+    :target: https://xbbg.readthedocs.io/en/latest
+.. |codefactor| image:: https://www.codefactor.io/repository/github/alpha-xone/xbbg/badge
+   :target: https://www.codefactor.io/repository/github/alpha-xone/xbbg
+   :alt: CodeFactor
+.. |license| image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
+    :alt: GitHub license
+    :target: https://github.com/alpha-xone/xbbg/blob/master/LICENSE
