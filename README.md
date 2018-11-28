@@ -268,30 +268,3 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 > of the data and information available via the API (the "Data"). 
 > The most fundamental requirement regarding your use of Data is that it cannot 
 > leave the local PC you use to access the BLOOMBERG PROFESSIONAL service.
-
-## Bloomberg Binaries
-
-- Reference: https://www.bloomberg.com/professional/support/api-library/
-- Install with `pip`
-
-```
-pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
-```
-
-- Install in `pipenv`
-
-Add `source` in `Pipfile`
-
-```toml
-[[source]]
-name = "bbg"
-url = "https://bloomberg.bintray.com/pip/simple"
-verify_ssl = true
-```
-
-Run `pipenv`
-
-```
-cd ...\xbbg\env
-pipenv install blpapi
-```

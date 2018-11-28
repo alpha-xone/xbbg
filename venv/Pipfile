@@ -18,7 +18,6 @@ pandas = "*"
 blpapi = "*"
 pdblp = "*"
 pyarrow = "*"
-xone = "*"
 
 [requires]
 python_version = "3.6"
