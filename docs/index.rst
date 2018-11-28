@@ -42,9 +42,9 @@ before we want to do multiple queries - just like examples below.
 
 .. code-block:: python
 
-    In[1]: from xbbg import blp, conn
+    In[1]: from xbbg import blp
 
-    In[2]: conn.create_connection()
+    In[2]: blp.create_connection()
     Out[2]: (<pdblp.pdblp.BCon at 0x1c35cd0e898>, True)
 
 ``BDP`` example:
@@ -78,7 +78,7 @@ before we want to do multiple queries - just like examples below.
     2018-10-18  2,806.04 2,755.18   2,768.78
     2018-10-19  2,797.77 2,760.27   2,767.78
 
-``BDH`` example with Excel compatible inputs
+``BDH`` example with Excel compatible inputs:
 
 .. code-block:: python
 
@@ -96,12 +96,48 @@ before we want to do multiple queries - just like examples below.
     2018-10-12     2,771.94 2,536.66   2,606.91
     2018-10-19     2,611.97 2,449.20   2,550.47
 
+``BDH`` without adjustment for dividends and splits:
+
+.. code-block:: python
+
+    In[5]: blp.bdh(
+      ...:     'AAPL US Equity', 'Px_Last', '20140604', '20140610',
+      ...:     CshAdjNormal=False, CshAdjAbnormal=False, CapChg=False
+      ...: )
+    Out[5]:
+    ticker     AAPL US Equity
+    field             Px_Last
+    date
+    2014-06-04         644.82
+    2014-06-05         647.35
+    2014-06-06         645.57
+    2014-06-09          93.70
+    2014-06-10          94.25
+
+``BDH`` adjusted for dividends and splits:
+
+.. code-block:: python
+
+    In[6]: blp.bdh(
+      ...:     'AAPL US Equity', 'Px_Last', '20140604', '20140610',
+      ...:     CshAdjNormal=True, CshAdjAbnormal=True, CapChg=True
+      ...: )
+    Out[6]:
+    ticker     AAPL US Equity
+    field             Px_Last
+    date
+    2014-06-04          85.12
+    2014-06-05          85.45
+    2014-06-06          85.22
+    2014-06-09          86.58
+    2014-06-10          87.09
+
 ``BDS`` example:
 
 .. code-block:: python
 
-    In[5]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_End_Dt='20180531')
-    Out[5]:
+    In[7]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_End_Dt='20180531')
+    Out[7]:
                 ticker         field                name         value  position
     0   AAPL US Equity  DVD_Hist_All       Declared Date    2018-05-01         0
     1   AAPL US Equity  DVD_Hist_All             Ex-Date    2018-05-11         0
@@ -122,8 +158,8 @@ Intraday bars ``BDIB`` example:
 
 .. code-block:: python
 
-    In[6]: blp.bdib(ticker='BHP AU Equity', dt='2018-10-17').tail()
-    Out[6]:
+    In[8]: blp.bdib(ticker='BHP AU Equity', dt='2018-10-17').tail()
+    Out[8]:
                                open  high   low  close   volume  numEvents
     2018-10-17 15:56:00+11:00 33.62 33.65 33.62  33.64    16660        126
     2018-10-17 15:57:00+11:00 33.65 33.65 33.63  33.64    13875        156
@@ -135,8 +171,8 @@ Intraday bars within market session:
 
 .. code-block:: python
 
-    In[7]: blp.intraday(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
-    Out[7]:
+    In[9]: blp.intraday(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
+    Out[9]:
                                    open      high       low     close  volume  numEvents
     2018-10-17 09:27:00+09:00 39,970.00 40,020.00 39,970.00 39,990.00   10800         44
     2018-10-17 09:28:00+09:00 39,990.00 40,020.00 39,980.00 39,980.00    6300         33
@@ -148,8 +184,8 @@ Corporate earnings:
 
 .. code-block:: python
 
-    In[8]: blp.earning('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
-    Out[8]:
+    In[10]: blp.earning('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
+    Out[10]:
 
                      Level   FY_2017  FY_2017_Pct
     Asia-Pacific      1.00  3,540.00        66.43
@@ -164,8 +200,8 @@ Dividends:
 
 .. code-block:: python
 
-    In[9]: blp.dividend(['C US Equity', 'MS US Equity'], start_date='2018-01-01', end_date='2018-05-01')
-    Out[9]:
+    In[11]: blp.dividend(['C US Equity', 'MS US Equity'], start_date='2018-01-01', end_date='2018-05-01')
+    Out[11]:
                    declared_date     ex_date record_date payable_date dividend_amount dividend_frequency dividend_type
     ticker
     C US Equity       2018-01-18  2018-02-02  2018-02-05   2018-02-23            0.32            Quarter  Regular Cash
@@ -183,9 +219,9 @@ is helpful before calling any queries:
 
 .. code-block:: python
 
-    from xbbg import conn
+    from xbbg import blp
 
-    conn.create_connection()
+    blp.create_connection()
 
 Data Storage
 ------------
