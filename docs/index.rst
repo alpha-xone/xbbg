@@ -203,7 +203,7 @@ Corporate earnings:
 
 .. code-block:: python
 
-    In[10]: blp.earning('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
+    In[10]: blp.earning('AMD US Equity', by='Geo', Eqy_Fund_Year=2017, Number_Of_Periods=1)
     Out[10]:
 
                      Level   FY_2017  FY_2017_Pct

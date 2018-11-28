@@ -352,13 +352,13 @@ def intraday(ticker, dt, session='', start_time=None, end_time=None, typ='TRADE'
 
 
 @with_bloomberg
-def earning(ticker, typ='Geo', cached=False, **kwargs):
+def earning(ticker, by='Geo', cached=False, **kwargs):
     """
     Earning exposures by Geo or Products
 
     Args:
         ticker: ticker name
-        typ: [G(eo), P(roduct)]
+        by: [G(eo), P(roduct)]
         cached: whether to load from cache
 
     Returns:
@@ -376,7 +376,7 @@ def earning(ticker, typ='Geo', cached=False, **kwargs):
         Europe             1.0    263.0         4.94
         Other Countries    1.0    162.0         3.04
     """
-    ovrd = 'G' if typ[0].upper() == 'G' else 'P'
+    ovrd = 'G' if by[0].upper() == 'G' else 'P'
     new_kw = dict(cached=cached, Product_Geo_Override=ovrd)
     header = bds(tickers=ticker, flds='PG_Bulk_Header', **new_kw, **kwargs)
     data = bds(tickers=ticker, flds='PG_Revenue', **new_kw, **kwargs)

@@ -206,10 +206,10 @@ Out[9]:
 2018-10-17 09:31:00+09:00 39,990.00 40,000.00 39,980.00 39,990.00    2000         15
 ```
 
-- Earnings
+- Corporate earnings:
 
 ```python
-In[10]: blp.earning('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
+In[10]: blp.earning('AMD US Equity', by='Geo', Eqy_Fund_Year=2017, Number_Of_Periods=1)
 ```
 
 ```pydocstring
@@ -225,7 +225,7 @@ Europe            1.00    263.00         4.94
 Other Countries   1.00    162.00         3.04
 ```
 
-- Dividends
+- Dividends:
 
 ```python
 In[11]: blp.dividend(['C US Equity', 'MS US Equity'], start_date='2018-01-01', end_date='2018-05-01')

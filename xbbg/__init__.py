@@ -1,3 +1,3 @@
 """Bloomberg data toolkit for humans"""
 
-__version__ = '0.1.10a'
+__version__ = '0.1.10'
