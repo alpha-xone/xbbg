@@ -3,7 +3,7 @@ import pandas as pd
 import time
 import pytz
 
-from xone import logs
+from xbbg.io import logs
 
 DEFAULT_TZ = pytz.FixedOffset(-time.timezone / 60)
 

@@ -4,7 +4,8 @@ import sys
 import pytest
 
 from itertools import product
-from xone import utils, files, logs
+from xbbg.core import utils
+from xbbg.io import files, logs
 
 try:
     import blpapi
@@ -20,7 +21,9 @@ from xbbg.conn import with_bloomberg, create_connection
 from xbbg.core.timezone import DEFAULT_TZ
 from xbbg.exchange import TradingHours, SessNA
 
-if not hasattr(blpapi, '__version__'): pytest.skip('no Bloomberg')
+DEBUG = True
+
+if DEBUG or (not hasattr(blpapi, '__version__')): pytest.skip('no Bloomberg')
 print(f'blpapi version: {blpapi.__version__}')
 if 'pytest' in sys.modules: create_connection()
 

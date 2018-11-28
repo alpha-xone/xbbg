@@ -8,7 +8,7 @@ from xbbg.asset.comdty import Comdty
 from xbbg.asset.index import Index
 from xbbg.asset.corp import Corp
 
-from xone import logs
+from xbbg.io import logs
 
 Futures = dict(
     Jan='F', Feb='G', Mar='H', Apr='J', May='K', Jun='M',

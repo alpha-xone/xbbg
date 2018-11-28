@@ -2,9 +2,8 @@ import pandas as pd
 
 import os
 
-from xone import utils, files, logs
-
-from xbbg.core import const
+from xbbg.core import utils, const
+from xbbg.io import files, logs
 from xbbg.core.timezone import DEFAULT_TZ
 
 # Set os.environ['BBG_ROOT'] = '/your/bbg/data/path'
@@ -160,7 +159,7 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
         >>> os.environ['BBG_ROOT'] = '/data/bbg'
         >>> ref_file('BLT LN Equity', fld='Crncy')
         '/data/bbg/Equity/BLT LN Equity/Crncy/ovrd=None.parq'
-        >>> cur_dt = utils.cur_time(trading=False, tz=DEFAULT_TZ)
+        >>> cur_dt = utils.cur_time(tz=DEFAULT_TZ)
         >>> ref_file(
         ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True
         ... ).replace(cur_dt, '[cur_date]')
@@ -207,7 +206,7 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
     # Check date info
     if has_date:
         cur_files = []
-        cur_dt = utils.cur_time(trading=False, tz=DEFAULT_TZ)
+        cur_dt = utils.cur_time()
 
         if from_cache:
             cur_files = files.all_files(path_name=root, keyword=info, ext=ext)
@@ -243,7 +242,7 @@ def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE'):
         >>> # Invalid empty data
         >>> save_intraday(pd.DataFrame(), 'AAPL US Equity', '2018-11-02')
         >>> # Invalid date - too close
-        >>> cur_dt = utils.cur_time(trading=False)
+        >>> cur_dt = utils.cur_time()
         >>> save_intraday(sample, 'AAPL US Equity', cur_dt)
     """
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')

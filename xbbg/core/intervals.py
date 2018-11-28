@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-from xone import logs
+from xbbg.io import logs
 
 from xbbg.core import const
 from xbbg.exchange import Session, SessNA

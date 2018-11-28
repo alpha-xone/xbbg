@@ -24,7 +24,7 @@ install:
   - python setup.py install
 
 #  - pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
-#  - pip install -r venv/reqs.txt
+#  - pip install -r requirements.txt
 #  - pip install pytest pytest-cov
 
 script:

@@ -18,8 +18,10 @@ Bloomberg data toolkit for humans
 pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
 ```
 
+- Bloomberg C++ SDK version 3.12.1 or higher - [download](https://bloomberg.bintray.com/BLPAPI-Experimental-Generic/blpapi_cpp_3.12.2.1-linux.tar.gz)
+    - Copy **blpapi3_32.dll** and **blpapi3_64.dll** under **bin** folder to **blp/DAPI** 
 - [pdbdp](https://github.com/matthewgilbert/pdblp) - pandas wrapper for Bloomberg Open API
-- numpy, pandas, pyarrow, and [xone](https://github.com/alpha-xone/xone)
+- numpy, pandas and pyarrow
 
 ## Installation
 

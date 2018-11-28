@@ -6,6 +6,7 @@ omit =
     xbbg/ccy.py
     xbbg/exchange.py
     xbbg/core/missing.py
+    xbbg/io/files.py
     */__init__.py
 
 [html]
