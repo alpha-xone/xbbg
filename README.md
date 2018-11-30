@@ -256,7 +256,7 @@ Since initiation of connections takes time, if multiple queries are expected,
 manual creation of a new connection (which will be shared by all following queries)
 is helpful before calling any queries.
 
-- In command line, below command is helpful
+- In command line, below command is helpful:
 
 ```python
 from xbbg import blp
