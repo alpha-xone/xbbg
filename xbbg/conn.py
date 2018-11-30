@@ -2,6 +2,8 @@ import pdblp
 
 from functools import wraps
 
+_CON_SYM_ = '_xcon_'
+
 
 def with_bloomberg(func):
     """
@@ -12,7 +14,7 @@ def with_bloomberg(func):
     """
     @wraps(func)
     def wrapper(*args, **kwargs):
-        con, new = create_connection()
+        _, new = create_connection()
         res = func(*args, **kwargs)
         if new: delete_connection()
         return res
@@ -26,15 +28,18 @@ def create_connection():
     Returns:
         (Bloomberg connection, if connection is new)
     """
-    if '_xcon_' in globals():
-        con = globals()['_xcon_']
-        assert isinstance(con, pdblp.BCon)
+    if _CON_SYM_ in globals():
+        if not isinstance(globals()[_CON_SYM_], pdblp.BCon):
+            globals().pop(_CON_SYM_)
+    
+    if _CON_SYM_ in globals():
+        con = globals()[_CON_SYM_]
         if getattr(con, '_session').start(): con.start()
         return con, False
 
     else:
         con = pdblp.BCon(port=8194, timeout=5000)
-        globals()['_xcon_'] = con
+        globals()[_CON_SYM_] = con
         con.start()
         return con, True
 
@@ -43,6 +48,6 @@ def delete_connection():
     """
     Stop and destroy Bloomberg connection
     """
-    if '_xcon_' in globals():
-        con = globals().pop('_xcon_')
+    if _CON_SYM_ in globals():
+        con = globals().pop(_CON_SYM_)
         if not getattr(con, '_session').start(): con.stop()

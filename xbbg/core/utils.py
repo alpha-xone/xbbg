@@ -147,7 +147,7 @@ def fstr(fmt, **kwargs):
     return f'{FString(str_fmt=fmt)}'
 
 
-def to_str(data, fmt='{key}={value}', sep=', ', public_only=True):
+def to_str(data: dict, fmt='{key}={value}', sep=', ', public_only=True):
     """
     Convert dict to string
 
@@ -169,7 +169,6 @@ def to_str(data, fmt='{key}={value}', sep=', ', public_only=True):
         >>> to_str(test_dict, public_only=False)
         '{b=1, a=0, c=2, _d=3}'
     """
-    assert isinstance(data, dict)
     if public_only: keys = list(filter(lambda vv: vv[0] != '_', data.keys()))
     else: keys = list(data.keys())
     return '{' + sep.join([

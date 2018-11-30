@@ -265,9 +265,10 @@ def bdib(ticker, dt, typ='TRADE', batch=False):
             logger.warning(f'cannot find market info for {ticker}: {utils.to_str(info)}')
             return pd.DataFrame()
         exch = info['exch']
-        assert isinstance(exch, TradingHours), ValueError(
-            f'exch info for {ticker} is not TradingHours: {exch}'
-        )
+        if not isinstance(exch, TradingHours):
+            raise ValueError(
+                f'exch info for {ticker} is not TradingHours: {exch}'
+            )
 
     else:
         logger.error(f'unknown asset type: {asset}')
@@ -306,7 +307,9 @@ def bdib(ticker, dt, typ='TRADE', batch=False):
         end_datetime=time_idx[1].strftime(time_fmt),
     )
 
-    assert isinstance(data, pd.DataFrame)
+    if not isinstance(data, pd.DataFrame):
+        raise ValueError(f'unknown output format: {type(data)}')
+
     if data.empty:
         logger.warning(f'no data for {info_log} ...')
         missing.update_missing(ticker=ticker, dt=dt, typ=typ, func=bdib.__name__)

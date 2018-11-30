@@ -1,6 +1,5 @@
 import pathlib
 from os import path
-from io import open
 from setuptools import setup, find_packages
 
 # for pip >= 10

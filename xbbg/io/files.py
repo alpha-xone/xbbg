@@ -18,7 +18,7 @@ def exists(path):
     return os.path.exists(path=path)
 
 
-def create_folder(path_name, is_file=False):
+def create_folder(path_name: str, is_file=False):
     """
     Make folder as well as all parent folders if not exists
 
@@ -26,7 +26,6 @@ def create_folder(path_name, is_file=False):
         path_name: full path name
         is_file: whether input is name of file
     """
-    assert isinstance(path_name, str)
     path_sep = path_name.replace('\\', '/').split('/')
     for i in range(1, len(path_sep) + (0 if is_file else 1)):
         cur_path = '/'.join(path_sep[:i])

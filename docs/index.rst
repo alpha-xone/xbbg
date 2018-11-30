@@ -8,6 +8,7 @@ Build          |travis|
 Coverage       |codecov|
 Docs           |docs|
 Quality        |codeFactor|
+\              |codacy|
 License        |license|
 ============== ======================
 
@@ -264,6 +265,8 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 .. |codefactor| image:: https://www.codefactor.io/repository/github/alpha-xone/xbbg/badge
    :target: https://www.codefactor.io/repository/github/alpha-xone/xbbg
    :alt: CodeFactor
+.. |codacy| image:: https://api.codacy.com/project/badge/Grade/2ec89be198cf4689a6a6c6407b0bc965
+   :target: https://www.codacy.com/app/alpha-xone/xbbg
 .. |license| image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
     :alt: GitHub license
     :target: https://github.com/alpha-xone/xbbg/blob/master/LICENSE
