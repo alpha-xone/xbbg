@@ -30,8 +30,8 @@ def create_connection():
     """
     if _CON_SYM_ in globals():
         if not isinstance(globals()[_CON_SYM_], pdblp.BCon):
-            globals().pop(_CON_SYM_)
-    
+            del globals()[_CON_SYM_]
+
     if _CON_SYM_ in globals():
         con = globals()[_CON_SYM_]
         if getattr(con, '_session').start(): con.start()

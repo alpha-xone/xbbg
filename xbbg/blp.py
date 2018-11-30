@@ -21,10 +21,7 @@ from xbbg.conn import with_bloomberg, create_connection
 from xbbg.core.timezone import DEFAULT_TZ
 from xbbg.exchange import TradingHours, SessNA
 
-DEBUG = False
-if DEBUG or (not pytest.config.option.with_bbg):
-    pytest.skip('no Bloomberg')
-
+if not pytest.config.option.with_bbg: pytest.skip('no Bloomberg')
 print(f'blpapi version: {blpapi.__version__}')
 if 'pytest' in sys.modules: create_connection()
 
