@@ -15,24 +15,24 @@ Bloomberg data toolkit for humans
 
 ## Requirements
 
-  - Bloomberg Open API
+- Bloomberg Open API
 
 ```cmd
 pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
 ```
 
-  - Bloomberg C++ SDK version 3.12.1 or higher
+- Bloomberg C++ SDK version 3.12.1 or higher
 
     - https://www.bloomberg.com/professional/support/api-library/
 
     - Downlaod C++ Experimental Release
 
     - Copy `blpapi3_32.dll` and `blpapi3_64.dll` under `bin` 
-    folder to Bloomberg `BLPAPI_ROOT` folder, normally `blp/DAPI`
+      folder to Bloomberg `BLPAPI_ROOT` folder, normally `blp/DAPI`
 
-  - [pdbdp](https://github.com/matthewgilbert/pdblp) - pandas wrapper for Bloomberg Open API
+- [pdbdp](https://github.com/matthewgilbert/pdblp) - pandas wrapper for Bloomberg Open API
 
-  - numpy, pandas and pyarrow
+- numpy, pandas and pyarrow
 
 ## Installation
 
@@ -57,7 +57,7 @@ In[2]: blp.create_connection()
 Out[2]: (<pdblp.pdblp.BCon at 0x1c35cd0e898>, True)
 ```
 
-  - ``BDP`` example:
+- ``BDP`` example:
 
 ```python
 In[3]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Name'])
@@ -70,7 +70,7 @@ Out[3]:
 1  NVDA US Equity  GICS_Sector_Name  Information Technology
 ```
 
-  - ``BDH`` example:
+- ``BDH`` example:
 
 ```python
 In[4]: blp.bdh(
@@ -94,7 +94,7 @@ date
 2018-10-19  2,797.77 2,760.27   2,767.78
 ```
 
-  - ``BDH`` example with Excel compatible inputs:
+- ``BDH`` example with Excel compatible inputs:
 
 ```python
 In[4]: blp.bdh(
@@ -115,7 +115,7 @@ date
 2018-10-19     2,611.97 2,449.20   2,550.47
 ```
 
-  - ``BDH`` without adjustment for dividends and splits:
+- ``BDH`` without adjustment for dividends and splits:
 
 ```python
 In[5]: blp.bdh(
@@ -136,7 +136,7 @@ date
 2014-06-10          94.25
 ```
 
-  - ``BDH`` adjusted for dividends and splits:
+- ``BDH`` adjusted for dividends and splits:
 
 ```python
 In[6]: blp.bdh(
@@ -157,7 +157,7 @@ date
 2014-06-10          87.09
 ```
 
-  - ``BDS`` example:
+- ``BDS`` example:
 
 ```python
 In[7]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_End_Dt='20180531')
@@ -182,7 +182,7 @@ Out[7]:
 13  AAPL US Equity  DVD_Hist_All       Dividend Type  Regular Cash         1
 ```
 
-  - Intraday bars ``BDIB`` example:
+- Intraday bars ``BDIB`` example:
 
 ```python
 In[8]: blp.bdib(ticker='BHP AU Equity', dt='2018-10-17').tail()
@@ -198,7 +198,7 @@ Out[8]:
 2018-10-17 16:10:00+11:00 33.66 33.66 33.66  33.66  1115523        216
 ```
 
-  - Intraday bars within market session:
+- Intraday bars within market session:
 
 ```python
 In[9]: blp.intraday(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
@@ -214,7 +214,7 @@ Out[9]:
 2018-10-17 09:31:00+09:00 39,990.00 40,000.00 39,980.00 39,990.00    2000         15
 ```
 
-  - Corporate earnings:
+- Corporate earnings:
 
 ```python
 In[10]: blp.earning('AMD US Equity', by='Geo', Eqy_Fund_Year=2017, Number_Of_Periods=1)
@@ -233,7 +233,7 @@ Europe            1.00    263.00         4.94
 Other Countries   1.00    162.00         3.04
 ```
 
-  - Dividends:
+- Dividends:
 
 ```python
 In[11]: blp.dividend(['C US Equity', 'MS US Equity'], start_date='2018-01-01', end_date='2018-05-01')
