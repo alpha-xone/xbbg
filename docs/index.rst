@@ -226,13 +226,30 @@ This library uses a global Bloomberg connection on the backend -
 more specically, ``_xcon_`` in ``globals()`` variable.
 Since initiation of connections takes time, if multiple queries are expected,
 manually create a new connection (which will be shared by all following queries)
-is helpful before calling any queries:
+is helpful before calling any queries.
 
-.. code-block:: python
+-  In command line, below command is helpful
+
+.. code:: python
 
     from xbbg import blp
 
     blp.create_connection()
+
+-  For functions, wrapper function is recommended (connections will be destroyed afterwards):
+
+.. code:: python
+
+    from xbbg import blp
+
+    @blp.with_bloomberg
+    def query_bbg():
+        """
+        All queries share the same connection
+        """
+        blp.bdp(...)
+        blp.bdh(...)
+        blp.bdib(...)
 
 Data Storage
 ------------

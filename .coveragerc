@@ -1,10 +1,10 @@
 [run]
 omit =
     xbbg/blp.py
-    xbbg/conn.py
     xbbg/asset/*
     xbbg/ccy.py
     xbbg/exchange.py
+    xbbg/core/conn.py
     xbbg/core/missing.py
     xbbg/io/files.py
     */__init__.py

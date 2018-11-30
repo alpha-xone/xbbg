@@ -17,8 +17,8 @@ except ImportError:
     sys.exit()
 
 from xbbg.core import intervals, assist, const, missing
-from xbbg.conn import with_bloomberg, create_connection
 from xbbg.core.timezone import DEFAULT_TZ
+from xbbg.core.conn import with_bloomberg, create_connection
 from xbbg.exchange import TradingHours, SessNA
 
 if not pytest.config.option.with_bbg: pytest.skip('no Bloomberg')
