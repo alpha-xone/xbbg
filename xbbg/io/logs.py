@@ -21,9 +21,9 @@ def get_logger(
         logger
 
     Examples:
-        >>> get_logger(name_or_func='download_data', level='debug', types='stream')
+        >>> get_logger('download_data', level='debug', types='stream')
         <Logger download_data (DEBUG)>
-        >>> get_logger(name_or_func='preprocess', log_file='pre.log', types='file|stream')
+        >>> get_logger('preprocess', log_file='xbbg/tests/pre.log', types='file|stream')
         <Logger preprocess (INFO)>
     """
     if isinstance(level, str): level = getattr(logging, level.upper())

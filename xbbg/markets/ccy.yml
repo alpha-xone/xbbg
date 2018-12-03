@@ -1,0 +1,104 @@
+# ========================================
+#   FX = (BDP(ticker) / factor) ** power
+#
+#   where:
+#     factor = power = 1 if left blank
+# ========================================
+
+# Override or expand this list by providing
+#   os.environ['BBG_ROOT']/markets/ccy.yml
+
+AUDUSD:
+  ticker: AUD Curncy
+  power: -1
+
+JPYUSD:
+  ticker: JPY Curncy
+
+KRWUSD:
+  ticker: KRW Curncy
+
+KWN+1MUSD:
+  ticker: KRW+1M Curncy
+
+TWDUSD:
+  ticker: TWD Curncy
+
+NTN+1MUSD:
+  ticker: NTN+1M Curncy
+
+CNYHKD:
+  ticker: CNYHKD Curncy
+
+CNHHKD:
+  ticker: CNHHKD Curncy
+  power: -1
+
+HKDUSD:
+  ticker: HKD Curncy
+
+EURUSD:
+  ticker: EUR Curncy
+  power: -1
+
+GBPUSD:
+  ticker: GBP Curncy
+  power: -1
+
+GBpUSD:
+  ticker: GBP Curncy
+  factor: 100
+  power: -1
+
+GBPAUD:
+  ticker: GBPAUD Curncy
+  power: -1
+
+GBpAUD:
+  ticker: GBPAUD Curncy
+  factor: 100
+  power: -1
+
+GBPEUR:
+  ticker: GBPEUR Curncy
+  power: -1
+
+GBpEUR:
+  ticker: GBPEUR Curncy
+  factor: 100
+  power: -1
+
+GBPHKD:
+  ticker: GBPHKD Curncy
+  power: -1
+
+GBpHKD:
+  ticker: GBPHKD Curncy
+  factor: 100
+  power: -1
+
+INT1USD:
+  ticker: INT1 Curncy
+
+INT2USD:
+  ticker: INT2 Curncy
+
+IRD1USD:
+  ticker: IRD1 Curncy
+  factor: 10000
+  power: -1
+
+IRD2USD:
+  ticker: IRD2 Curncy
+  factor: 10000
+  power: -1
+
+XID1USD:
+  ticker: XID1 Curncy
+  factor: 10000
+  power: -1
+
+XID2USD:
+  ticker: XID2 Curncy
+  factor: 10000
+  power: -1

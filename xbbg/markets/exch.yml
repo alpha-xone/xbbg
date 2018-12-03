@@ -1,0 +1,273 @@
+# =========================================
+#   Session definitions for intraday bars
+#
+#  [allday, day, am, pm, night, pre, post]
+# =========================================
+
+# Override or expand this list by providing
+#   os.environ['BBG_ROOT']/markets/exch.yml
+
+# ------------
+#   Equities
+# ------------
+
+EquityAustralia:
+  tz: Australia/Sydney
+  allday: [0959, 1616]
+  day: [1000, 1600]
+  post: [1601, 1616]
+
+EquityJapan:
+  tz: Asia/Tokyo
+  allday: [800, 1545]
+  day: [901, 1458]
+  am: [901, 1130]
+  pm: [1230, 1458]
+  pre: [0800, 901]
+  post: [1459, 1545]
+
+EquitySouthKorea:
+  tz: Asia/Seoul
+  allday: [900, 1535]
+  day: [900, 1520]
+  post: [1521, 1535]
+
+EquityTaiwan:
+  tz: Asia/Taipei
+  allday: [900, 1335]
+  day: [900, 1325]
+  post: [1326, 1335]
+
+EquityHongKong:
+  tz: Asia/Hong_Kong
+  allday: [915, 1615]
+  day: [930, 1600]
+  am: [930, 1200]
+  pm: [1300, 1600]
+  pre: [0915, 930]
+  post: [1601, 1615]
+
+EquityChina:
+  tz: Asia/Shanghai
+  allday: [915, 1505]
+  day: [930, 1500]
+  am: [930, 1130]
+  pm: [1300, 1500]
+  pre: [0915, 930]
+
+EquityIndia:
+  tz: Asia/Calcutta
+  allday: [900, 1710]
+  day: [900, 1530]
+  post: [1531, 1710]
+
+EquityLondon:
+  tz: Europe/London
+  allday: [800, 1700]
+  day: [800, 1630]
+  post: [1631, 1700]
+
+EquityDublin:
+  tz: Europe/London
+  allday: [800, 1700]
+  day: [800, 1630]
+  post: [1631, 1700]
+
+EquityAmsterdam:
+  tz: Europe/London
+  allday: [800, 1700]
+  day: [800, 1630]
+  post: [1631, 1700]
+
+EquitySpain:
+  tz: Europe/London
+  allday: [800, 1700]
+  day: [800, 1630]
+  post: [1631, 1700]
+
+EquityFrance:
+  tz: Europe/London
+  allday: [800, 1700]
+  day: [800, 1630]
+  post: [1631, 1700]
+
+EquityUS:
+  tz: America/New_York
+  allday: [400, 2000]
+  day: [0930, 1600]
+  pre: [400, 0930]
+  post: [1601, 2000]
+
+# --------------
+#   Currencies
+# --------------
+
+CurrencyGeneric:
+  tz: America/New_York
+  allday: [1701, 1700]
+
+CurrencySouthKorea:
+  tz: Asia/Seoul
+  allday: [900, 1530]
+
+CurrencyTaiwan:
+  tz: Asia/Taipei
+  allday: [900, 1600]
+
+CurrencyChina:
+  tz: Asia/Shanghai
+  allday: [930, 2330]
+
+CurrencyIndia:
+  tz: Asia/Calcutta
+  allday: [900, 1700]
+
+CurrencyDubai:
+  tz: Asia/Dubai
+  allday: [700, 2359]
+
+CurrencySingapore:
+  tz: Asia/Singapore
+  allday: [1950, 1935]
+  day: [725, 1935]
+  night: [1950, 445]
+
+CurrencyICE:
+  tz: America/New_York
+  allday: [1830, 1730]
+
+# -----------------------------
+#   Index|Commodity (Futures)
+# -----------------------------
+
+FuturesAustralia:
+  tz: Australia/Sydney
+  allday: [1710, 1630]
+  day: [950, 1630]
+  night: [1710, 700]
+
+IndexAustralia:
+  tz: Australia/Sydney
+  allday: [1000, 1620]
+
+FuturesJapan:
+  tz: Asia/Tokyo
+  allday: [1630, 1515]
+  day: [845, 1515]
+  night: [1630, 530]
+
+FuturesSouthKorea:
+  tz: Asia/Seoul
+  allday: [1800, 1545]
+  day: [900, 1545]
+  night: [1800, 500]
+
+IndexSouthKorea:
+  tz: Asia/Seoul
+  allday: [830, 1535]
+  day: [900, 1520]
+  post: [1521, 1535]
+
+FuturesTaiwan:
+  tz: Asia/Taipei
+  allday: [1415, 1350]
+  day: [845, 1350]
+  night: [1415, 450]
+
+FuturesHongKong:
+  tz: Asia/Hong_Kong
+  allday: [1715, 100]
+  day: [915, 1630]
+  night: [1715, 100]
+
+CommoditiesShanghai:
+  tz: Asia/Shanghai
+  allday: [2100, 1500]
+  day: [900, 1500]
+  am: [900, 1130]
+  pm: [1330, 1500]
+  night: [2100, 2300]
+
+CommoditiesDalian:
+  tz: Asia/Shanghai
+  allday: [2100, 1500]
+  day: [900, 1130]
+  am: [900, 1130]
+  pm: [1330, 1500]
+  night: [2100, 2330]
+
+FuturesSingapore:
+  tz: Asia/Singapore
+  allday: [1700, 445]
+  day: [900, 1635]
+  night: [1700, 445]
+
+EquityFuturesIndia:
+  tz: Asia/Calcutta
+  allday: [915, 1645]
+  day: [915, 1530]
+  post: [1531, 1645]
+
+IndexFuturesIndia:
+  tz: Asia/Calcutta
+
+FuturesIndia:
+  allday: [915, 1530]
+
+IndexLondon:
+  tz: Europe/London
+  allday: [800, 1635]
+  day: [800, 1630]
+  post: [1631, 1635]
+
+IndexEurope1:
+  tz: Europe/London
+  allday: [800, 1700]
+
+IndexEurope2:
+  tz: Europe/London
+  allday: [800, 1715]
+
+IndexEurope3:
+  tz: Europe/London
+  allday: [800, 1830]
+
+FuturesFinancialsICE:
+  tz: Europe/London
+  allday: [100, 2100]
+
+FuturesEuropeICE:
+  tz: Europe/London
+  allday: [100, 2300]
+
+IndexUS:
+  tz: America/New_York
+  allday: [930, 1600]
+
+CME:
+  tz: America/New_York
+  allday: [1800, 1700]
+
+FuturesNYFICE:
+  tz: America/New_York
+  allday: [2000, 1800]
+
+IndexVIX:
+  tz: America/New_York
+  allday: [300, 1630]
+
+FuturesCBOE:
+  tz: America/New_York
+  allday: [1800, 1700]
+
+IndexYieldCurve:
+  tz: America/New_York
+  allday: [1800, 1720]
+
+NYME:
+  tz: America/New_York
+  allday: [1800, 1700]
+
+CMX:
+  tz: America/New_York
+  allday: [1800, 1700]

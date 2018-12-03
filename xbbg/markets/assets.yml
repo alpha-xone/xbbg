@@ -1,0 +1,173 @@
+# Override or expand this list by providing
+#   os.environ['BBG_ROOT']/markets/assets.yml
+#
+# New exchange should be added to exch.yml
+
+Comdty:
+  - tickers: [CL]
+    exch: NYME
+    freq: M
+    is_fut: True
+  - tickers: [CO, XW]
+    exch: FuturesEuropeICE
+    freq: M
+    is_fut: True
+  - tickers: IOE
+    exch: CommoditiesDalian
+    freq: M
+    is_fut: True
+    key_month: [J, K, U]
+  - tickers: [RBT]
+    exch: CommoditiesDalian
+    freq: M
+    is_fut: True
+    key_month: [J, K, U]
+  - tickers: [HG]
+    exch: CMX
+    freq: Q
+    is_fut: True
+
+Curncy:
+  - tickers: [
+      JPY, AUD, HKD, CNHHKD, CNH, EUR, GBP, GBPAUD,
+      GBPEUR, AUDGBP, GBPHKD, KWN, IRN, NTN, CNH1M, ZAR
+    ]
+    exch: CurrencyGeneric
+  - tickers: [KRW]
+    exch: CurrencySouthKorea
+  - tickers: [TWD]
+    exch: CurrencyTaiwan
+  - tickers: [CNYHKD, CNY]
+    exch: CurrencyChina
+  - tickers: [INR]
+    exch: CurrencyIndia
+  - tickers: [IRD]
+    exch: CurrencyDubai
+    freq: M
+    is_fut: True
+  - tickers: [XID]
+    exch: CurrencySingapore
+    freq: M
+    is_fut: True
+  - tickers: [INT]
+    exch: CurrencyIndia
+    freq: M
+    is_fut: True
+  - tickers: [DXY]
+    exch: CurrencyICE
+
+Equity:
+  - exch_codes: [AU]
+    exch: EquityAustralia
+  - exch_codes: [JT, JP]
+    exch: EquityJapan
+  - exch_codes: [KS]
+    exch: EquitySouthKorea
+  - exch_codes: [TT]
+    exch: EquityTaiwan
+  - exch_codes: [HK]
+    exch: EquityHongKong
+  - exch_codes: [CH, CG, CS]
+    exch: EquityChina
+  - exch_codes: [IN, IS, IB]
+    exch: EquityIndia
+  - exch_codes: [LI, LN, FP]
+    exch: EquityLondon
+  - exch_codes: [NA]
+    exch: EquityAmsterdam
+  - exch_codes: [ID, GR]
+    exch: EquityDublin
+  - exch_codes: [SQ, SM]
+    exch: EquitySpain
+  - exch_codes: [US]
+    exch: EquityUS
+
+Index:
+  - tickers: [XP]
+    exch: FuturesAustralia
+    freq: Q
+    is_fut: True
+  - tickers: [AS51]
+    exch: IndexAustralia
+  - tickers: [NKY, TPX]
+    exch: EquityJapan
+  - tickers: [NK, TP]
+    exch: FuturesJapan
+    freq: Q
+    is_fut: True
+  - tickers: [KOSPI2, KOSPBMET]
+    exch: IndexSouthKorea
+  - tickers: [KM]
+    exch: FuturesSouthKorea
+    freq: Q
+    is_fut: True
+  - tickers: [TWSE]
+    exch: EquityTaiwan
+  - tickers: [TW]
+    exch: FuturesTaiwan
+    freq: M
+    is_fut: True
+  - tickers: [HSI, HSCEI]
+    exch: EquityHongKong
+  - tickers: [HI, HC]
+    exch: FuturesHongKong
+    freq: M
+    is_fut: True
+  - tickers: [
+      SHSZ300, SHCOMP, SZCOMP, SZ399006, SH000905
+    ]
+    exch: EquityChina
+  - tickers: [
+      SPX, INDU, CCMP, RTY, RAY, SOX,
+      S5FINL, S5INSU, S5TRAN, S5UTIL, S5ENRS, VIX,
+      S5IOIL, S5STEL, S5ITEL, S5SECO, S5INFT, SOX,
+      EWAIV, EWJIV, EWYIV, EWTIV, EWHIV, FXIIV, INDAIV,
+      AIAIV, AAXJIV, EEMIV,
+    ]
+    exch: IndexUS
+  - tickers: [XU]
+    exch: FuturesSingapore
+    freq: M
+    is_fut: True
+  - tickers: [TTMT, HDFCB, WPRO, INFO, ICICI, DRRD, VEDL]
+    exch: EquityFuturesIndia
+    freq: M
+    is_fut: True
+  - tickers: [NZ]
+    exch: IndexFuturesIndia
+    freq: M
+    is_fut: True
+  - tickers: [NIFTY]
+    exch: IndexFuturesIndia
+  - tickers: [ES, DM, NQ]
+    exch: CME
+    freq: Q
+    is_fut: True
+  - tickers: [Z]
+    exch: FuturesFinancialsICE
+    freq: Q
+    is_fut: True
+  - tickers: [UX]
+    exch: FuturesCBOE
+    freq: M
+    is_fut: True
+    has_sprd: True
+  - tickers: [UKX, SXXE]
+    exch: IndexLondon
+  - tickers: [SX5E, SX5P]
+    exch: IndexEurope1
+  - tickers: [BE500]
+    exch: IndexEurope2
+  - tickers: [MSER, MSPE]
+    exch: IndexEurope3
+  - tickers: [
+      USGG2YR, USGG10YR, USYC2Y10, USYC1030, USGG30YR
+    ]
+    exch: IndexUS
+  - tickers: [MES]
+    exch: FuturesNYFICE
+    freq: Q
+    is_fut: True
+
+Corp:
+  - {}
