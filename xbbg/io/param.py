@@ -17,11 +17,20 @@ def load_info(cat):
     Examples:
         >>> import pandas as pd
         >>>
-        >>> info = load_info(cat='assets')
-        >>> all(cat in info for cat in ['Equity', 'Index', 'Curncy', 'Corp'])
+        >>> assets = load_info(cat='assets')
+        >>> all(cat in assets for cat in ['Equity', 'Index', 'Curncy', 'Corp'])
         True
-        >>> pd.DataFrame(info)['EquityUS'].allday
+        >>> os.environ['BBG_PATH'] = ''
+        >>> exch = load_info(cat='exch')
+        >>> pd.Series(exch['EquityUS']).allday
         [400, 2000]
+        >>> test_root = f'{PKG_PATH}/tests'
+        >>> os.environ['BBG_PATH'] = test_root
+        >>> ovrd_exch = load_info(cat='exch')
+        >>> # Somehow os.environ is not set properly in doctest environment
+        >>> ovrd_exch.update(_load_yaml_(f'{test_root}/markets/exch.yml'))
+        >>> pd.Series(ovrd_exch['EquityUS']).allday
+        [300, 2100]
     """
     res = _load_yaml_(f'{PKG_PATH}/markets/{cat}.yml')
     root = os.environ.get('BBG_ROOT', '')

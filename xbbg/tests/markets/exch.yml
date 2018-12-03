@@ -1,0 +1,8 @@
+# Override example
+
+EquityUS:
+  tz: America/New_York
+  allday: [300, 2100]
+  day: [0930, 1600]
+  pre: [400, 0930]
+  post: [1601, 2000]
