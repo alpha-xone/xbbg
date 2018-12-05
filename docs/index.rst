@@ -7,8 +7,9 @@ Latest Release |pypi|
 Build          |travis|
 Coverage       |codecov|
 Docs           |docs|
-Quality        |codeFactor|
-\              |codacy|
+Quality        |codacy|
+\              |codeFactor|
+\              |codebeat|
 License        |license|
 ============== ======================
 
@@ -284,6 +285,8 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
    :alt: CodeFactor
 .. |codacy| image:: https://api.codacy.com/project/badge/Grade/2ec89be198cf4689a6a6c6407b0bc965
    :target: https://www.codacy.com/app/alpha-xone/xbbg
+.. |codebeat| image:: https://codebeat.co/badges/eef1f14d-72eb-445a-af53-12d3565385ec
+   :target: https://codebeat.co/projects/github-com-alpha-xone-xbbg-master
 .. |license| image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
     :alt: GitHub license
     :target: https://github.com/alpha-xone/xbbg/blob/master/LICENSE
