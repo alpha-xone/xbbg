@@ -26,7 +26,7 @@ def get_tz(tz):
         >>> get_tz('BHP AU Equity')
         'Australia/Sydney'
     """
-    from xbbg.core.const import market_info
+    from xbbg.core.const import exch_info
 
     if tz is None: return DEFAULT_TZ
 
@@ -35,9 +35,9 @@ def get_tz(tz):
         if hasattr(TimeZone, tz):
             to_tz = getattr(TimeZone, tz)
         else:
-            to_tk = market_info(ticker=tz)
-            if 'exch' in to_tk:
-                to_tz = to_tk['exch'].tz
+            exch = exch_info(ticker=tz)
+            if 'tz' in exch.index:
+                to_tz = exch.tz
 
     return to_tz
 

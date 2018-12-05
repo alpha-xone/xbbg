@@ -247,6 +247,7 @@ IndexUS:
 CME:
   tz: America/New_York
   allday: [1800, 1700]
+  day: [800, 1700]
 
 FuturesNYFICE:
   tz: America/New_York

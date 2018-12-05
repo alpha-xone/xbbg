@@ -4,7 +4,6 @@ import sys
 import pytest
 
 from itertools import product
-from xbbg.core import utils
 from xbbg.io import files, logs
 
 try:
@@ -16,14 +15,22 @@ except ImportError:
     )
     sys.exit()
 
-from xbbg.core import intervals, assist, const, missing
+from xbbg.core import utils, intervals, assist, const, missing
 from xbbg.core.timezone import DEFAULT_TZ
 from xbbg.core.conn import with_bloomberg, create_connection
-from xbbg.exchange import TradingHours, SessNA
 
-if not pytest.config.option.with_bbg: pytest.skip('no Bloomberg')
-print(f'blpapi version: {blpapi.__version__}')
+DEBUG = False
+
+if hasattr(pytest, 'config'):
+    if not pytest.config.option.with_bbg:
+        pytest.skip('no Bloomberg')
+
 if 'pytest' in sys.modules: create_connection()
+if DEBUG: print(
+    '-' * 26 +
+    f'\n  blpapi version: {blpapi.__version__}  ' +
+    '\n' + '-' * 26
+)
 
 
 @with_bloomberg
@@ -258,34 +265,26 @@ def bdib(ticker, dt, typ='TRADE', batch=False):
         return pd.read_parquet(data_file)
 
     if asset in ['Equity', 'Curncy', 'Index', 'Comdty']:
-        info = const.market_info(ticker=ticker)
-        if any(k not in info for k in ['exch']):
-            logger.warning(f'cannot find market info for {ticker}: {utils.to_str(info)}')
-            return pd.DataFrame()
-        exch = info['exch']
-        if not isinstance(exch, TradingHours):
-            raise ValueError(
-                f'exch info for {ticker} is not TradingHours: {exch}'
-            )
-
+        exch = const.exch_info(ticker=ticker)
+        if exch.empty: return pd.DataFrame()
     else:
         logger.error(f'unknown asset type: {asset}')
         return pd.DataFrame()
 
     time_fmt = '%Y-%m-%dT%H:%M:%S'
     time_idx = pd.DatetimeIndex([
-        f'{cur_dt} {exch.hours.allday.start_time}', f'{cur_dt} {exch.hours.allday.end_time}']
+        f'{cur_dt} {exch.allday[0]}', f'{cur_dt} {exch.allday[-1]}']
     ).tz_localize(exch.tz).tz_convert(DEFAULT_TZ).tz_convert('UTC')
     if time_idx[0] > time_idx[1]: time_idx -= pd.TimedeltaIndex(['1D', '0D'])
 
     q_tckr = ticker
-    if info.get('is_fut', False):
-        if 'freq' not in info:
+    if exch.get('is_fut', False):
+        if 'freq' not in exch:
             logger.error(f'[freq] missing in info for {info_log} ...')
 
-        is_sprd = info.get('has_sprd', False) and (len(ticker[:-1]) != info['tickers'][0])
+        is_sprd = exch.get('has_sprd', False) and (len(ticker[:-1]) != exch['tickers'][0])
         if not is_sprd:
-            q_tckr = fut_ticker(gen_ticker=ticker, dt=dt, freq=info['freq'])
+            q_tckr = fut_ticker(gen_ticker=ticker, dt=dt, freq=exch['freq'])
             if q_tckr == '':
                 logger.error(f'cannot find futures ticker for {ticker} ...')
                 return pd.DataFrame()
@@ -339,10 +338,10 @@ def intraday(ticker, dt, session='', start_time=None, end_time=None, typ='TRADE'
     if cur_data.empty: return pd.DataFrame()
 
     fmt = '%H:%M:%S'
-    ss = SessNA
+    ss = intervals.SessNA
     if session: ss = intervals.get_interval(ticker=ticker, session=session)
 
-    if ss != SessNA:
+    if ss != intervals.SessNA:
         start_time = pd.Timestamp(ss.start_time).strftime(fmt)
         end_time = pd.Timestamp(ss.end_time).strftime(fmt)
 

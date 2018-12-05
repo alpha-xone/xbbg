@@ -13,7 +13,7 @@ def current_missing(**kwargs):
     Returns:
         dict
     """
-    data_path = os.environ.get(BBG_ROOT, '')
+    data_path = os.environ.get(BBG_ROOT, '').replace('\\', '/')
     empty_log = f'{data_path}/Logs/EmptyQueries.json'
     if not files.exists(empty_log): return 0
     with open(empty_log, 'r') as fp:
@@ -31,7 +31,7 @@ def update_missing(**kwargs):
     """
     key = info_key(**kwargs)
 
-    data_path = os.environ.get(BBG_ROOT, '')
+    data_path = os.environ.get(BBG_ROOT, '').replace('\\', '/')
     empty_log = f'{data_path}/Logs/EmptyQueries.json'
 
     cur_miss = dict()

@@ -1,12 +1,13 @@
 import pandas as pd
 import numpy as np
 
-from xbbg.io import logs
+from collections import namedtuple
 
+from xbbg.io import logs, param
 from xbbg.core import const
-from xbbg.exchange import Session, SessNA
 
-ValidSessions = ['allday', 'day', 'am', 'pm', 'night']
+Session = namedtuple('Session', ['start_time', 'end_time'])
+SessNA = Session(None, None)
 
 
 def get_interval(ticker, session):
@@ -43,6 +44,8 @@ def get_interval(ticker, session):
         Session(start_time=None, end_time=None)
         >>> get_interval('7974 JP Equity', 'day_normal_180_300') is SessNA
         True
+        >>> get_interval('Z 1 Index', 'allday_normal_30_30')
+        Session(start_time='01:31', end_time='20:30')
     """
     interval = Intervals(ticker=ticker)
     ss_info = session.split('_')
@@ -74,20 +77,7 @@ class Intervals(object):
         """
         self.logger = logs.get_logger(Intervals)
         self.ticker = ticker
-        self.exch = const.market_info(ticker=self.ticker).get('exch', None)
-        self.active_ss = dict()
-
-        if self.exch is None:
-            self.logger.error(f'cannot find exch info for {ticker} ...')
-            self.mkt_ss = None
-
-        else:
-            self.mkt_ss = self.exch.hours
-            for fld in getattr(self.mkt_ss, '_fields'):
-                if fld not in ValidSessions: continue
-                ss = getattr(self.mkt_ss, fld)
-                if ss == SessNA: continue
-                self.active_ss[fld] = ss
+        self.exch = const.exch_info(ticker=ticker)
 
     def market_open(self, session, mins):
         """
@@ -100,10 +90,9 @@ class Intervals(object):
         Returns:
             Session of start_time and end_time
         """
-        if session not in self.active_ss: return SessNA
-        ss = getattr(self.mkt_ss, session)
-
-        return Session(ss.start_time, shift_time(ss.start_time, int(mins)))
+        if session not in self.exch: return SessNA
+        start_time = self.exch[session][0]
+        return Session(start_time, shift_time(start_time, int(mins)))
 
     def market_close(self, session, mins):
         """
@@ -116,10 +105,9 @@ class Intervals(object):
         Returns:
             Session of start_time and end_time
         """
-        if session not in self.active_ss: return SessNA
-        ss = self.active_ss[session]
-
-        return Session(shift_time(ss.end_time, -int(mins) + 1), ss.end_time)
+        if session not in self.exch: return SessNA
+        end_time = self.exch[session][-1]
+        return Session(shift_time(end_time, -int(mins) + 1), end_time)
 
     def market_normal(self, session, after_open, before_close):
         """
@@ -135,11 +123,11 @@ class Intervals(object):
         """
         logger = logs.get_logger(self.market_normal)
 
-        if session not in self.active_ss: return SessNA
-        ss = self.active_ss[session]
+        if session not in self.exch: return SessNA
+        ss = self.exch[session]
 
-        s_time = shift_time(ss.start_time, int(after_open) + 1)
-        e_time = shift_time(ss.end_time, -int(before_close))
+        s_time = shift_time(ss[0], int(after_open) + 1)
+        e_time = shift_time(ss[-1], -int(before_close))
 
         if pd.Timestamp(s_time) >= pd.Timestamp(e_time):
             logger.warning(f'end time {e_time} is earlier than {s_time} ...')
@@ -147,7 +135,7 @@ class Intervals(object):
 
         return Session(s_time, e_time)
 
-    def market_exact(self, session, start_time, end_time):
+    def market_exact(self, session, start_time: str, end_time: str):
         """
         Explicitly specify start time and end time
 
@@ -159,20 +147,20 @@ class Intervals(object):
         Returns:
             Session of start_time and end_time
         """
-        if session not in self.active_ss: return SessNA
-        ss = self.active_ss[session]
+        if session not in self.exch: return SessNA
+        ss = self.exch[session]
 
-        same_day = ss.start_time < ss.end_time
+        same_day = ss[0] < ss[-1]
 
-        if start_time == '': s_time = ss.start_time
+        if not start_time: s_time = ss[0]
         else:
-            s_time = f'{start_time[:2]}:{start_time[-2:]}'
-            if same_day: s_time = max(s_time, ss.start_time)
+            s_time = param.to_hour(start_time)
+            if same_day: s_time = max(s_time, ss[0])
 
-        if end_time == '': e_time = ss.end_time
+        if not end_time: e_time = ss[-1]
         else:
-            e_time = f'{end_time[:2]}:{end_time[-2:]}'
-            if same_day: e_time = min(e_time, ss.end_time)
+            e_time = param.to_hour(end_time)
+            if same_day: e_time = min(e_time, ss[-1])
 
         if same_day and (s_time > e_time): return SessNA
         return Session(start_time=s_time, end_time=e_time)

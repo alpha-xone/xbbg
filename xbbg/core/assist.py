@@ -126,7 +126,7 @@ def hist_file(ticker: str, dt, typ='TRADE'):
         >>> hist_file(ticker='ES1 Index', dt='2018-08-01')
         '/data/bbg/Index/ES1 Index/TRADE/2018-08-01.parq'
     """
-    data_path = os.environ.get(BBG_ROOT, '')
+    data_path = os.environ.get(BBG_ROOT, '').replace('\\', '/')
     if not data_path: return ''
     asset = ticker.split()[-1]
     proper_ticker = ticker.replace('/', '_')
@@ -193,7 +193,7 @@ def ref_file(ticker: str, fld: str, has_date=False, from_cache=False, ext='parq'
         >>> exist_file == updated_file
         True
     """
-    data_path = os.environ.get(BBG_ROOT, '')
+    data_path = os.environ.get(BBG_ROOT, '').replace('\\', '/')
     if not data_path: return ''
 
     proper_ticker = ticker.replace('/', '_')
@@ -254,12 +254,9 @@ def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE'):
         logger.warning(f'data is empty for {info} ...')
         return
 
-    mkt_info = const.market_info(ticker=ticker)
-    if 'exch' not in mkt_info:
-        logger.error(f'cannot find market info for {ticker} ...')
-        return
+    exch = const.exch_info(ticker=ticker)
+    if exch.empty: return
 
-    exch = mkt_info['exch']
     end_time = pd.Timestamp(
         const.market_timing(ticker=ticker, dt=dt, timing='FINISHED')
     ).tz_localize(exch.tz)
