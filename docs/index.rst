@@ -25,10 +25,15 @@ Requirements
     pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
 
 - Bloomberg C++ SDK version 3.12.1 or higher
+
     - https://www.bloomberg.com/professional/support/api-library/
+
     - Downlaod C++ Experimental Release
+
     - Copy ``blpapi3_32.dll`` and ``blpapi3_64.dll`` under ``bin`` folder to Bloomberg installation folder ``blp/DAPI``
+
 - pdblp_ - pandas wrapper for Bloomberg Open API
+
 - numpy, pandas and pyarrow
 
 .. _pdblp: https://github.com/matthewgilbert/pdblp

@@ -22,9 +22,9 @@ Bloomberg data toolkit for humans
 pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
 ```
 
-- Bloomberg C++ SDK version 3.12.1 or higher
+- Bloomberg C++ SDK version 3.12.1 or higher:
 
-    - https://www.bloomberg.com/professional/support/api-library/
+    - [Bloomberg API Library](https://www.bloomberg.com/professional/support/api-library/)
 
     - Downlaod C++ Experimental Release
 
