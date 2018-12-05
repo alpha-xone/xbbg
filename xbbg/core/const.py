@@ -73,8 +73,6 @@ def market_info(ticker: str):
         dict
 
     Examples:
-        >>> from xbbg.markets.exchange import TradingHours
-        >>>
         >>> info = market_info('SHCOMP Index')
         >>> info['exch']
         'EquityChina'

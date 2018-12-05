@@ -1,7 +1,6 @@
 [run]
 omit =
     xbbg/blp.py
-    xbbg/asset/*
     xbbg/markets/*
     xbbg/core/conn.py
     xbbg/core/missing.py
