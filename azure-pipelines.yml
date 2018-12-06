@@ -22,7 +22,7 @@ jobs:
       packageSpecs: 'python=3.6'
       # updateConda: # Optional
       installOptions: blpapi
-      # createOptions: # Optional
+      createOptions: -c conda-forge
       # cleanEnvironment: # Optional
       architecture: 'x64'
 
