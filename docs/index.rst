@@ -294,4 +294,4 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
    :target: https://codebeat.co/projects/github-com-alpha-xone-xbbg-master
 .. |license| image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
     :alt: GitHub license
-    :target: https://github.com/alpha-xone/xbbg/blob/master/LICENSE
+    :target: https://github.com/alpha-xone/xbbg/blob/master/docs/LICENSE
