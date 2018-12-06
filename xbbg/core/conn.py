@@ -1,8 +1,19 @@
-import pdblp
+import pytest
 
+from xbbg.core import utils
+from xbbg.io import files
 from functools import wraps
 
+try:
+    import pdblp
+except ImportError:
+    pdblp = utils.load_module(f'{files.abspath(__file__)}/pdblp.py')
+
 _CON_SYM_ = '_xcon_'
+
+if hasattr(pytest, 'config'):
+    if not pytest.config.option.with_bbg:
+        pytest.skip('no Bloomberg')
 
 
 def with_bloomberg(func):

@@ -1,8 +1,11 @@
 import pandas as pd
+
 import yaml
 import os
 
-PKG_PATH = '/'.join(os.path.abspath(__file__).replace('\\', '/').split('/')[:-2])
+from xbbg.io import files
+
+PKG_PATH = files.abspath(__file__, 1)
 
 
 def load_info(cat):

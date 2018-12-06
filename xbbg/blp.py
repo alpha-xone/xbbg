@@ -6,31 +6,14 @@ import pytest
 from itertools import product
 from xbbg.io import files, logs
 
-try:
-    import blpapi
-except ImportError:
-    logs.get_logger('xbbg.blp').critical(
-        '\n\nPlease install Bloomberg Open API:\n\n'
-        'pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi\n'
-    )
-    sys.exit()
-
 from xbbg.core import utils, intervals, assist, const, missing
 from xbbg.core.timezone import DEFAULT_TZ
 from xbbg.core.conn import with_bloomberg, create_connection
 
-DEBUG = False
-
 if hasattr(pytest, 'config'):
     if not pytest.config.option.with_bbg:
         pytest.skip('no Bloomberg')
-
 if 'pytest' in sys.modules: create_connection()
-if DEBUG: print(
-    '-' * 26 +
-    f'\n  blpapi version: {blpapi.__version__}  ' +
-    '\n' + '-' * 26
-)
 
 
 @with_bloomberg

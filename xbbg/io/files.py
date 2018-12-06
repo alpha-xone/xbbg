@@ -18,6 +18,12 @@ def exists(path):
     return os.path.exists(path=path)
 
 
+def abspath(sys_file, parent=0):
+
+    cur_file = os.path.abspath(sys_file).replace('\\', '/')
+    return '/'.join(cur_file.split('/')[:-(parent + 1)])
+
+
 def create_folder(path_name: str, is_file=False):
     """
     Make folder as well as all parent folders if not exists

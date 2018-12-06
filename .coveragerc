@@ -4,6 +4,7 @@ omit =
     xbbg/markets/*
     xbbg/core/conn.py
     xbbg/core/missing.py
+    xbbg/core/pdblp.py
     xbbg/io/files.py
     xbbg/tests/*
     */__init__.py

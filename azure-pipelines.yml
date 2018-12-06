@@ -21,8 +21,8 @@ jobs:
       environmentName: blpenv
       packageSpecs: 'python=3.6'
       # updateConda: # Optional
-      installOptions: blpapi
-      createOptions: -c conda-forge
+      # installOptions: blpapi
+      createOptions: -c conda-forge blpapi
       # cleanEnvironment: # Optional
       architecture: 'x64'
 
