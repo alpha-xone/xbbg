@@ -258,7 +258,6 @@ def bdib(ticker, dt, typ='TRADE', batch=False):
     time_idx = pd.DatetimeIndex([
         f'{cur_dt} {exch.allday[0]}', f'{cur_dt} {exch.allday[-1]}']
     ).tz_localize(exch.tz).tz_convert(DEFAULT_TZ).tz_convert('UTC')
-    print(time_idx)
     if time_idx[0] > time_idx[1]: time_idx -= pd.TimedeltaIndex(['1D', '0D'])
 
     q_tckr = ticker

@@ -49,7 +49,7 @@ def create_connection():
         return con, False
 
     else:
-        con = pdblp.BCon(port=8194, timeout=5000)
+        con = pdblp.BCon(port=8194, timeout=30000)
         globals()[_CON_SYM_] = con
         con.start()
         return con, True
