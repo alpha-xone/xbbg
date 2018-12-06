@@ -176,7 +176,7 @@ FuturesTaiwan:
 
 FuturesHongKong:
   tz: Asia/Hong_Kong
-  allday: [1715, 100]
+  allday: [1715, 1630]
   day: [915, 1630]
   night: [1715, 100]
 
@@ -210,8 +210,6 @@ EquityFuturesIndia:
 
 IndexFuturesIndia:
   tz: Asia/Calcutta
-
-FuturesIndia:
   allday: [915, 1530]
 
 IndexLondon:
@@ -256,6 +254,7 @@ FuturesNYFICE:
 IndexVIX:
   tz: America/New_York
   allday: [300, 1630]
+  day: [315, 1630]
 
 FuturesCBOE:
   tz: America/New_York

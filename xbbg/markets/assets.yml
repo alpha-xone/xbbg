@@ -12,7 +12,7 @@ Comdty:
     exch: FuturesEuropeICE
     freq: M
     is_fut: True
-  - tickers: IOE
+  - tickers: [IOE]
     exch: CommoditiesDalian
     freq: M
     is_fut: True
