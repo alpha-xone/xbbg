@@ -26,23 +26,23 @@ jobs:
       # cleanEnvironment: # Optional
       architecture: 'x64'
 
-#- script: |
-#    conda create --yes --quiet --name blp_env python=%PYTHON_VERSION% blpapi
-#    source activate blp_env
-#  displayName: Create Anaconda environment
+  #- script: |
+  #    conda create --yes --quiet --name blp_env python=%PYTHON_VERSION% blpapi
+  #    source activate blp_env
+  #  displayName: Create Anaconda environment
 
-- script: |
-    python -m pip install --upgrade pip setuptools wheel
-    pip install -r requirements.txt
-  displayName: Install prerequisites
+  - script: |
+      python -m pip install --upgrade pip setuptools wheel
+      pip install -r requirements.txt
+    displayName: Install prerequisites
 
-- script: |
-    python -m pip install flake8
-    flake8 --extend-ignore=E701,E501 xbbg
-  displayName: Run Lint Tests
+  - script: |
+      python -m pip install flake8
+      flake8 --extend-ignore=E701,E501 xbbg
+    displayName: Run Lint Tests
 
-- script: |
-    pip install pytest pytest-cov coverage
-    pytest xbbg --doctest-module --cov -v
-    codecov --token=ff17768d-30bd-4917-98f2-a011606597ea
-  displayName: Run Doctests and Coverages
+  - script: |
+      pip install pytest pytest-cov coverage
+      pytest xbbg --doctest-module --cov -v
+      codecov --token=ff17768d-30bd-4917-98f2-a011606597ea
+    displayName: Run Doctests and Coverages
