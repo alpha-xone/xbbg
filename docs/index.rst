@@ -4,7 +4,8 @@ xbbg
 ============== ======================
 Latest Release |pypi|
 \              |version|
-Build          |travis|
+Build          |azure|
+\              |travis|
 Coverage       |codecov|
 Docs           |docs|
 Quality        |codacy|
@@ -280,6 +281,9 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 .. |travis| image:: https://img.shields.io/travis/alpha-xone/xbbg/master.svg?label=Travis%20CI
     :target: https://travis-ci.com/alpha-xone/xbbg
     :alt: Travis CI
+.. |azure| image:: https://dev.azure.com/alpha-xone/xbbg/_apis/build/status/alpha-xone.xbbg
+    :target: https://dev.azure.com/alpha-xone/xbbg/_build
+    :alt: Azure Pipeline
 .. |codecov| image:: https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg
     :target: https://codecov.io/gh/alpha-xone/xbbg
     :alt: Codecov
