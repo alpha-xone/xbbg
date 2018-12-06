@@ -5,7 +5,7 @@
 | Latest Release | [![PyPI version](https://img.shields.io/pypi/v/xbbg.svg)](https://badge.fury.io/py/xbbg)                                                             |
 |                | [![PyPI version](https://img.shields.io/pypi/pyversions/xbbg.svg)](https://badge.fury.io/py/xbbg)                                                    |
 | Docs           | [![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/en/latest)                        |
-| Build          | [![Travis CI](https://img.shields.io/travis/alpha-xone/xbbg/master.svg?logo=travis&label=Travis%20CI)](https://travis-ci.com/alpha-xone/xbbg)                    |
+| Build          | [![Travis CI](https://img.shields.io/travis/alpha-xone/xbbg/master.svg?logo=travis&label=Travis%20CI)](https://travis-ci.com/alpha-xone/xbbg)        |
 |                | [![Azure](https://dev.azure.com/alpha-xone/xbbg/_apis/build/status/alpha-xone.xbbg)](https://dev.azure.com/alpha-xone/xbbg/_build)                   |
 | Coverage       | [![codecov](https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg)](https://codecov.io/gh/alpha-xone/xbbg)                             |
 | Quality        | [![Codacy Badge](https://api.codacy.com/project/badge/Grade/2ec89be198cf4689a6a6c6407b0bc965)](https://www.codacy.com/app/alpha-xone/xbbg)           |
@@ -15,7 +15,7 @@
 
 Bloomberg data toolkit for humans
 
-# Requirements
+## Requirements
 
 - Bloomberg Open API
 
@@ -36,13 +36,13 @@ pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
 
 - numpy, pandas and pyarrow
 
-# Installation
+## Installation
 
 ```cmd
 pip install xbbg
 ```
 
-# Tutorial
+## Tutorial
 
 Creation of connection `create_connection()` is not necessary.
 Quries will create new connections if there's no live connections on the backend.
@@ -59,7 +59,7 @@ In[2]: blp.create_connection()
 Out[2]: (<pdblp.pdblp.BCon at 0x1c35cd0e898>, True)
 ```
 
-## Basics
+### Basics
 
 - ``BDP`` example:
 
@@ -252,7 +252,7 @@ MS US Equity      2018-04-18  2018-04-27  2018-04-30   2018-05-15            0.2
 MS US Equity      2018-01-18  2018-01-30  2018-01-31   2018-02-15            0.25            Quarter  Regular Cash
 ```
 
-## Optimizations
+### Optimizations
 
 This library uses a global Bloomberg connection on the backend - 
 more specically, `_xcon_` in `globals()` variable.
@@ -283,7 +283,7 @@ def query_bbg():
     blp.bdib(...)
 ```
 
-## Data Storage
+### Data Storage
 
 If `BBG_ROOT` is provided in `os.environ`, data can be saved locally.
 By default, local storage is preferred than Bloomberg for all queries.
