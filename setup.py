@@ -70,6 +70,9 @@ if __name__ == '__main__':
             'Programming Language :: Python :: 3.6',
         ],
         include_package_data=True,
+        package_data={
+            'yaml': ['xbbg/markets/*.yml']
+        },
         install_requires=[
             str(ir.req) for ir in parse_requirements(
                 f'{PACKAGE_ROOT}/requirements.txt', session='hack'

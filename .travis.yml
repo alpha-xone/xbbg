@@ -29,7 +29,7 @@ install:
 
 script:
   - flake8 --extend-ignore=E701,E501 xbbg
-  - pytest xbbg --doctest-module --cov -v
+  - pytest --doctest-module --cov -v xbbg
 
 after_success:
   - coverage report
