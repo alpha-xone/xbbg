@@ -4,10 +4,10 @@ xbbg
 ============== ======================
 Latest Release |pypi|
 \              |version|
-Build          |azure|
-\              |travis|
-Coverage       |codecov|
 Docs           |docs|
+Build          |travis|
+\              |azure|
+Coverage       |codecov|
 Quality        |codacy|
 \              |codeFactor|
 \              |codebeat|
@@ -43,11 +43,8 @@ Requirements
 Installation
 ============
 
-On top of other dependencies, Bloomberg API is required:
-
 .. code-block:: console
 
-   pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
    pip install xbbg
 
 Tutorial
@@ -64,6 +61,9 @@ before we want to do multiple queries - just like examples below.
 
     In[2]: blp.create_connection()
     Out[2]: (<pdblp.pdblp.BCon at 0x1c35cd0e898>, True)
+
+Basics
+------
 
 ``BDP`` example:
 
@@ -278,7 +278,7 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
     :target: https://badge.fury.io/py/xbbg
 .. |version| image:: https://img.shields.io/pypi/pyversions/xbbg.svg
     :target: https://badge.fury.io/py/xbbg
-.. |travis| image:: https://img.shields.io/travis/alpha-xone/xbbg/master.svg?label=Travis%20CI
+.. |travis| image:: https://img.shields.io/travis/alpha-xone/xbbg/master.svg?logo=travis&label=Travis%20CI
     :target: https://travis-ci.com/alpha-xone/xbbg
     :alt: Travis CI
 .. |azure| image:: https://dev.azure.com/alpha-xone/xbbg/_apis/build/status/alpha-xone.xbbg
