@@ -1,6 +1,6 @@
 # https://aka.ms/yaml
 jobs:
-- job: Python Versions
+- job: WinTest
   pool:
     vmImage: vs2017-win2016
   strategy:
