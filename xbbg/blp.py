@@ -13,7 +13,7 @@ from xbbg.core.conn import with_bloomberg, create_connection
 if hasattr(pytest, 'config'):
     if not pytest.config.option.with_bbg:
         pytest.skip('no Bloomberg')
-if 'pytest' in sys.modules: create_connection()
+if hasattr(sys, 'pytest_call'): create_connection()
 
 
 @with_bloomberg
