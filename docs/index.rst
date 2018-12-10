@@ -27,7 +27,7 @@ Requirements
 
 - Bloomberg C++ SDK version 3.12.1 or higher
 
-    - https://www.bloomberg.com/professional/support/api-library/
+    - `Bloomberg API Library`_
 
     - Downlaod C++ Experimental Release
 
@@ -298,4 +298,5 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
    :target: https://codebeat.co/projects/github-com-alpha-xone-xbbg-master
 .. |license| image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
     :alt: GitHub license
-    :target: https://github.com/alpha-xone/xbbg/blob/master/docs/LICENSE
+    :target: https://github.com/alpha-xone/xbbg/blob/master/LICENSE
+.. _Bloomberg API Library: https://www.bloomberg.com/professional/support/api-library/)
