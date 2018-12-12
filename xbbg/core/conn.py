@@ -1,8 +1,13 @@
+import pandas as pd
+
+import inspect
 import pytest
 
-from xbbg.core import utils
-from xbbg.io import files
 from functools import wraps
+from itertools import product
+
+from xbbg.core import utils
+from xbbg.io import files, logs, storage
 
 try:
     import pdblp
@@ -25,9 +30,66 @@ def with_bloomberg(func):
     """
     @wraps(func)
     def wrapper(*args, **kwargs):
+
+        param = inspect.signature(func).parameters
+        all_kw = {
+            k: args[n] if n < len(args) else v.default
+            for n, (k, v) in enumerate(param.items()) if k != 'kwargs'
+        }
+        all_kw.update(kwargs)
+
+        cached_data = []
+        if func.__name__ in ['bdp', 'bds']:
+            logger = logs.get_logger(func)
+            has_date = all_kw.pop('has_date', func.__name__ == 'bds')
+            cache = all_kw.get('cache', True)
+
+            tickers = utils.flatten(all_kw['tickers'])
+            flds = utils.flatten(all_kw['flds'])
+            loaded = pd.DataFrame(data=0, index=tickers, columns=flds)
+
+            for ticker, fld in product(tickers, flds):
+                data_file = storage.ref_file(
+                    ticker=ticker, fld=fld, has_date=has_date,
+                    cache=cache, ext='pkl', **{
+                        k: v for k, v in all_kw.items()
+                        if k not in ['tickers', 'flds', 'cache']
+                    }
+                )
+                if files.exists(data_file):
+                    logger.info(f'reading from {data_file} ...')
+                    cached_data.append(pd.read_pickle(data_file))
+                    loaded.loc[ticker, fld] = 1
+
+            to_qry = loaded.where(loaded == 0)\
+                .dropna(how='all', axis=1).dropna(how='all', axis=0)
+
+            if to_qry.empty:
+                if not cached_data: return pd.DataFrame()
+                return pd.concat(cached_data, sort=False).reset_index(drop=True)
+
+            all_kw['tickers'] = to_qry.index.tolist()
+            all_kw['flds'] = to_qry.columns.tolist()
+
+        if func.__name__ in ['bdib']:
+            data_file = storage.hist_file(
+                ticker=all_kw['ticker'], dt=all_kw['dt'], typ=all_kw['typ'],
+            )
+            if files.exists(data_file):
+                logger = logs.get_logger(func)
+                if all_kw['batch']: return
+                logger.info(f'reading from {data_file} ...')
+                return pd.read_parquet(data_file)
+
         _, new = create_connection()
-        res = func(*args, **kwargs)
+        res = func(**all_kw)
         if new: delete_connection()
+
+        if isinstance(res, list) and (func.__name__ in ['bdp', 'bds']):
+            final = cached_data + res
+            if not final: return pd.DataFrame()
+            return pd.DataFrame(pd.concat(final, sort=False)).reset_index(drop=True)
+
         return res
     return wrapper
 

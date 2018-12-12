@@ -18,10 +18,21 @@ def exists(path):
     return os.path.exists(path=path)
 
 
-def abspath(sys_file, parent=0):
+def abspath(cur_file, parent=0):
+    """
+    Absolute path
 
-    cur_file = os.path.abspath(sys_file).replace('\\', '/')
-    return '/'.join(cur_file.split('/')[:-(parent + 1)])
+    Args:
+        cur_file: __file__ or file or path str
+        parent: level of parent to look for
+
+    Returns:
+        str
+    """
+    file_path = os.path.abspath(cur_file).replace('\\', '/')
+    if os.path.isdir(file_path) and parent == 0: return file_path
+    adj = 1 - os.path.isdir(file_path)
+    return '/'.join(file_path.split('/')[:-(parent + adj)])
 
 
 def create_folder(path_name: str, is_file=False):
