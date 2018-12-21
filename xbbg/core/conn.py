@@ -6,7 +6,7 @@ import pytest
 from functools import wraps
 from itertools import product
 
-from xbbg.core import utils
+from xbbg.core import utils, assist
 from xbbg.io import files, logs, storage
 
 try:
@@ -37,10 +37,11 @@ def with_bloomberg(func):
             for n, (k, v) in enumerate(param.items()) if k != 'kwargs'
         }
         all_kw.update(kwargs)
+        log_level = kwargs.get('log', 'info')
 
         cached_data = []
         if func.__name__ in ['bdp', 'bds']:
-            logger = logs.get_logger(func)
+            logger = logs.get_logger(func, level=log_level)
             has_date = all_kw.pop('has_date', func.__name__ == 'bds')
             cache = all_kw.get('cache', True)
 
@@ -53,11 +54,11 @@ def with_bloomberg(func):
                     ticker=ticker, fld=fld, has_date=has_date,
                     cache=cache, ext='pkl', **{
                         k: v for k, v in all_kw.items()
-                        if k not in ['tickers', 'flds', 'cache']
+                        if k not in ['tickers', 'flds', 'cache', 'raw', 'log']
                     }
                 )
                 if files.exists(data_file):
-                    logger.info(f'reading from {data_file} ...')
+                    logger.debug(f'reading from {data_file} ...')
                     cached_data.append(pd.read_pickle(data_file))
                     loaded.loc[ticker, fld] = 1
 
@@ -66,7 +67,10 @@ def with_bloomberg(func):
 
             if to_qry.empty:
                 if not cached_data: return pd.DataFrame()
-                return pd.concat(cached_data, sort=False).reset_index(drop=True)
+                res = pd.concat(cached_data, sort=False).reset_index(drop=True)
+                if (func.__name__ == 'bds') and (not all_kw.get('raw', False)):
+                    res = assist.format_bds(data=res)
+                return res
 
             all_kw['tickers'] = to_qry.index.tolist()
             all_kw['flds'] = to_qry.columns.tolist()
@@ -76,19 +80,23 @@ def with_bloomberg(func):
                 ticker=all_kw['ticker'], dt=all_kw['dt'], typ=all_kw['typ'],
             )
             if files.exists(data_file):
-                logger = logs.get_logger(func)
+                logger = logs.get_logger(func, level=log_level)
                 if all_kw['batch']: return
-                logger.info(f'reading from {data_file} ...')
+                logger.debug(f'reading from {data_file} ...')
                 return pd.read_parquet(data_file)
 
         _, new = create_connection()
+        raw = all_kw.pop('raw', False)
         res = func(**all_kw)
         if new: delete_connection()
 
         if isinstance(res, list) and (func.__name__ in ['bdp', 'bds']):
             final = cached_data + res
             if not final: return pd.DataFrame()
-            return pd.DataFrame(pd.concat(final, sort=False)).reset_index(drop=True)
+            res = pd.DataFrame(pd.concat(final, sort=False)).reset_index(drop=True)
+
+        if (func.__name__ == 'bds') and (not raw):
+            res = assist.format_bds(data=res)
 
         return res
     return wrapper

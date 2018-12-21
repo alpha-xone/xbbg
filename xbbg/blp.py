@@ -34,7 +34,7 @@ def bdp(tickers, flds, cache=False, **kwargs):
                  ticker  field value
         0  IQ US Equity  Crncy   USD
     """
-    logger = logs.get_logger(bdp)
+    logger = logs.get_logger(bdp, level=kwargs.pop('log', 'info'))
     con, _ = create_connection()
     ovrds = assist.proc_ovrds(**kwargs)
 
@@ -69,14 +69,20 @@ def bds(tickers, flds, cache=False, **kwargs):
         flds: field(s)
         cache: whether read from cache
         **kwargs: other overrides for query
+          -> raw: raw output from `pdbdp` library, default False
 
     Returns:
         pd.DataFrame: block data
 
     Examples:
+        >>> import os
+        >>>
         >>> pd.options.display.width = 120
         >>> s_dt, e_dt = '20180301', '20181031'
-        >>> dvd = bds('NVDA US Equity', 'DVD_Hist_All', DVD_Start_Dt=s_dt, DVD_End_Dt=e_dt)
+        >>> dvd = bds(
+        ...     'NVDA US Equity', 'DVD_Hist_All',
+        ...     DVD_Start_Dt=s_dt, DVD_End_Dt=e_dt, raw=True,
+        ... )
         >>> dvd.loc[:, ['ticker', 'name', 'value']]
                     ticker                name         value
         0   NVDA US Equity       Declared Date    2018-08-16
@@ -93,8 +99,35 @@ def bds(tickers, flds, cache=False, **kwargs):
         11  NVDA US Equity     Dividend Amount          0.15
         12  NVDA US Equity  Dividend Frequency       Quarter
         13  NVDA US Equity       Dividend Type  Regular Cash
+        >>> dvd = bds(
+        ...     'NVDA US Equity', 'DVD_Hist_All',
+        ...     DVD_Start_Dt=s_dt, DVD_End_Dt=e_dt,
+        ... )
+        >>> dvd.reset_index().loc[:, ['ticker', 'Ex-Date', 'Dividend Amount']]
+                   ticker     Ex-Date  Dividend Amount
+        0  NVDA US Equity  2018-08-29             0.15
+        1  NVDA US Equity  2018-05-23             0.15
+        >>> if not os.environ.get('BBG_ROOT', ''):
+        ...     os.environ['BBG_ROOT'] = f'{files.abspath(__file__, 1)}/tests/data'
+        >>> idx_kw = dict(End_Dt='20181220', cache=True)
+        >>> idx_wt = bds('DJI Index', 'Indx_MWeight_Hist', **idx_kw)
+        >>> idx_wt.round(2).tail().reset_index(drop=True)
+          Index Member  Percent Weight
+        0         V UN            3.82
+        1        VZ UN            1.63
+        2       WBA UW            2.06
+        3       WMT UN            2.59
+        4       XOM UN            2.04
+        >>> idx_wt = bds('DJI Index', 'Indx_MWeight_Hist', **idx_kw)
+        >>> idx_wt.round(2).head().reset_index(drop=True)
+          Index Member  Percent Weight
+        0      AAPL UW            4.65
+        1       AXP UN            2.84
+        2        BA UN            9.29
+        3       CAT UN            3.61
+        4      CSCO UW            1.26
     """
-    logger = logs.get_logger(bds)
+    logger = logs.get_logger(bds, level=kwargs.pop('log', 'info'))
     con, _ = create_connection()
     ovrds = assist.proc_ovrds(**kwargs)
 
@@ -146,7 +179,7 @@ def bdh(tickers, flds, start_date, end_date, **kwargs):
                   Low              16.80       22.42       21.17       24.41
                   Last_Price       37.32       29.98       27.73       33.46
     """
-    logger = logs.get_logger(bdh)
+    logger = logs.get_logger(bdh, level=kwargs.pop('log', 'info'))
     con, _ = create_connection()
     elms = assist.proc_elms(**kwargs)
     ovrds = assist.proc_ovrds(**kwargs)
@@ -168,7 +201,7 @@ def bdh(tickers, flds, start_date, end_date, **kwargs):
 
 
 @with_bloomberg
-def bdib(ticker, dt, typ='TRADE', batch=False):
+def bdib(ticker, dt, typ='TRADE', batch=False, log='info'):
     """
     Download intraday data and save to cache
 
@@ -177,13 +210,14 @@ def bdib(ticker, dt, typ='TRADE', batch=False):
         dt: date to download
         typ: [TRADE, BID, ASK, BID_BEST, ASK_BEST, BEST_BID, BEST_ASK]
         batch: whether is batch process to download data
+        log: level of logs
 
     Returns:
         pd.DataFrame
     """
     from xbbg.core import missing
 
-    logger = logs.get_logger(bdib)
+    logger = logs.get_logger(bdib, level=log)
 
     t_1 = pd.Timestamp('today').date() - pd.Timedelta('1D')
     whole_day = pd.Timestamp(dt).date() < t_1
@@ -198,7 +232,7 @@ def bdib(ticker, dt, typ='TRADE', batch=False):
 
     if files.exists(data_file):
         if batch: return
-        logger.info(f'reading from {data_file} ...')
+        logger.debug(f'reading from {data_file} ...')
         return pd.read_parquet(data_file)
 
     if asset in ['Equity', 'Curncy', 'Index', 'Comdty']:
@@ -316,7 +350,7 @@ def earning(ticker, by='Geo', cache=False, **kwargs):
         Other Countries    1.0    162.0         3.04
     """
     ovrd = 'G' if by[0].upper() == 'G' else 'P'
-    new_kw = dict(cache=cache, Product_Geo_Override=ovrd)
+    new_kw = dict(cache=cache, raw=True, Product_Geo_Override=ovrd)
     header = bds(tickers=ticker, flds='PG_Bulk_Header', **new_kw, **kwargs)
     data = bds(tickers=ticker, flds='PG_Revenue', **new_kw, **kwargs)
     return assist.format_earning(data=data, header=header)
@@ -354,7 +388,7 @@ def dividend(tickers, start_date=None, end_date=None, cache=False):
     if start_date: kwargs['DVD_Start_Dt'] = utils.fmt_dt(start_date, fmt='%Y%m%d')
     if end_date: kwargs['DVD_End_Dt'] = utils.fmt_dt(end_date, fmt='%Y%m%d')
 
-    dvd = bds(tickers=tickers, flds='DVD_Hist_All', cache=cache, **kwargs)
+    dvd = bds(tickers=tickers, flds='DVD_Hist_All', cache=cache, raw=True, **kwargs)
     if dvd.empty: return pd.DataFrame()
     return pd.DataFrame(pd.concat([
         assist.format_dvd(grp) for _, grp in dvd.groupby('ticker')
@@ -392,7 +426,7 @@ def active_futures(ticker: str, dt):
 
 
 @with_bloomberg
-def fut_ticker(gen_ticker: str, dt, freq: str):
+def fut_ticker(gen_ticker: str, dt, freq: str, log='info'):
     """
     Get proper ticker from generic ticker
 
@@ -400,11 +434,12 @@ def fut_ticker(gen_ticker: str, dt, freq: str):
         gen_ticker: generic ticker
         dt: date
         freq: futures contract frequency
+        log: level of logs
 
     Returns:
         str: exact futures ticker
     """
-    logger = logs.get_logger(fut_ticker)
+    logger = logs.get_logger(fut_ticker, level=log)
     dt = pd.Timestamp(dt)
     t_info = gen_ticker.split()
 

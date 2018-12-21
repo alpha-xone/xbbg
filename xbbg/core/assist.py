@@ -206,25 +206,36 @@ def format_dvd(data: pd.DataFrame):
                         ex_date    rec_date  dvd_amt
         C US Equity  2018-02-02  2018-02-05     0.32
     """
-    if data.empty: return pd.DataFrame()
-    if data.dropna(subset=['value']).empty: return pd.DataFrame()
-
     col_maps = {
         'Declared Date': 'dec_date', 'Ex-Date': 'ex_date',
         'Record Date': 'rec_date', 'Payable Date': 'pay_date',
         'Dividend Amount': 'dvd_amt', 'Dividend Frequency': 'dvd_freq',
         'Dividend Type': 'dvd_type'
     }
+    return format_bds(data=data, col_maps=col_maps)
 
-    ticker = data.ticker.values[0]
+
+def format_bds(data: pd.DataFrame, col_maps=None):
+    """
+    Format BDS outputs to columns and values
+
+    Args:
+        data: BDS output
+        col_maps: rename columns with these mappings
+
+    Returns:
+        pd.DataFrame
+    """
+    if data.empty: return pd.DataFrame()
+    if data.dropna(subset=['value']).empty: return pd.DataFrame()
+
     data = pd.DataFrame(pd.concat([
-        grp.loc[:, ['name', 'value']].set_index('name').transpose().reset_index(drop=True)
-        for _, grp in data.groupby('position')
-    ], sort=False)).reset_index(drop=True)\
-        .assign(ticker=ticker).set_index('ticker').rename(columns=col_maps)
+        grp.loc[:, ['name', 'value']].set_index('name')
+        .transpose().reset_index(drop=True).assign(ticker=t)
+        for (t, _), grp in data.groupby(['ticker', 'position'])
+    ], sort=False)).reset_index(drop=True).set_index('ticker')
     data.columns.name = None
 
-    if 'dvd_amt' in data.columns:
-        data.loc[:, 'dvd_amt'] = data.loc[:, 'dvd_amt'].apply(pd.to_numeric, errors='ignore')
-
-    return data
+    return data.rename(
+        columns=dict() if col_maps is None else col_maps
+    ).apply(pd.to_numeric, errors='ignore', downcast='float')
