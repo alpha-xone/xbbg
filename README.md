@@ -169,21 +169,10 @@ In[7]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_En
 
 ```pydocstring
 Out[7]:
-            ticker         field                name         value  position
-0   AAPL US Equity  DVD_Hist_All       Declared Date    2018-05-01         0
-1   AAPL US Equity  DVD_Hist_All             Ex-Date    2018-05-11         0
-2   AAPL US Equity  DVD_Hist_All         Record Date    2018-05-14         0
-3   AAPL US Equity  DVD_Hist_All        Payable Date    2018-05-17         0
-4   AAPL US Equity  DVD_Hist_All     Dividend Amount          0.73         0
-5   AAPL US Equity  DVD_Hist_All  Dividend Frequency       Quarter         0
-6   AAPL US Equity  DVD_Hist_All       Dividend Type  Regular Cash         0
-7   AAPL US Equity  DVD_Hist_All       Declared Date    2018-02-01         1
-8   AAPL US Equity  DVD_Hist_All             Ex-Date    2018-02-09         1
-9   AAPL US Equity  DVD_Hist_All         Record Date    2018-02-12         1
-10  AAPL US Equity  DVD_Hist_All        Payable Date    2018-02-15         1
-11  AAPL US Equity  DVD_Hist_All     Dividend Amount          0.63         1
-12  AAPL US Equity  DVD_Hist_All  Dividend Frequency       Quarter         1
-13  AAPL US Equity  DVD_Hist_All       Dividend Type  Regular Cash         1
+               Declared Date     Ex-Date Record Date Payable Date  Dividend Amount Dividend Frequency Dividend Type
+ticker                                                                                                             
+AAPL US Equity    2018-05-01  2018-05-11  2018-05-14   2018-05-17             0.73            Quarter  Regular Cash
+AAPL US Equity    2018-02-01  2018-02-09  2018-02-12   2018-02-15             0.63            Quarter  Regular Cash
 ```
 
 - Intraday bars ``BDIB`` example:
