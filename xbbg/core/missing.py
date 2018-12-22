@@ -5,6 +5,8 @@ import time
 from xbbg.io import files
 from xbbg.core.assist import BBG_ROOT, info_key
 
+_MISSING_ = '_missing_'
+
 
 def current_missing(**kwargs):
     """
@@ -13,11 +15,14 @@ def current_missing(**kwargs):
     Returns:
         dict
     """
-    data_path = os.environ.get(BBG_ROOT, '').replace('\\', '/')
-    empty_log = f'{data_path}/Logs/EmptyQueries.json'
-    if not files.exists(empty_log): return 0
-    with open(empty_log, 'r') as fp:
-        cur_miss = json.load(fp=fp)
+    cur_miss = globals().get(_MISSING_, dict())
+    if not cur_miss:
+        data_path = os.environ.get(BBG_ROOT, '').replace('\\', '/')
+        empty_log = f'{data_path}/Logs/EmptyQueries.json'
+        if not files.exists(empty_log): return 0
+        with open(empty_log, 'r') as fp:
+            cur_miss = json.load(fp=fp)
+        globals()[_MISSING_] = cur_miss
 
     return cur_miss.get(info_key(**kwargs), 0)
 
@@ -44,4 +49,5 @@ def update_missing(**kwargs):
     with open(empty_log, 'w') as fp:
         json.dump(cur_miss, fp=fp, indent=2)
 
+    globals()[_MISSING_] = cur_miss
     return cur_miss

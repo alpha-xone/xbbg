@@ -261,7 +261,7 @@ def bdib(ticker, dt, typ='TRADE', batch=False, log='info'):
                 return pd.DataFrame()
 
     info_log = f'{q_tckr} / {cur_dt} / {typ}'
-    cur_miss = missing.current_missing(ticker=ticker, dt=dt, typ=typ, func=bdib.__name__)
+    cur_miss = missing.current_missing(ticker=ticker, dt=dt, typ=typ, func='bdib')
     if cur_miss >= 2:
         if batch: return
         logger.info(f'{cur_miss} trials with no data {info_log}')
@@ -280,7 +280,7 @@ def bdib(ticker, dt, typ='TRADE', batch=False, log='info'):
 
     if data.empty:
         logger.warning(f'no data for {info_log} ...')
-        missing.update_missing(ticker=ticker, dt=dt, typ=typ, func=bdib.__name__)
+        missing.update_missing(ticker=ticker, dt=dt, typ=typ, func='bdib')
         return pd.DataFrame()
 
     data = data.tz_localize('UTC').tz_convert(exch.tz)
