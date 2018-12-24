@@ -149,7 +149,7 @@ def bds(tickers, flds, cache=False, **kwargs):
 
 
 @with_bloomberg
-def bdh(tickers, flds, start_date, end_date, **kwargs):
+def bdh(tickers, flds, start_date, end_date, adjust=None, **kwargs):
     """
     Bloomberg historical data
 
@@ -158,25 +158,68 @@ def bdh(tickers, flds, start_date, end_date, **kwargs):
         flds: field(s)
         start_date: start date
         end_date: end date
+        adjust: `all`, `dvd`, `normal`, `abn` (=abnormal), `split`, or None
+                exact match of above words will adjust for corresponding events
+                Case 0: `-` will ignore kwargs and use Bloomberg default (DPDF<GO>)
+                Case 1: `dvd` or `normal|abn` will adjust for all dividends except splits
+                Case 2: `adjust` will adjust for splits and ignore all dividends
+                Case 3: `all` == `dvd|split` == adjust for all
+                Case 4: None == Bloomberg default OR use kwargs
         **kwargs: overrides
 
     Returns:
         pd.DataFrame
 
     Examples:
-        >>> flds = ['High', 'Low', 'Last_Price']
-        >>> s_dt, e_dt = '2018-02-05', '2018-02-08'
-        >>> d = bdh('VIX Index', flds, start_date=s_dt, end_date=e_dt).round(2)
+        >>> d = bdh(
+        ...     tickers='VIX Index', flds=['High', 'Low', 'Last_Price'],
+        ...     start_date='2018-02-05', end_date='2018-02-07',
+        ... ).round(2)
         >>> d.index.name = None
         >>> r = d.transpose()
         >>> r.index.names = (None, None)
         >>> r
-                              2018-02-05  2018-02-06  2018-02-07  2018-02-08
-        VIX Index High             38.80       50.30       31.64       36.17
-                  Low              16.80       22.42       21.17       24.41
-                  Last_Price       37.32       29.98       27.73       33.46
+                              2018-02-05  2018-02-06  2018-02-07
+        VIX Index High             38.80       50.30       31.64
+                  Low              16.80       22.42       21.17
+                  Last_Price       37.32       29.98       27.73
+        >>> adj_1 = bdh(
+        ...     tickers='AAPL US Equity', flds='Px_Last',
+        ...     start_date='20140605', end_date='20140610', adjust='-'
+        ... )
+        >>> adj_1.index.name = None
+        >>> adj_1.round(2)
+        ticker     AAPL US Equity
+        field             Px_Last
+        2014-06-05         647.35
+        2014-06-06         645.57
+        2014-06-09          93.70
+        2014-06-10          94.25
+        >>> adj_2 = bdh(
+        ...     tickers='AAPL US Equity', flds='Px_Last',
+        ...     start_date='20140606', end_date='20140609',
+        ...     CshAdjNormal=False, CshAdjAbnormal=False, CapChg=False,
+        ... )
+        >>> adj_2.index.name = None
+        >>> adj_2.round(2)
+        ticker     AAPL US Equity
+        field             Px_Last
+        2014-06-06         645.57
+        2014-06-09          93.70
     """
     logger = logs.get_logger(bdh, level=kwargs.pop('log', logs.DEFAULT_LEVEL))
+
+    # Dividend adjustments
+    if isinstance(adjust, str) and adjust:
+        if adjust == 'all':
+            kwargs['CshAdjNormal'] = True
+            kwargs['CshAdjAbnormal'] = True
+            kwargs['CapChg'] = True
+        else:
+            kwargs['CshAdjNormal'] = 'normal' in adjust or 'dvd' in adjust
+            kwargs['CshAdjAbnormal'] = 'abn' in adjust or 'dvd' in adjust
+            kwargs['CapChg'] = 'split' in adjust
+
     con, _ = create_connection()
     elms = assist.proc_elms(**kwargs)
     ovrds = assist.proc_ovrds(**kwargs)

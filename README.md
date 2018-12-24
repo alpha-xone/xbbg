@@ -122,7 +122,7 @@ date
 
 ```python
 In[5]: blp.bdh(
-  ...:     'AAPL US Equity', 'Px_Last', '20140604', '20140610',
+  ...:     'AAPL US Equity', 'Px_Last', '20140605', '20140610',
   ...:     CshAdjNormal=False, CshAdjAbnormal=False, CapChg=False
   ...: )
 ```
@@ -132,7 +132,6 @@ Out[5]:
 ticker     AAPL US Equity
 field             Px_Last
 date                     
-2014-06-04         644.82
 2014-06-05         647.35
 2014-06-06         645.57
 2014-06-09          93.70
@@ -143,7 +142,7 @@ date
 
 ```python
 In[6]: blp.bdh(
-  ...:     'AAPL US Equity', 'Px_Last', '20140604', '20140610',
+  ...:     'AAPL US Equity', 'Px_Last', '20140605', '20140610',
   ...:     CshAdjNormal=True, CshAdjAbnormal=True, CapChg=True
   ...: )
 ```
@@ -153,7 +152,6 @@ Out[6]:
 ticker     AAPL US Equity
 field             Px_Last
 date                     
-2014-06-04          85.12
 2014-06-05          85.45
 2014-06-06          85.22
 2014-06-09          86.58
@@ -237,6 +235,40 @@ ticker
 C US Equity       2018-01-18  2018-02-02  2018-02-05   2018-02-23            0.32            Quarter  Regular Cash
 MS US Equity      2018-04-18  2018-04-27  2018-04-30   2018-05-15            0.25            Quarter  Regular Cash
 MS US Equity      2018-01-18  2018-01-30  2018-01-31   2018-02-15            0.25            Quarter  Regular Cash
+```
+
+-----
+
+*New in 0.1.17* - Dividend adjustment can be simplified to one parameter `adjust`:
+
+- ``BDH`` without adjustment for dividends and splits:
+
+```python
+In[12]: blp.bdh('AAPL US Equity', 'Px_Last', '20140606', '20140609', adjust='-')
+```
+
+```pydocstring
+Out[12]:
+ticker     AAPL US Equity
+field             Px_Last
+date                     
+2014-06-06         645.57
+2014-06-09          93.70
+```
+
+- ``BDH`` adjusted for dividends and splits:
+
+```python
+In[13]: blp.bdh('AAPL US Equity', 'Px_Last', '20140606', '20140609', adjust='all')
+```
+
+```pydocstring
+Out[13]:
+ticker     AAPL US Equity
+field             Px_Last
+date                     
+2014-06-06          85.22
+2014-06-09          86.58
 ```
 
 ### Optimizations
