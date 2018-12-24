@@ -131,7 +131,6 @@ In[5]: blp.bdh(
 Out[5]: 
 ticker     AAPL US Equity
 field             Px_Last
-date                     
 2014-06-05         647.35
 2014-06-06         645.57
 2014-06-09          93.70
@@ -151,7 +150,6 @@ In[6]: blp.bdh(
 Out[6]:
 ticker     AAPL US Equity
 field             Px_Last
-date                     
 2014-06-05          85.45
 2014-06-06          85.22
 2014-06-09          86.58
@@ -256,7 +254,6 @@ In[12]: blp.bdh('AAPL US Equity', 'Px_Last', '20140606', '20140609', adjust='-')
 Out[12]:
 ticker     AAPL US Equity
 field             Px_Last
-date                     
 2014-06-06         645.57
 2014-06-09          93.70
 ```
@@ -271,7 +268,6 @@ In[13]: blp.bdh('AAPL US Equity', 'Px_Last', '20140606', '20140609', adjust='all
 Out[13]:
 ticker     AAPL US Equity
 field             Px_Last
-date                     
 2014-06-06          85.22
 2014-06-09          86.58
 ```

@@ -85,7 +85,6 @@ Basics
     Out[4]:
     ticker     SPX Index
     field           High      Low Last_Price
-    date
     2018-10-10  2,874.02 2,784.86   2,785.68
     2018-10-11  2,795.14 2,710.51   2,728.37
     2018-10-12  2,775.77 2,729.44   2,767.13
@@ -107,7 +106,6 @@ Basics
     Out[4]:
     ticker     SHCOMP Index
     field              High      Low Last_Price
-    date
     2018-09-28     2,827.34 2,771.16   2,821.35
     2018-10-05     2,827.34 2,771.16   2,821.35
     2018-10-12     2,771.94 2,536.66   2,606.91
@@ -124,7 +122,6 @@ Basics
     Out[5]:
     ticker     AAPL US Equity
     field             Px_Last
-    date
     2014-06-05         647.35
     2014-06-06         645.57
     2014-06-09          93.70
@@ -141,7 +138,6 @@ Basics
     Out[6]:
     ticker     AAPL US Equity
     field             Px_Last
-    date
     2014-06-05          85.45
     2014-06-06          85.22
     2014-06-09          86.58
@@ -228,7 +224,6 @@ Dividends:
     Out[12]:
     ticker     AAPL US Equity
     field             Px_Last
-    date
     2014-06-06         645.57
     2014-06-09          93.70
 
@@ -240,7 +235,6 @@ Dividends:
     Out[13]:
     ticker     AAPL US Equity
     field             Px_Last
-    date
     2014-06-06          85.22
     2014-06-09          86.58
 

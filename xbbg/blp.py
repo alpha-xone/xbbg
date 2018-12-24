@@ -175,7 +175,6 @@ def bdh(tickers, flds, start_date, end_date, adjust=None, **kwargs):
         ...     tickers='VIX Index', flds=['High', 'Low', 'Last_Price'],
         ...     start_date='2018-02-05', end_date='2018-02-07',
         ... ).round(2)
-        >>> d.index.name = None
         >>> r = d.transpose()
         >>> r.index.names = (None, None)
         >>> r
@@ -183,25 +182,21 @@ def bdh(tickers, flds, start_date, end_date, adjust=None, **kwargs):
         VIX Index High             38.80       50.30       31.64
                   Low              16.80       22.42       21.17
                   Last_Price       37.32       29.98       27.73
-        >>> adj_1 = bdh(
+        >>> bdh(
         ...     tickers='AAPL US Equity', flds='Px_Last',
         ...     start_date='20140605', end_date='20140610', adjust='-'
-        ... )
-        >>> adj_1.index.name = None
-        >>> adj_1.round(2)
+        ... ).round(2)
         ticker     AAPL US Equity
         field             Px_Last
         2014-06-05         647.35
         2014-06-06         645.57
         2014-06-09          93.70
         2014-06-10          94.25
-        >>> adj_2 = bdh(
+        >>> bdh(
         ...     tickers='AAPL US Equity', flds='Px_Last',
         ...     start_date='20140606', end_date='20140609',
         ...     CshAdjNormal=False, CshAdjAbnormal=False, CapChg=False,
-        ... )
-        >>> adj_2.index.name = None
-        >>> adj_2.round(2)
+        ... ).round(2)
         ticker     AAPL US Equity
         field             Px_Last
         2014-06-06         645.57
@@ -234,10 +229,12 @@ def bdh(tickers, flds, start_date, end_date, adjust=None, **kwargs):
         f'{assist.info_qry(tickers=tickers, flds=flds)}'
     )
 
-    return con.bdh(
+    data = con.bdh(
         tickers=tickers, flds=flds, elms=elms, ovrds=ovrds,
         start_date=s_dt, end_date=e_dt,
     )
+    data.index.name = None
+    return data
 
 
 @with_bloomberg
