@@ -62,11 +62,12 @@ def ref_file(ticker: str, fld: str, has_date=False, cache=False, ext='parq', **k
         ''
         >>> cur_dt = utils.cur_time(tz=utils.DEFAULT_TZ)
         >>> ref_file(
-        ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True
+        ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True, cache=True,
         ... ).replace(cur_dt, '[cur_date]')
         '/data/bbg/Equity/BLT LN Equity/DVD_Hist_All/asof=[cur_date], ovrd=None.parq'
         >>> ref_file(
-        ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True, DVD_Start_Dt='20180101'
+        ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True,
+        ...     cache=True, DVD_Start_Dt='20180101',
         ... ).replace(cur_dt, '[cur_date]')[:-5]
         '/data/bbg/Equity/BLT LN Equity/DVD_Hist_All/asof=[cur_date], DVD_Start_Dt=20180101'
         >>> sample = 'asof=2018-11-02, DVD_Start_Dt=20180101, DVD_End_Dt=20180501.pkl'
@@ -96,23 +97,18 @@ def ref_file(ticker: str, fld: str, has_date=False, cache=False, ext='parq', **k
         True
     """
     data_path = os.environ.get(assist.BBG_ROOT, '').replace('\\', '/')
-    if not data_path: return ''
-    if (not has_date) and (not cache): return ''
+    if (not data_path) or (not cache): return ''
 
     proper_ticker = ticker.replace('/', '_')
     root = f'{data_path}/{ticker.split()[-1]}/{proper_ticker}/{fld}'
 
-    if len(kwargs) > 0: info = utils.to_str(kwargs)[1:-1]
+    if len(kwargs) > 0: info = utils.to_str(kwargs)[1:-1].replace('|', '_')
     else: info = 'ovrd=None'
 
     # Check date info
     if has_date:
-        cur_files = []
         cur_dt = utils.cur_time()
-
-        if cache:
-            cur_files = files.all_files(path_name=root, keyword=info, ext=ext)
-
+        cur_files = files.all_files(path_name=root, keyword=info, ext=ext)
         missing = f'{root}/asof={cur_dt}, {info}.{ext}'
         if len(cur_files) > 0:
             upd_dt = [val for val in sorted(cur_files)[-1][:-4].split(', ') if 'asof=' in val]

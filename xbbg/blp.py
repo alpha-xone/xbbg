@@ -34,7 +34,7 @@ def bdp(tickers, flds, cache=False, **kwargs):
                  ticker  field value
         0  IQ US Equity  Crncy   USD
         >>> bdp('IQ US Equity', 'Crncy')
-                 Ticker Crncy
+                 ticker crncy
         0  IQ US Equity   USD
     """
     logger = logs.get_logger(bdp, level=kwargs.pop('log', logs.DEFAULT_LEVEL))
@@ -100,8 +100,8 @@ def bds(tickers, flds, cache=False, **kwargs):
         ...     'NVDA US Equity', 'DVD_Hist_All',
         ...     DVD_Start_Dt=s_dt, DVD_End_Dt=e_dt,
         ... )
-        >>> dvd.reset_index().loc[:, ['ticker', 'Ex-Date', 'Dividend Amount']]
-                   ticker     Ex-Date  Dividend Amount
+        >>> dvd.reset_index().loc[:, ['ticker', 'ex_date', 'dividend_amount']]
+                   ticker     ex_date  dividend_amount
         0  NVDA US Equity  2018-08-29             0.15
         1  NVDA US Equity  2018-05-23             0.15
         >>> if not os.environ.get('BBG_ROOT', ''):
@@ -109,7 +109,7 @@ def bds(tickers, flds, cache=False, **kwargs):
         >>> idx_kw = dict(End_Dt='20181220', cache=True)
         >>> idx_wt = bds('DJI Index', 'Indx_MWeight_Hist', **idx_kw)
         >>> idx_wt.round(2).tail().reset_index(drop=True)
-          Index Member  Percent Weight
+          index_member  percent_weight
         0         V UN            3.82
         1        VZ UN            1.63
         2       WBA UW            2.06
@@ -117,7 +117,7 @@ def bds(tickers, flds, cache=False, **kwargs):
         4       XOM UN            2.04
         >>> idx_wt = bds('DJI Index', 'Indx_MWeight_Hist', **idx_kw)
         >>> idx_wt.round(2).head().reset_index(drop=True)
-          Index Member  Percent Weight
+          index_member  percent_weight
         0      AAPL UW            4.65
         1       AXP UN            2.84
         2        BA UN            9.29
@@ -393,15 +393,17 @@ def earning(ticker, by='Geo', cache=False, **kwargs):
     return assist.format_earning(data=data, header=header)
 
 
-def dividend(tickers, start_date=None, end_date=None, cache=False):
+def dividend(tickers, typ='all', start_date=None, end_date=None, **kwargs):
     """
     Dividend history
 
     Args:
         tickers: list of tickers
+        typ: `all`, `dvd`, `split`, `split`, `gross`, `adjust`, `adj_fund`,
+             `with_amt`, `dvd_amt`, `gross_amt`, `projected`
         start_date: start date
         end_date: end date
-        cache: whether to use cache if exists
+        **kwargs: overrides
 
     Returns:
         pd.DataFrame
@@ -421,15 +423,33 @@ def dividend(tickers, start_date=None, end_date=None, cache=False):
     if isinstance(tickers, str): tickers = [tickers]
     tickers = [t for t in tickers if ('Equity' in t) and ('=' not in t)]
 
-    kwargs = dict()
     if start_date: kwargs['DVD_Start_Dt'] = utils.fmt_dt(start_date, fmt='%Y%m%d')
     if end_date: kwargs['DVD_End_Dt'] = utils.fmt_dt(end_date, fmt='%Y%m%d')
 
-    dvd = bds(tickers=tickers, flds='DVD_Hist_All', cache=cache, raw=True, **kwargs)
-    if dvd.empty: return pd.DataFrame()
-    return pd.DataFrame(pd.concat([
-        assist.format_dvd(grp) for _, grp in dvd.groupby('ticker')
-    ], sort=False))
+    fld = {
+        'all': 'DVD_Hist_All', 'dvd': 'DVD_Hist',
+        'split': 'Eqy_DVD_Hist_Splits', 'gross': 'Eqy_DVD_Hist_Gross',
+        'adjust': 'Eqy_DVD_Adjust_Fact', 'adj_fund': 'Eqy_DVD_Adj_Fund',
+        'with_amt': 'DVD_Hist_All_with_Amt_Status',
+        'dvd_amt': 'DVD_Hist_with_Amt_Status',
+        'gross_amt': 'DVD_Hist_Gross_with_Amt_Stat',
+        'projected': 'BDVD_Pr_Ex_Dts_DVD_Amts_w_Ann',
+    }.get(typ, typ)
+    if (typ == 'adjust') and ('Corporate_Actions_Filter' not in kwargs):
+        kwargs['Corporate_Actions_Filter'] = 'NORMAL_CASH|ABNORMAL_CASH|CAPITAL_CHANGE'
+
+    kwargs['col_maps'] = {
+        'Declared Date': 'dec_date', 'Ex-Date': 'ex_date',
+        'Record Date': 'rec_date', 'Payable Date': 'pay_date',
+        'Dividend Amount': 'dvd_amt', 'Dividend Frequency': 'dvd_freq',
+        'Dividend Type': 'dvd_type', 'Amount Status': 'amt_status',
+        'Adjustment Date': 'adj_date', 'Adjustment Factor': 'adj_factor',
+        'Adjustment Factor Operator Type': 'adj_op',
+        'Adjustment Factor Flag': 'adj_flag',
+        'Amount Per Share': 'amt_ps', 'Projected/Confirmed': 'category',
+    }
+
+    return bds(tickers=tickers, flds=fld, raw=False, **kwargs)
 
 
 @with_bloomberg

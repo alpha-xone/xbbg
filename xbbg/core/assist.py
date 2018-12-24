@@ -187,34 +187,6 @@ def format_earning(data: pd.DataFrame, header: pd.DataFrame):
     return res
 
 
-def format_dvd(data: pd.DataFrame):
-    """
-    Generate block data from reference data
-
-    Args:
-        data: bulk reference data from Bloomberg
-
-    Returns:
-        pd.DataFrame
-
-    Examples:
-        >>> res = format_dvd(
-        ...     data=pd.read_pickle('xbbg/tests/data/sample_dvd.pkl')
-        ... ).loc[:, ['ex_date', 'rec_date', 'dvd_amt']].round(2)
-        >>> res.index.name = None
-        >>> res
-                        ex_date    rec_date  dvd_amt
-        C US Equity  2018-02-02  2018-02-05     0.32
-    """
-    col_maps = {
-        'Declared Date': 'dec_date', 'Ex-Date': 'ex_date',
-        'Record Date': 'rec_date', 'Payable Date': 'pay_date',
-        'Dividend Amount': 'dvd_amt', 'Dividend Frequency': 'dvd_freq',
-        'Dividend Type': 'dvd_type'
-    }
-    return format_output(data=data, source='bds', col_maps=col_maps)
-
-
 def format_output(data: pd.DataFrame, source, col_maps=None):
     """
     Format `pdblp` outputs to column-based results
@@ -233,7 +205,7 @@ def format_output(data: pd.DataFrame, source, col_maps=None):
         ...     source='bdp'
         ... )
         >>> res
-                  Ticker                        Name
+                  ticker                        name
         0  QQQ US Equity  INVESCO QQQ TRUST SERIES 1
         1  SPY US Equity      SPDR S&P 500 ETF TRUST
     """
@@ -256,8 +228,11 @@ def format_output(data: pd.DataFrame, source, col_maps=None):
         ], sort=False)).reset_index(drop=True).set_index('ticker')
         res.columns.name = None
 
+    if col_maps is None: col_maps = dict()
     return res.rename(
-        columns=dict() if col_maps is None else col_maps
+        columns=lambda vv: col_maps.get(
+            vv, vv.lower().replace(' ', '_').replace('-', '_')
+        )
     ).apply(pd.to_numeric, errors='ignore', downcast='float')
 
 

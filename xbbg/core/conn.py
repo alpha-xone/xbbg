@@ -44,18 +44,17 @@ def with_bloomberg(func):
             logger = logs.get_logger(func, level=log_level)
             has_date = all_kw.pop('has_date', func.__name__ == 'bds')
             cache = all_kw.get('cache', True)
+            col_maps = all_kw.get('col_maps', dict())
 
             tickers = utils.flatten(all_kw['tickers'])
             flds = utils.flatten(all_kw['flds'])
             loaded = pd.DataFrame(data=0, index=tickers, columns=flds)
 
+            exc_cols = ['tickers', 'flds', 'cache', 'raw', 'log', 'col_maps']
             for ticker, fld in product(tickers, flds):
                 data_file = storage.ref_file(
-                    ticker=ticker, fld=fld, has_date=has_date,
-                    cache=cache, ext='pkl', **{
-                        k: v for k, v in all_kw.items()
-                        if k not in ['tickers', 'flds', 'cache', 'raw', 'log']
-                    }
+                    ticker=ticker, fld=fld, has_date=has_date, cache=cache, ext='pkl',
+                    **{k: v for k, v in all_kw.items() if k not in exc_cols}
                 )
                 if files.exists(data_file):
                     logger.debug(f'reading from {data_file} ...')
@@ -69,7 +68,9 @@ def with_bloomberg(func):
                 if not cached_data: return pd.DataFrame()
                 res = pd.concat(cached_data, sort=False).reset_index(drop=True)
                 if not all_kw.get('raw', False):
-                    res = assist.format_output(data=res, source=func.__name__)
+                    res = assist.format_output(
+                        data=res, source=func.__name__, col_maps=col_maps
+                    )
                 return res
 
             all_kw['tickers'] = to_qry.index.tolist()
@@ -87,6 +88,7 @@ def with_bloomberg(func):
 
         _, new = create_connection()
         raw = all_kw.pop('raw', False)
+        col_maps = all_kw.pop('col_maps', dict())
         res = func(**all_kw)
         if new: delete_connection()
 
@@ -96,7 +98,7 @@ def with_bloomberg(func):
                 if not final: return pd.DataFrame()
                 res = pd.DataFrame(pd.concat(final, sort=False)).reset_index(drop=True)
             if not raw:
-                res = assist.format_output(data=res, source=func.__name__)
+                res = assist.format_output(data=res, source=func.__name__, col_maps=col_maps)
 
         return res
     return wrapper
