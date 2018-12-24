@@ -52,7 +52,7 @@ def bdp(tickers, flds, cache=False, **kwargs):
     for r, snap in data.iterrows():
         subset = [r]
         data_file = storage.ref_file(
-            ticker=snap.ticker, fld=snap.field, ext='pkl', **kwargs
+            ticker=snap.ticker, fld=snap.field, ext='pkl', cache=cache, **kwargs
         )
         if data_file:
             if not files.exists(data_file): qry_data.append(data.iloc[subset])
@@ -138,7 +138,7 @@ def bds(tickers, flds, cache=False, **kwargs):
     qry_data = []
     for (ticker, fld), grp in data.groupby(['ticker', 'field']):
         data_file = storage.ref_file(
-            ticker=ticker, fld=fld, has_date=True, ext='pkl', **kwargs
+            ticker=ticker, fld=fld, has_date=True, ext='pkl', cache=cache, **kwargs
         )
         if data_file:
             if not files.exists(data_file): qry_data.append(grp)
