@@ -188,6 +188,11 @@ Out[8]:
 2018-10-17 16:10:00+11:00 33.66 33.66 33.66  33.66  1115523        216
 ```
 
+Above example works because 1) `AU` in equity ticker is mapped to `EquityAustralia` in
+`markets/assets.yml`, and 2) `EquityAustralia` is defined in `markets/exch.yml`.
+To add new mappings, define `BBG_ROOT` in sys path and add `assets.yml` and 
+`exch.yml` under `BBG_ROOT/markets`.
+
 - Intraday bars within market session:
 
 ```python
