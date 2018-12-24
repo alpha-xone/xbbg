@@ -423,9 +423,6 @@ def dividend(tickers, typ='all', start_date=None, end_date=None, **kwargs):
     if isinstance(tickers, str): tickers = [tickers]
     tickers = [t for t in tickers if ('Equity' in t) and ('=' not in t)]
 
-    if start_date: kwargs['DVD_Start_Dt'] = utils.fmt_dt(start_date, fmt='%Y%m%d')
-    if end_date: kwargs['DVD_End_Dt'] = utils.fmt_dt(end_date, fmt='%Y%m%d')
-
     fld = {
         'all': 'DVD_Hist_All', 'dvd': 'DVD_Hist',
         'split': 'Eqy_DVD_Hist_Splits', 'gross': 'Eqy_DVD_Hist_Gross',
@@ -435,8 +432,16 @@ def dividend(tickers, typ='all', start_date=None, end_date=None, **kwargs):
         'gross_amt': 'DVD_Hist_Gross_with_Amt_Stat',
         'projected': 'BDVD_Pr_Ex_Dts_DVD_Amts_w_Ann',
     }.get(typ, typ)
-    if (typ == 'adjust') and ('Corporate_Actions_Filter' not in kwargs):
+
+    if (fld == 'Eqy_DVD_Adjust_Fact') and ('Corporate_Actions_Filter' not in kwargs):
         kwargs['Corporate_Actions_Filter'] = 'NORMAL_CASH|ABNORMAL_CASH|CAPITAL_CHANGE'
+
+    if fld in [
+        'DVD_Hist_All', 'DVD_Hist', 'Eqy_DVD_Hist_Gross',
+        'DVD_Hist_All_with_Amt_Status', 'DVD_Hist_with_Amt_Status',
+    ]:
+        if start_date: kwargs['DVD_Start_Dt'] = utils.fmt_dt(start_date, fmt='%Y%m%d')
+        if end_date: kwargs['DVD_End_Dt'] = utils.fmt_dt(end_date, fmt='%Y%m%d')
 
     kwargs['col_maps'] = {
         'Declared Date': 'dec_date', 'Ex-Date': 'ex_date',

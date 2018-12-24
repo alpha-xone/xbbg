@@ -233,11 +233,11 @@ In[11]: blp.dividend(['C US Equity', 'MS US Equity'], start_date='2018-01-01', e
 
 ```pydocstring
 Out[11]:
-               declared_date     ex_date record_date payable_date dividend_amount dividend_frequency dividend_type
-ticker
-C US Equity       2018-01-18  2018-02-02  2018-02-05   2018-02-23            0.32            Quarter  Regular Cash
-MS US Equity      2018-04-18  2018-04-27  2018-04-30   2018-05-15            0.25            Quarter  Regular Cash
-MS US Equity      2018-01-18  2018-01-30  2018-01-31   2018-02-15            0.25            Quarter  Regular Cash
+                dec_date     ex_date    rec_date    pay_date  dvd_amt dvd_freq      dvd_type
+ticker                                                                                      
+C US Equity   2018-01-18  2018-02-02  2018-02-05  2018-02-23     0.32  Quarter  Regular Cash
+MS US Equity  2018-04-18  2018-04-27  2018-04-30  2018-05-15     0.25  Quarter  Regular Cash
+MS US Equity  2018-01-18  2018-01-30  2018-01-31  2018-02-15     0.25  Quarter  Regular Cash
 ```
 
 -----
