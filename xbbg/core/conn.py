@@ -68,8 +68,8 @@ def with_bloomberg(func):
             if to_qry.empty:
                 if not cached_data: return pd.DataFrame()
                 res = pd.concat(cached_data, sort=False).reset_index(drop=True)
-                if (func.__name__ == 'bds') and (not all_kw.get('raw', False)):
-                    res = assist.format_bds(data=res)
+                if not all_kw.get('raw', False):
+                    res = assist.format_output(data=res, source=func.__name__)
                 return res
 
             all_kw['tickers'] = to_qry.index.tolist()
@@ -90,13 +90,13 @@ def with_bloomberg(func):
         res = func(**all_kw)
         if new: delete_connection()
 
-        if isinstance(res, list) and (func.__name__ in ['bdp', 'bds']):
-            final = cached_data + res
-            if not final: return pd.DataFrame()
-            res = pd.DataFrame(pd.concat(final, sort=False)).reset_index(drop=True)
-
-        if (func.__name__ == 'bds') and (not raw):
-            res = assist.format_bds(data=res)
+        if func.__name__ in ['bdp', 'bds']:
+            if isinstance(res, list):
+                final = cached_data + res
+                if not final: return pd.DataFrame()
+                res = pd.DataFrame(pd.concat(final, sort=False)).reset_index(drop=True)
+            if not raw:
+                res = assist.format_output(data=res, source=func.__name__)
 
         return res
     return wrapper

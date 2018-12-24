@@ -212,30 +212,74 @@ def format_dvd(data: pd.DataFrame):
         'Dividend Amount': 'dvd_amt', 'Dividend Frequency': 'dvd_freq',
         'Dividend Type': 'dvd_type'
     }
-    return format_bds(data=data, col_maps=col_maps)
+    return format_output(data=data, source='bds', col_maps=col_maps)
 
 
-def format_bds(data: pd.DataFrame, col_maps=None):
+def format_output(data: pd.DataFrame, source, col_maps=None):
     """
-    Format BDS outputs to columns and values
+    Format `pdblp` outputs to column-based results
 
     Args:
-        data: BDS output
+        data: `pdblp` result
+        source: `bdp` or `bds`
         col_maps: rename columns with these mappings
 
     Returns:
         pd.DataFrame
+
+    Examples:
+        >>> res = format_output(
+        ...     data=pd.read_pickle('xbbg/tests/data/sample_bdp.pkl'),
+        ...     source='bdp'
+        ... )
+        >>> res
+                  Ticker                        Name
+        0  QQQ US Equity  INVESCO QQQ TRUST SERIES 1
+        1  SPY US Equity      SPDR S&P 500 ETF TRUST
     """
     if data.empty: return pd.DataFrame()
+    if source == 'bdp': req_cols = ['ticker', 'field', 'value']
+    else: req_cols = ['ticker', 'field', 'name', 'value', 'position']
+    if any(col not in data for col in req_cols): return pd.DataFrame()
     if data.dropna(subset=['value']).empty: return pd.DataFrame()
 
-    data = pd.DataFrame(pd.concat([
-        grp.loc[:, ['name', 'value']].set_index('name')
-        .transpose().reset_index(drop=True).assign(ticker=t)
-        for (t, _), grp in data.groupby(['ticker', 'position'])
-    ], sort=False)).reset_index(drop=True).set_index('ticker')
-    data.columns.name = None
+    if source == 'bdp':
+        res = pd.DataFrame(pd.concat([
+            pd.Series({**{'Ticker': t}, **grp.set_index('field').value.to_dict()})
+            for t, grp in data.groupby('ticker')
+        ], axis=1, sort=False)).transpose()
+    else:
+        res = pd.DataFrame(pd.concat([
+            grp.loc[:, ['name', 'value']].set_index('name')
+            .transpose().reset_index(drop=True).assign(ticker=t)
+            for (t, _), grp in data.groupby(['ticker', 'position'])
+        ], sort=False)).reset_index(drop=True).set_index('ticker')
+        res.columns.name = None
 
-    return data.rename(
+    return res.rename(
         columns=dict() if col_maps is None else col_maps
     ).apply(pd.to_numeric, errors='ignore', downcast='float')
+
+
+def info_qry(tickers, flds):
+    """
+    Logging info for given tickers and fields
+
+    Args:
+        tickers: tickers
+        flds: fields
+
+    Returns:
+        str
+
+    Examples:
+        >>> print(info_qry(
+        ...     tickers=['NVDA US Equity'], flds=['Name', 'Security_Name']
+        ... ))
+        tickers: ['NVDA US Equity']
+        fields:  ['Name', 'Security_Name']
+    """
+    full_list = '\n'.join([f'tickers: {tickers[:8]}'] + [
+        f'         {tickers[n:(n + 8)]}' for n in range(8, len(tickers), 8)
+    ])
+    return f'{full_list}\nfields:  {flds}'

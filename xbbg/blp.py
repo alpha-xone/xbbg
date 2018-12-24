@@ -30,20 +30,23 @@ def bdp(tickers, flds, cache=False, **kwargs):
         pd.DataFrame
 
     Examples:
-        >>> bdp('IQ US Equity', 'Crncy')
+        >>> bdp('IQ US Equity', 'Crncy', raw=True)
                  ticker  field value
         0  IQ US Equity  Crncy   USD
+        >>> bdp('IQ US Equity', 'Crncy')
+                 Ticker Crncy
+        0  IQ US Equity   USD
     """
     logger = logs.get_logger(bdp, level=kwargs.pop('log', 'info'))
     con, _ = create_connection()
     ovrds = assist.proc_ovrds(**kwargs)
 
-    full_list = '\n'.join([f'tickers: {tickers[:8]}'] + [
-        f'         {tickers[n:(n + 8)]}' for n in range(8, len(tickers), 8)
-    ])
-    logger.info(f'reference data for\n{full_list}\nfields: {flds}')
+    logger.info(
+        f'loading reference data from Bloomberg:\n'
+        f'{assist.info_qry(tickers=tickers, flds=flds)}'
+    )
     data = con.ref(tickers=tickers, flds=flds, ovrds=ovrds)
-    if not cache: return data
+    if not cache: return [data]
 
     qry_data = []
     for r, snap in data.iterrows():
@@ -83,22 +86,16 @@ def bds(tickers, flds, cache=False, **kwargs):
         ...     'NVDA US Equity', 'DVD_Hist_All',
         ...     DVD_Start_Dt=s_dt, DVD_End_Dt=e_dt, raw=True,
         ... )
-        >>> dvd.loc[:, ['ticker', 'name', 'value']]
-                    ticker                name         value
-        0   NVDA US Equity       Declared Date    2018-08-16
-        1   NVDA US Equity             Ex-Date    2018-08-29
-        2   NVDA US Equity         Record Date    2018-08-30
-        3   NVDA US Equity        Payable Date    2018-09-21
-        4   NVDA US Equity     Dividend Amount          0.15
-        5   NVDA US Equity  Dividend Frequency       Quarter
-        6   NVDA US Equity       Dividend Type  Regular Cash
-        7   NVDA US Equity       Declared Date    2018-05-10
-        8   NVDA US Equity             Ex-Date    2018-05-23
-        9   NVDA US Equity         Record Date    2018-05-24
-        10  NVDA US Equity        Payable Date    2018-06-15
-        11  NVDA US Equity     Dividend Amount          0.15
-        12  NVDA US Equity  Dividend Frequency       Quarter
-        13  NVDA US Equity       Dividend Type  Regular Cash
+        >>> dvd.loc[:, ['ticker', 'name', 'value']].head(8)
+                   ticker                name         value
+        0  NVDA US Equity       Declared Date    2018-08-16
+        1  NVDA US Equity             Ex-Date    2018-08-29
+        2  NVDA US Equity         Record Date    2018-08-30
+        3  NVDA US Equity        Payable Date    2018-09-21
+        4  NVDA US Equity     Dividend Amount          0.15
+        5  NVDA US Equity  Dividend Frequency       Quarter
+        6  NVDA US Equity       Dividend Type  Regular Cash
+        7  NVDA US Equity       Declared Date    2018-05-10
         >>> dvd = bds(
         ...     'NVDA US Equity', 'DVD_Hist_All',
         ...     DVD_Start_Dt=s_dt, DVD_End_Dt=e_dt,
@@ -131,12 +128,12 @@ def bds(tickers, flds, cache=False, **kwargs):
     con, _ = create_connection()
     ovrds = assist.proc_ovrds(**kwargs)
 
-    full_list = '\n'.join([f'tickers: {tickers[:8]}'] + [
-        f'         {tickers[n:(n + 8)]}' for n in range(8, len(tickers), 8)
-    ])
-    logger.info(f'loading block data for\ntickers: {full_list}\nfields: {flds}')
+    logger.info(
+        f'loading block data from Bloomberg:\n'
+        f'{assist.info_qry(tickers=tickers, flds=flds)}'
+    )
     data = con.bulkref(tickers=tickers, flds=flds, ovrds=ovrds)
-    if not cache: return data
+    if not cache: return [data]
 
     qry_data = []
     for (ticker, fld), grp in data.groupby(['ticker', 'field']):
@@ -186,17 +183,17 @@ def bdh(tickers, flds, start_date, end_date, **kwargs):
 
     if isinstance(tickers, str): tickers = [tickers]
     if isinstance(flds, str): flds = [flds]
-    s_dt = utils.fmt_dt(start_date, fmt='%Y-%m-%d')
-    e_dt = utils.fmt_dt(end_date, fmt='%Y-%m-%d')
+    s_dt = utils.fmt_dt(start_date, fmt='%Y%m%d')
+    e_dt = utils.fmt_dt(end_date, fmt='%Y%m%d')
 
-    full_list = '\n'.join([f'tickers: {tickers[:8]}'] + [
-        f'         {tickers[n:(n + 8)]}' for n in range(8, len(tickers), 8)
-    ])
-    logger.info(f'loading historical data for\n{full_list}\nfields: {flds}')
+    logger.info(
+        f'loading historical data from Bloomberg:\n'
+        f'{assist.info_qry(tickers=tickers, flds=flds)}'
+    )
 
     return con.bdh(
         tickers=tickers, flds=flds, elms=elms, ovrds=ovrds,
-        start_date=s_dt.replace('-', ''), end_date=e_dt.replace('-', ''),
+        start_date=s_dt, end_date=e_dt,
     )
 
 
@@ -267,7 +264,7 @@ def bdib(ticker, dt, typ='TRADE', batch=False, log='info'):
         logger.info(f'{cur_miss} trials with no data {info_log}')
         return pd.DataFrame()
 
-    logger.info(f'loading data for {info_log} ...')
+    logger.info(f'loading data from Bloomberg: {info_log} ...')
     con, _ = create_connection()
     data = con.bdib(
         ticker=q_tckr, event_type=typ, interval=1,

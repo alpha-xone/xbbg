@@ -69,9 +69,8 @@ In[3]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Nam
 
 ```pydocstring
 Out[3]:
-           ticker             field                   value
-0  NVDA US Equity     Security_Name             NVIDIA Corp
-1  NVDA US Equity  GICS_Sector_Name  Information Technology
+           Ticker Security_Name        GICS_Sector_Name
+0  NVDA US Equity   NVIDIA Corp  Information Technology
 ```
 
 - ``BDH`` example:
