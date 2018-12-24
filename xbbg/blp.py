@@ -37,7 +37,7 @@ def bdp(tickers, flds, cache=False, **kwargs):
                  Ticker Crncy
         0  IQ US Equity   USD
     """
-    logger = logs.get_logger(bdp, level=kwargs.pop('log', 'info'))
+    logger = logs.get_logger(bdp, level=kwargs.pop('log', logs.DEFAULT_LEVEL))
     con, _ = create_connection()
     ovrds = assist.proc_ovrds(**kwargs)
 
@@ -124,7 +124,7 @@ def bds(tickers, flds, cache=False, **kwargs):
         3       CAT UN            3.61
         4      CSCO UW            1.26
     """
-    logger = logs.get_logger(bds, level=kwargs.pop('log', 'info'))
+    logger = logs.get_logger(bds, level=kwargs.pop('log', logs.DEFAULT_LEVEL))
     con, _ = create_connection()
     ovrds = assist.proc_ovrds(**kwargs)
 
@@ -176,7 +176,7 @@ def bdh(tickers, flds, start_date, end_date, **kwargs):
                   Low              16.80       22.42       21.17       24.41
                   Last_Price       37.32       29.98       27.73       33.46
     """
-    logger = logs.get_logger(bdh, level=kwargs.pop('log', 'info'))
+    logger = logs.get_logger(bdh, level=kwargs.pop('log', logs.DEFAULT_LEVEL))
     con, _ = create_connection()
     elms = assist.proc_elms(**kwargs)
     ovrds = assist.proc_ovrds(**kwargs)
@@ -198,7 +198,7 @@ def bdh(tickers, flds, start_date, end_date, **kwargs):
 
 
 @with_bloomberg
-def bdib(ticker, dt, typ='TRADE', batch=False, log='info'):
+def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.DEFAULT_LEVEL):
     """
     Download intraday data and save to cache
 
@@ -423,7 +423,7 @@ def active_futures(ticker: str, dt):
 
 
 @with_bloomberg
-def fut_ticker(gen_ticker: str, dt, freq: str, log='info'):
+def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.DEFAULT_LEVEL):
     """
     Get proper ticker from generic ticker
 

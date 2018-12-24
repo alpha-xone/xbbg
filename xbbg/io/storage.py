@@ -56,8 +56,10 @@ def ref_file(ticker: str, fld: str, has_date=False, cache=False, ext='parq', **k
         >>> ref_file('BLT LN Equity', fld='Crncy') == ''
         True
         >>> os.environ['BBG_ROOT'] = '/data/bbg'
-        >>> ref_file('BLT LN Equity', fld='Crncy')
+        >>> ref_file('BLT LN Equity', fld='Crncy', cache=True)
         '/data/bbg/Equity/BLT LN Equity/Crncy/ovrd=None.parq'
+        >>> ref_file('BLT LN Equity', fld='Crncy')
+        ''
         >>> cur_dt = utils.cur_time(tz=utils.DEFAULT_TZ)
         >>> ref_file(
         ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True
@@ -95,6 +97,7 @@ def ref_file(ticker: str, fld: str, has_date=False, cache=False, ext='parq', **k
     """
     data_path = os.environ.get(assist.BBG_ROOT, '').replace('\\', '/')
     if not data_path: return ''
+    if (not has_date) and (not cache): return ''
 
     proper_ticker = ticker.replace('/', '_')
     root = f'{data_path}/{ticker.split()[-1]}/{proper_ticker}/{fld}'

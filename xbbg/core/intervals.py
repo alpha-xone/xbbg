@@ -75,7 +75,6 @@ class Intervals(object):
         Args:
             ticker: ticker
         """
-        self.logger = logs.get_logger(Intervals)
         self.ticker = ticker
         self.exch = const.exch_info(ticker=ticker)
 

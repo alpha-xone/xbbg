@@ -2,6 +2,8 @@ import logging
 
 from xbbg.core import utils
 
+DEFAULT_LEVEL = 'CRITICAL'
+
 
 def get_logger(
         name_or_func, log_file='', level=logging.INFO,

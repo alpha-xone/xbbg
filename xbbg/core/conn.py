@@ -37,7 +37,7 @@ def with_bloomberg(func):
             for n, (k, v) in enumerate(param.items()) if k != 'kwargs'
         }
         all_kw.update(kwargs)
-        log_level = kwargs.get('log', 'info')
+        log_level = kwargs.get('log', logs.DEFAULT_LEVEL)
 
         cached_data = []
         if func.__name__ in ['bdp', 'bds']:
