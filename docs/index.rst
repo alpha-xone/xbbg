@@ -50,17 +50,9 @@ Installation
 Tutorial
 ========
 
-Creation of connection ``create_connection()`` is not necessary.
-Quries will create new connections if there's no live connections on the backend.
-Since each initiation of connection takes time, we can manually connect
-before we want to do multiple queries - just like examples below.
-
 .. code-block:: python
 
     In[1]: from xbbg import blp
-
-    In[2]: blp.create_connection()
-    Out[2]: (<pdblp.pdblp.BCon at 0x1c35cd0e898>, True)
 
 Basics
 ------
@@ -69,10 +61,19 @@ Basics
 
 .. code-block:: python
 
-    In[3]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Name'])
-    Out[3]:
+    In[2]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Name'])
+    Out[2]:
                Ticker Security_Name        GICS_Sector_Name
     0  NVDA US Equity   NVIDIA Corp  Information Technology
+
+``BDP`` with overrides:
+
+.. code-block:: python
+
+    In[3]: blp.bdp('AAPL US Equity', 'Eqy_Weighted_Avg_Px', VWAP_Dt='20181224')
+    Out[3]:
+               ticker  eqy_weighted_avg_px
+    0  AAPL US Equity               148.75
 
 ``BDH`` example:
 
