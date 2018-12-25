@@ -200,14 +200,19 @@ def format_output(data: pd.DataFrame, source, col_maps=None):
         pd.DataFrame
 
     Examples:
-        >>> res = format_output(
+        >>> format_output(
         ...     data=pd.read_pickle('xbbg/tests/data/sample_bdp.pkl'),
         ...     source='bdp'
         ... )
-        >>> res
                   ticker                        name
         0  QQQ US Equity  INVESCO QQQ TRUST SERIES 1
         1  SPY US Equity      SPDR S&P 500 ETF TRUST
+        >>> format_output(
+        ...     data=pd.read_pickle('xbbg/tests/data/sample_dvd.pkl'),
+        ...     source='bds', col_maps={'Dividend Frequency': 'dvd_freq'}
+        ... ).loc[:, ['ex_date', 'dividend_amount', 'dvd_freq']].reset_index()
+                ticker     ex_date  dividend_amount dvd_freq
+        0  C US Equity  2018-02-02             0.32  Quarter
     """
     if data.empty: return pd.DataFrame()
     if source == 'bdp': req_cols = ['ticker', 'field', 'value']
