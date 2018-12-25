@@ -63,7 +63,7 @@ Basics
 
     In[2]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Name'])
     Out[2]:
-               Ticker Security_Name        GICS_Sector_Name
+               ticker security_name        gics_sector_name
     0  NVDA US Equity   NVIDIA Corp  Information Technology
 
 ``BDP`` with overrides:
@@ -150,7 +150,7 @@ Basics
 
     In[7]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_End_Dt='20180531')
     Out[7]:
-                   Declared Date     Ex-Date Record Date Payable Date  Dividend Amount Dividend Frequency Dividend Type
+                   declared_date     ex_date record_date payable_date  dividend_amount dividend_frequency dividend_type
     ticker
     AAPL US Equity    2018-05-01  2018-05-11  2018-05-14   2018-05-17             0.73            Quarter  Regular Cash
     AAPL US Equity    2018-02-01  2018-02-09  2018-02-12   2018-02-15             0.63            Quarter  Regular Cash

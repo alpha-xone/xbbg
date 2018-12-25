@@ -58,7 +58,7 @@ In[2]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Nam
 
 ```pydocstring
 Out[2]:
-           Ticker Security_Name        GICS_Sector_Name
+           ticker security_name        gics_sector_name
 0  NVDA US Equity   NVIDIA Corp  Information Technology
 ```
 
@@ -87,7 +87,6 @@ In[4]: blp.bdh(
 Out[4]:
 ticker     SPX Index
 field           High      Low Last_Price
-date
 2018-10-10  2,874.02 2,784.86   2,785.68
 2018-10-11  2,795.14 2,710.51   2,728.37
 2018-10-12  2,775.77 2,729.44   2,767.13
@@ -112,7 +111,6 @@ In[4]: blp.bdh(
 Out[4]:
 ticker     SHCOMP Index
 field              High      Low Last_Price
-date
 2018-09-28     2,827.34 2,771.16   2,821.35
 2018-10-05     2,827.34 2,771.16   2,821.35
 2018-10-12     2,771.94 2,536.66   2,606.91
@@ -165,7 +163,7 @@ In[7]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_En
 
 ```pydocstring
 Out[7]:
-               Declared Date     Ex-Date Record Date Payable Date  Dividend Amount Dividend Frequency Dividend Type
+               declared_date     ex_date record_date payable_date  dividend_amount dividend_frequency dividend_type
 ticker                                                                                                             
 AAPL US Equity    2018-05-01  2018-05-11  2018-05-14   2018-05-17             0.73            Quarter  Regular Cash
 AAPL US Equity    2018-02-01  2018-02-09  2018-02-12   2018-02-15             0.63            Quarter  Regular Cash
