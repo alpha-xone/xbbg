@@ -312,4 +312,4 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 .. |license| image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
     :alt: GitHub license
     :target: https://github.com/alpha-xone/xbbg/blob/master/LICENSE
-.. _Bloomberg API Library: https://www.bloomberg.com/professional/support/api-library/)
+.. _Bloomberg API Library: https://www.bloomberg.com/professional/support/api-library/
