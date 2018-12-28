@@ -30,5 +30,4 @@ jobs:
   - script: |
       pip install pytest pytest-cov coverage codecov
       pytest xbbg --doctest-module --cov -v
-      codecov --token=ff17768d-30bd-4917-98f2-a011606597ea
     displayName: Run Doctests and Coverages

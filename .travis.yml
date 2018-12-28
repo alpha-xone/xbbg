@@ -23,6 +23,4 @@ script:
   - pytest --doctest-module --cov -v xbbg
 
 after_success:
-  - coverage report
-  - cat .coverage
   - codecov --token=ff17768d-30bd-4917-98f2-a011606597ea
