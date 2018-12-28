@@ -19,11 +19,7 @@ Bloomberg data toolkit for humans
 Requirements
 ============
 
-- Bloomberg Open API
-
-.. code-block:: console
-
-    pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
+- Bloomberg Open API (need to install manually as shown below)
 
 - Bloomberg C++ SDK version 3.12.1 or higher
 
@@ -45,6 +41,7 @@ Installation
 
 .. code-block:: console
 
+   pip install blpapi --index-url=https://bloomberg.bintray.com/pip/simple
    pip install xbbg
 
 Tutorial
