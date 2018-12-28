@@ -19,8 +19,6 @@ Bloomberg data toolkit for humans
 Requirements
 ============
 
-- Bloomberg Open API (need to install manually as shown below)
-
 - Bloomberg C++ SDK version 3.12.1 or higher
 
     - `Bloomberg API Library`_
@@ -28,6 +26,8 @@ Requirements
     - Downlaod C++ Experimental Release
 
     - Copy ``blpapi3_32.dll`` and ``blpapi3_64.dll`` under ``bin`` folder to Bloomberg installation folder ``blp/DAPI``
+
+- Bloomberg Open API (need to install manually as shown below)
 
 - pdblp_ - pandas wrapper for Bloomberg Open API
 
