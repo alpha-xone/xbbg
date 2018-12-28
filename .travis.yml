@@ -1,7 +1,11 @@
 language: python
 
-python:
-  - "3.6"
+matrix:
+  include:
+    - python: "3.6"
+    - python: "3.7"
+      dist: xenial
+      sudo: true
 
 env:
   global:
@@ -9,23 +13,10 @@ env:
 
 install:
   - sudo apt-get update
-  - wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
-  - bash miniconda.sh -b -p $HOME/miniconda
-  - export PATH="$HOME/miniconda/bin:$PATH"
-  - hash -r
-  - conda config --set always_yes yes --set changeps1 no
-  - conda update -q conda
-  - conda info -a
-
-  - conda create -q -n test-environment -c conda-forge python=$TRAVIS_PYTHON_VERSION pip flake8
-    pyparsing pytest pytest-cov codecov conda-build anaconda-client conda-verify blpapi
-
-  - source activate test-environment
+  - pip install --upgrade pip
+  - pip install -r requirements.txt
+  - pip install pytest-cov flake8 codecov
   - python setup.py install
-
-#  - pip install --index-url=https://bloomberg.bintray.com/pip/simple blpapi
-#  - pip install -r requirements.txt
-#  - pip install pytest pytest-cov
 
 script:
   - flake8 --extend-ignore=E701,E501 xbbg
@@ -35,16 +26,3 @@ after_success:
   - coverage report
   - cat .coverage
   - codecov --token=ff17768d-30bd-4917-98f2-a011606597ea
-
-#deploy:
-#  provider: pypi
-#  user: alpha.xone
-#  password:
-#    secure: ""
-#  skip_existing: true
-#  on:
-#    tags: true
-#    distributions: sdist bdist_wheel
-#    repo: alpha.xone/xbbg
-#    branch: master
-#    condition: $TRAVIS_PYTHON_VERSION == 3.6

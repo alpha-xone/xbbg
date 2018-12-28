@@ -7,6 +7,8 @@ jobs:
     matrix:
       Python36:
         python.version: '3.6'
+      Python37:
+        python.version: '3.7'
     maxParallel: 3
 
   steps:
@@ -14,22 +16,6 @@ jobs:
     inputs:
       versionSpec: '$(python.version)'
       architecture: 'x64'
-#
-#  - task: CondaEnvironment@1
-#    inputs:
-#      createCustomEnvironment: True
-#      environmentName: blpenv
-#      packageSpecs: 'python=3.6'
-#      # updateConda: # Optional
-#      # installOptions: blpapi
-#      createOptions: -c conda-forge blpapi
-#      # cleanEnvironment: # Optional
-#      architecture: 'x64'
-
-#  - script: |
-#      conda create --yes --quiet --name blp_env python=%PYTHON_VERSION% blpapi
-#      source activate blp_env
-#    displayName: Create Anaconda environment
 
   - script: |
       python -m pip install --upgrade pip setuptools wheel

@@ -1,6 +1,12 @@
 from abc import abstractmethod
 
 
+class Session(object):
+
+    @abstractmethod
+    def start(self): return False
+
+
 class BCon(object):
 
     def __init__(
@@ -13,6 +19,7 @@ class BCon(object):
         self.timeout = timeout
         self.session = session
         self.identity = identity
+        self._session = Session()
 
     @abstractmethod
     def start(self): pass
