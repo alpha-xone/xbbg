@@ -215,7 +215,7 @@ In[10]: blp.earning('AMD US Equity', by='Geo', Eqy_Fund_Year=2017, Number_Of_Per
 
 ```pydocstring
 Out[10]:
-                 level    fy2017  fy2017_Pct
+                 level    fy2017  fy2017_pct
 Asia-Pacific      1.00  3,540.00       66.43
     China         2.00  1,747.00       49.35
     Japan         2.00  1,242.00       35.08
