@@ -33,7 +33,7 @@ def bdp(tickers, flds, cache=False, **kwargs):
         >>> bdp('IQ US Equity', 'Crncy', raw=True)
                  ticker  field value
         0  IQ US Equity  Crncy   USD
-        >>> bdp('IQ US Equity', 'Crncy')
+        >>> bdp('IQ US Equity', 'Crncy').reset_index()
                  ticker crncy
         0  IQ US Equity   USD
     """
@@ -149,7 +149,7 @@ def bds(tickers, flds, cache=False, **kwargs):
 
 
 @with_bloomberg
-def bdh(tickers, flds, start_date, end_date, adjust=None, **kwargs):
+def bdh(tickers, flds, start_date, end_date='today', adjust=None, **kwargs):
     """
     Bloomberg historical data
 
@@ -157,7 +157,7 @@ def bdh(tickers, flds, start_date, end_date, adjust=None, **kwargs):
         tickers: ticker(s)
         flds: field(s)
         start_date: start date
-        end_date: end date
+        end_date: end date - default today
         adjust: `all`, `dvd`, `normal`, `abn` (=abnormal), `split`, or None
                 exact match of above words will adjust for corresponding events
                 Case 0: `-` will ignore kwargs and use Bloomberg default (DPDF<GO>)
@@ -238,7 +238,7 @@ def bdh(tickers, flds, start_date, end_date, adjust=None, **kwargs):
 
 
 @with_bloomberg
-def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.DEFAULT_LEVEL):
+def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.DEFAULT_LEVEL) -> pd.DataFrame:
     """
     Download intraday data and save to cache
 
@@ -260,17 +260,11 @@ def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.DEFAULT_LEVEL):
     whole_day = pd.Timestamp(dt).date() < t_1
     if (not whole_day) and batch:
         logger.warning(f'querying date {t_1} is too close, ignoring download ...')
-        return None
+        return pd.DataFrame()
 
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
     asset = ticker.split()[-1]
-    data_file = storage.hist_file(ticker=ticker, dt=dt, typ=typ)
     info_log = f'{ticker} / {cur_dt} / {typ}'
-
-    if files.exists(data_file):
-        if batch: return
-        logger.debug(f'reading from {data_file} ...')
-        return pd.read_parquet(data_file)
 
     if asset in ['Equity', 'Curncy', 'Index', 'Comdty']:
         exch = const.exch_info(ticker=ticker)
@@ -298,9 +292,10 @@ def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.DEFAULT_LEVEL):
                 return pd.DataFrame()
 
     info_log = f'{q_tckr} / {cur_dt} / {typ}'
-    cur_miss = missing.current_missing(ticker=ticker, dt=dt, typ=typ, func='bdib')
+    miss_kw = dict(ticker=ticker, dt=dt, typ=typ, func='bdib')
+    cur_miss = missing.current_missing(**miss_kw)
     if cur_miss >= 2:
-        if batch: return
+        if batch: return pd.DataFrame()
         logger.info(f'{cur_miss} trials with no data {info_log}')
         return pd.DataFrame()
 
@@ -317,13 +312,13 @@ def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.DEFAULT_LEVEL):
 
     if data.empty:
         logger.warning(f'no data for {info_log} ...')
-        missing.update_missing(ticker=ticker, dt=dt, typ=typ, func='bdib')
+        missing.update_missing(**miss_kw)
         return pd.DataFrame()
 
     data = data.tz_localize('UTC').tz_convert(exch.tz)
     storage.save_intraday(data=data, ticker=ticker, dt=dt, typ=typ)
 
-    return None if batch else data
+    return pd.DataFrame() if batch else assist.format_intraday(data=data, ticker=ticker)
 
 
 def intraday(ticker, dt, session='', start_time=None, end_time=None, typ='TRADE'):
@@ -377,14 +372,14 @@ def earning(ticker, by='Geo', cache=False, **kwargs):
     Examples:
         >>> data = earning('AMD US Equity', Eqy_Fund_Year=2017, Number_Of_Periods=1)
         >>> data.round(2)
-                         Level  FY_2017  FY_2017_Pct
-        Asia-Pacific       1.0   3540.0        66.43
-           China           2.0   1747.0        49.35
-           Japan           2.0   1242.0        35.08
-           Singapore       2.0    551.0        15.56
-        United States      1.0   1364.0        25.60
-        Europe             1.0    263.0         4.94
-        Other Countries    1.0    162.0         3.04
+                         level  fy2017  fy2017_pct
+        Asia-Pacific       1.0  3540.0       66.43
+           China           2.0  1747.0       49.35
+           Japan           2.0  1242.0       35.08
+           Singapore       2.0   551.0       15.56
+        United States      1.0  1364.0       25.60
+        Europe             1.0   263.0        4.94
+        Other Countries    1.0   162.0        3.04
     """
     ovrd = 'G' if by[0].upper() == 'G' else 'P'
     new_kw = dict(cache=cache, raw=True, Product_Geo_Override=ovrd)

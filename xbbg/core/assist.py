@@ -141,14 +141,14 @@ def format_earning(data: pd.DataFrame, header: pd.DataFrame):
         ...     data=pd.read_pickle('xbbg/tests/data/sample_earning.pkl'),
         ...     header=pd.read_pickle('xbbg/tests/data/sample_earning_header.pkl')
         ... ).round(2)
-                         Level  FY_2017  FY_2017_Pct
-        Asia-Pacific       1.0   3540.0        66.43
-           China           2.0   1747.0        49.35
-           Japan           2.0   1242.0        35.08
-           Singapore       2.0    551.0        15.56
-        United States      1.0   1364.0        25.60
-        Europe             1.0    263.0         4.94
-        Other Countries    1.0    162.0         3.04
+                         level  fy2017  fy2017_pct
+        Asia-Pacific       1.0  3540.0       66.43
+           China           2.0  1747.0       49.35
+           Japan           2.0  1242.0       35.08
+           Singapore       2.0   551.0       15.56
+        United States      1.0  1364.0       25.60
+        Europe             1.0   263.0        4.94
+        Other Countries    1.0   162.0        3.04
     """
     if data.dropna(subset=['value']).empty: return pd.DataFrame()
 
@@ -161,28 +161,31 @@ def format_earning(data: pd.DataFrame, header: pd.DataFrame):
     res = res.iloc[1:].transpose().reset_index().apply(
         pd.to_numeric, downcast='float', errors='ignore'
     )
-    res.rename(columns=lambda vv: '_'.join(vv.split()), inplace=True)
+    res.rename(
+        columns=lambda vv: '_'.join(vv.lower().split()).replace('fy_', 'fy'),
+        inplace=True,
+    )
 
-    years = res.columns[res.columns.str.startswith('FY_')]
-    lvl_1 = res.Level == 1
+    years = res.columns[res.columns.str.startswith('fy')]
+    lvl_1 = res.level == 1
     for yr in years:
         res.loc[:, yr] = res.loc[:, yr].round(1)
-        pct = f'{yr}_Pct'
+        pct = f'{yr}_pct'
         res.loc[:, pct] = 0.
         res.loc[lvl_1, pct] = res.loc[lvl_1, pct].astype(float).round(1)
         res.loc[lvl_1, pct] = res.loc[lvl_1, yr] / res.loc[lvl_1, yr].sum() * 100
         sub_pct = []
         for _, snap in res[::-1].iterrows():
-            if snap.Level > 2: continue
-            if snap.Level == 1:
+            if snap.level > 2: continue
+            if snap.level == 1:
                 if len(sub_pct) == 0: continue
                 sub = pd.concat(sub_pct, axis=1).transpose()
                 res.loc[sub.index, pct] = \
                     res.loc[sub.index, yr] / res.loc[sub.index, yr].sum() * 100
                 sub_pct = []
-            if snap.Level == 2: sub_pct.append(snap)
+            if snap.level == 2: sub_pct.append(snap)
 
-    res.set_index('Segment_Name', inplace=True)
+    res.set_index('segment_name', inplace=True)
     res.index.name = None
     return res
 
@@ -203,7 +206,7 @@ def format_output(data: pd.DataFrame, source, col_maps=None):
         >>> format_output(
         ...     data=pd.read_pickle('xbbg/tests/data/sample_bdp.pkl'),
         ...     source='bdp'
-        ... )
+        ... ).reset_index()
                   ticker                        name
         0  QQQ US Equity  INVESCO QQQ TRUST SERIES 1
         1  SPY US Equity      SPDR S&P 500 ETF TRUST
@@ -222,9 +225,9 @@ def format_output(data: pd.DataFrame, source, col_maps=None):
 
     if source == 'bdp':
         res = pd.DataFrame(pd.concat([
-            pd.Series({**{'Ticker': t}, **grp.set_index('field').value.to_dict()})
+            pd.Series({**{'ticker': t}, **grp.set_index('field').value.to_dict()})
             for t, grp in data.groupby('ticker')
-        ], axis=1, sort=False)).transpose()
+        ], axis=1, sort=False)).transpose().set_index('ticker')
     else:
         res = pd.DataFrame(pd.concat([
             grp.loc[:, ['name', 'value']].set_index('name')
@@ -239,6 +242,37 @@ def format_output(data: pd.DataFrame, source, col_maps=None):
             vv, vv.lower().replace(' ', '_').replace('-', '_')
         )
     ).apply(pd.to_numeric, errors='ignore', downcast='float')
+
+
+def format_intraday(data: pd.DataFrame, ticker):
+    """
+    Format intraday data
+
+    Args:
+        data: pd.DataFrame from bdib
+        ticker: ticker
+
+    Returns:
+        pd.DataFrame
+
+    Examples:
+        >>> format_intraday(
+        ...     data=pd.read_parquet('xbbg/tests/data/sample_bdib.parq'),
+        ...     ticker='SPY US Equity',
+        ... )[[('SPY US Equity', 'close')]]
+        ticker                    SPY US Equity
+        field                             close
+        2018-12-28 09:30:00-05:00        249.67
+        2018-12-28 09:31:00-05:00        249.54
+        2018-12-28 09:32:00-05:00        249.22
+        2018-12-28 09:33:00-05:00        249.01
+        2018-12-28 09:34:00-05:00        248.86
+    """
+    if data.empty: return pd.DataFrame()
+    data.columns = pd.MultiIndex.from_product([
+        [ticker], data.rename(columns=dict(numEvents='num_trds')).columns
+    ], names=['ticker', 'field'])
+    return data
 
 
 def info_qry(tickers, flds):

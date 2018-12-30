@@ -4,6 +4,7 @@ ignore:
   - xbbg/core/missing.py
   - xbbg/core/pdblp.py
   - xbbg/io/files.py
+  - xbbg/io/cached.py
   - "xbbg/markets/*"
   - "xbbg/tests/*"
   - "*/__init__.py"

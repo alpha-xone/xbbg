@@ -5,5 +5,5 @@ pandas>=0.23.4
 pdblp>=0.1.7
 pyarrow>=0.11.1
 pytz>=2018.7
-pytest>=4.0.1
 PyYAML>=3.13
+pytest

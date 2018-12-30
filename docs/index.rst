@@ -31,7 +31,7 @@ Requirements
 
 - pdblp_ - pandas wrapper for Bloomberg Open API
 
-- numpy, pandas and pyarrow
+- numpy, pandas, pyyaml and pyarrow
 
 .. _pdblp: https://github.com/matthewgilbert/pdblp
 .. _download: https://bloomberg.bintray.com/BLPAPI-Experimental-Generic/blpapi_cpp_3.12.2.1-linux.tar.gz
@@ -60,8 +60,9 @@ Basics
 
     In[2]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Name'])
     Out[2]:
-               ticker security_name        gics_sector_name
-    0  NVDA US Equity   NVIDIA Corp  Information Technology
+                   security_name        gics_sector_name
+    ticker
+    NVDA US Equity   NVIDIA Corp  Information Technology
 
 ``BDP`` with overrides:
 
@@ -69,8 +70,9 @@ Basics
 
     In[3]: blp.bdp('AAPL US Equity', 'Eqy_Weighted_Avg_Px', VWAP_Dt='20181224')
     Out[3]:
-               ticker  eqy_weighted_avg_px
-    0  AAPL US Equity               148.75
+                    eqy_weighted_avg_px
+    ticker
+    AAPL US Equity               148.75
 
 ``BDH`` example:
 
@@ -158,12 +160,13 @@ Intraday bars ``BDIB`` example:
 
     In[8]: blp.bdib(ticker='BHP AU Equity', dt='2018-10-17').tail()
     Out[8]:
-                               open  high   low  close   volume  numEvents
-    2018-10-17 15:56:00+11:00 33.62 33.65 33.62  33.64    16660        126
-    2018-10-17 15:57:00+11:00 33.65 33.65 33.63  33.64    13875        156
-    2018-10-17 15:58:00+11:00 33.64 33.65 33.62  33.63    16244        159
-    2018-10-17 15:59:00+11:00 33.63 33.63 33.61  33.62    16507        167
-    2018-10-17 16:10:00+11:00 33.66 33.66 33.66  33.66  1115523        216
+    ticker                    BHP AU Equity
+    field                              open  high   low close   volume num_trds
+    2018-10-17 15:56:00+11:00         33.62 33.65 33.62 33.64    16660      126
+    2018-10-17 15:57:00+11:00         33.65 33.65 33.63 33.64    13875      156
+    2018-10-17 15:58:00+11:00         33.64 33.65 33.62 33.63    16244      159
+    2018-10-17 15:59:00+11:00         33.63 33.63 33.61 33.62    16507      167
+    2018-10-17 16:10:00+11:00         33.66 33.66 33.66 33.66  1115523      216
 
 Above example works because 1) ``AU`` in equity ticker is mapped to ``EquityAustralia`` in
 ``markets/assets.yml``, and 2) ``EquityAustralia`` is defined in ``markets/exch.yml``.
@@ -176,12 +179,13 @@ Intraday bars within market session:
 
     In[9]: blp.intraday(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
     Out[9]:
-                                   open      high       low     close  volume  numEvents
-    2018-10-17 09:27:00+09:00 39,970.00 40,020.00 39,970.00 39,990.00   10800         44
-    2018-10-17 09:28:00+09:00 39,990.00 40,020.00 39,980.00 39,980.00    6300         33
-    2018-10-17 09:29:00+09:00 39,970.00 40,000.00 39,960.00 39,970.00    3300         21
-    2018-10-17 09:30:00+09:00 39,960.00 40,010.00 39,950.00 40,000.00    3100         19
-    2018-10-17 09:31:00+09:00 39,990.00 40,000.00 39,980.00 39,990.00    2000         15
+    ticker                    7974 JT Equity
+    field                               open      high       low     close volume num_trds
+    2018-10-17 09:27:00+09:00      39,970.00 40,020.00 39,970.00 39,990.00  10800       44
+    2018-10-17 09:28:00+09:00      39,990.00 40,020.00 39,980.00 39,980.00   6300       33
+    2018-10-17 09:29:00+09:00      39,970.00 40,000.00 39,960.00 39,970.00   3300       21
+    2018-10-17 09:30:00+09:00      39,960.00 40,010.00 39,950.00 40,000.00   3100       19
+    2018-10-17 09:31:00+09:00      39,990.00 40,000.00 39,980.00 39,990.00   2000       15
 
 Corporate earnings:
 
@@ -189,14 +193,14 @@ Corporate earnings:
 
     In[10]: blp.earning('AMD US Equity', by='Geo', Eqy_Fund_Year=2017, Number_Of_Periods=1)
     Out[10]:
-                     Level   FY_2017  FY_2017_Pct
-    Asia-Pacific      1.00  3,540.00        66.43
-        China         2.00  1,747.00        49.35
-        Japan         2.00  1,242.00        35.08
-        Singapore     2.00    551.00        15.56
-    United States     1.00  1,364.00        25.60
-    Europe            1.00    263.00         4.94
-    Other Countries   1.00    162.00         3.04
+                     level    fy2017  fy2017_pct
+    Asia-Pacific      1.00  3,540.00       66.43
+        China         2.00  1,747.00       49.35
+        Japan         2.00  1,242.00       35.08
+        Singapore     2.00    551.00       15.56
+    United States     1.00  1,364.00       25.60
+    Europe            1.00    263.00        4.94
+    Other Countries   1.00    162.00        3.04
 
 Dividends:
 
