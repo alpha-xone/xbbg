@@ -23,7 +23,7 @@ def get_logger(name_or_func, log_file='', level=LOG_LEVEL, types='stream', **kwa
         >>> get_logger(name_or_func='download_data', level='debug', types='stream')
         <Logger download_data (DEBUG)>
         >>> get_logger(name_or_func='preprocess', log_file='pre.log', types='file|stream')
-        <Logger preprocess (INFO)>
+        <Logger preprocess (CRITICAL)>
     """
     if isinstance(level, str): level = getattr(logging, level.upper())
     log_name = name_or_func if isinstance(name_or_func, str) else utils.func_scope(name_or_func)
