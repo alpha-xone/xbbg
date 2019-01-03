@@ -46,7 +46,11 @@ def get_interval(ticker, session):
         True
         >>> get_interval('Z 1 Index', 'allday_normal_30_30')
         Session(start_time='01:31', end_time='20:30')
+        >>> get_interval('GBP Curncy', 'day')
+        Session(start_time='17:02', end_time='17:00')
     """
+    if '_' not in session:
+        session = f'{session}_normal_0_0'
     interval = Intervals(ticker=ticker)
     ss_info = session.split('_')
     return getattr(interval, f'market_{ss_info.pop(1)}')(*ss_info)
@@ -128,7 +132,9 @@ class Intervals(object):
         s_time = shift_time(ss[0], int(after_open) + 1)
         e_time = shift_time(ss[-1], -int(before_close))
 
-        if pd.Timestamp(s_time) >= pd.Timestamp(e_time):
+        request_cross = pd.Timestamp(s_time) >= pd.Timestamp(e_time)
+        session_cross = pd.Timestamp(ss[0]) >= pd.Timestamp(ss[1])
+        if request_cross and (not session_cross):
             logger.warning(f'end time {e_time} is earlier than {s_time} ...')
             return SessNA
 
