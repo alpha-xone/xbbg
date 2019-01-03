@@ -45,7 +45,11 @@ def update_missing(**kwargs):
             cur_miss = json.load(fp=fp)
 
     cur_miss[key] = cur_miss.get(key, 0) + 1
-    while not os.access(empty_log, os.W_OK): time.sleep(1)
+    if files.exists(empty_log):
+        while not os.access(empty_log, os.W_OK): time.sleep(1)
+    else:
+        files.create_folder(empty_log, is_file=True)
+
     with open(empty_log, 'w') as fp:
         json.dump(cur_miss, fp=fp, indent=2)
 
