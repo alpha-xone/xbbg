@@ -2,13 +2,11 @@ import logging
 
 from xbbg.core import utils
 
-DEFAULT_LEVEL = 'CRITICAL'
+LOG_LEVEL = 'CRITICAL'
 LOG_FMT = '%(asctime)s:%(name)s:%(levelname)s:%(message)s'
 
 
-def get_logger(
-        name_or_func, log_file='', level=logging.INFO, types='stream', **kwargs
-):
+def get_logger(name_or_func, log_file='', level=LOG_LEVEL, types='stream', **kwargs):
     """
     Generate logger
 

@@ -24,7 +24,7 @@ def bdp_bds_cache(func, tickers, flds, **kwargs) -> ToQuery:
         ToQuery(ticker, flds, kwargs)
     """
     cache_data = []
-    log_level = kwargs.get('log', logs.DEFAULT_LEVEL)
+    log_level = kwargs.get('log', logs.LOG_LEVEL)
     logger = logs.get_logger(bdp_bds_cache, level=log_level)
     has_date = kwargs.pop('has_date', func == 'bds')
     cache = kwargs.get('cache', True)

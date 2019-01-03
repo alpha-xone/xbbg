@@ -40,7 +40,7 @@ def with_bloomberg(func):
             for n, (k, v) in enumerate(param.items()) if k != 'kwargs'
         }
         all_kw.update(kwargs)
-        log_level = kwargs.get('log', logs.DEFAULT_LEVEL)
+        log_level = kwargs.get('log', logs.LOG_LEVEL)
 
         for to_list in ['tickers', 'flds']:
             conv = all_kw.get(to_list, None)

@@ -37,7 +37,7 @@ def bdp(tickers, flds, cache=False, **kwargs):
                  ticker crncy
         0  IQ US Equity   USD
     """
-    logger = logs.get_logger(bdp, level=kwargs.pop('log', logs.DEFAULT_LEVEL))
+    logger = logs.get_logger(bdp, level=kwargs.pop('log', logs.LOG_LEVEL))
     con, _ = create_connection()
     ovrds = assist.proc_ovrds(**kwargs)
 
@@ -124,7 +124,7 @@ def bds(tickers, flds, cache=False, **kwargs):
         3       CAT UN            3.61
         4      CSCO UW            1.26
     """
-    logger = logs.get_logger(bds, level=kwargs.pop('log', logs.DEFAULT_LEVEL))
+    logger = logs.get_logger(bds, level=kwargs.pop('log', logs.LOG_LEVEL))
     con, _ = create_connection()
     ovrds = assist.proc_ovrds(**kwargs)
 
@@ -202,7 +202,7 @@ def bdh(tickers, flds, start_date, end_date='today', adjust=None, **kwargs):
         2014-06-06         645.57
         2014-06-09          93.70
     """
-    logger = logs.get_logger(bdh, level=kwargs.pop('log', logs.DEFAULT_LEVEL))
+    logger = logs.get_logger(bdh, level=kwargs.pop('log', logs.LOG_LEVEL))
 
     # Dividend adjustments
     if isinstance(adjust, str) and adjust:
@@ -238,7 +238,7 @@ def bdh(tickers, flds, start_date, end_date='today', adjust=None, **kwargs):
 
 
 @with_bloomberg
-def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.DEFAULT_LEVEL) -> pd.DataFrame:
+def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.LOG_LEVEL) -> pd.DataFrame:
     """
     Download intraday data and save to cache
 
@@ -483,7 +483,7 @@ def active_futures(ticker: str, dt):
 
 
 @with_bloomberg
-def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.DEFAULT_LEVEL):
+def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.LOG_LEVEL):
     """
     Get proper ticker from generic ticker
 
