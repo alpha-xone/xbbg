@@ -177,6 +177,10 @@ def ccy_pair(local, base='USD'):
         CurrencyPair(ticker='GBP Curncy', factor=0.01, power=1)
         >>> ccy_pair(local='XYZ', base='USD')
         CurrencyPair(ticker='', factor=1.0, power=1)
+        >>> ccy_pair(local='GBP', base='GBp')
+        CurrencyPair(ticker='', factor=0.01, power=1)
+        >>> ccy_pair(local='GBp', base='GBP')
+        CurrencyPair(ticker='', factor=100.0, power=1)
     """
     ccy_param = param.load_info(cat='ccy')
     if f'{local}{base}' in ccy_param:
@@ -186,6 +190,14 @@ def ccy_pair(local, base='USD'):
         info = ccy_param[f'{base}{local}']
         info['factor'] = 1. / info.get('factor', 1.)
         info['power'] = -info.get('power', 1)
+
+    elif base.lower() == local.lower():
+        info = dict(ticker='')
+        info['factor'] = 1.
+        if base[-1].lower() == base[-1]:
+            info['factor'] /= 100.
+        if local[-1].lower() == local[-1]:
+            info['factor'] *= 100.
 
     else:
         logger = logs.get_logger(ccy_pair)
