@@ -3,11 +3,11 @@ import logging
 from xbbg.core import utils
 
 DEFAULT_LEVEL = 'CRITICAL'
+LOG_FMT = '%(asctime)s:%(name)s:%(levelname)s:%(message)s'
 
 
 def get_logger(
-        name_or_func, log_file='', level=logging.INFO,
-        fmt='%(asctime)s:%(name)s:%(levelname)s:%(message)s', types='stream'
+        name_or_func, log_file='', level=logging.INFO, types='stream', **kwargs
 ):
     """
     Generate logger
@@ -16,17 +16,16 @@ def get_logger(
         name_or_func: logger name or current running function
         log_file: logger file
         level: level of logs - debug, info, error
-        fmt: log formats
         types: file or stream, or both
 
     Returns:
         logger
 
     Examples:
-        >>> get_logger('preprocess', log_file='xbbg/tests/pre.log', types='file|stream')
-        <Logger preprocess (INFO)>
-        >>> get_logger('download_data', level='debug', types='stream')
+        >>> get_logger(name_or_func='download_data', level='debug', types='stream')
         <Logger download_data (DEBUG)>
+        >>> get_logger(name_or_func='preprocess', log_file='pre.log', types='file|stream')
+        <Logger preprocess (INFO)>
     """
     if isinstance(level, str): level = getattr(logging, level.upper())
     log_name = name_or_func if isinstance(name_or_func, str) else utils.func_scope(name_or_func)
@@ -34,7 +33,7 @@ def get_logger(
     logger.setLevel(level=level)
 
     if not len(logger.handlers):
-        formatter = logging.Formatter(fmt=fmt)
+        formatter = logging.Formatter(fmt=kwargs.get('fmt', LOG_FMT))
 
         if 'file' in types:
             file_handler = logging.FileHandler(log_file)
