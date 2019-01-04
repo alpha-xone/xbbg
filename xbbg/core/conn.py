@@ -80,13 +80,17 @@ def with_bloomberg(func):
                     data=pd.read_parquet(data_file), ticker=all_kw['ticker']
                 )
 
-        raw = all_kw.pop('raw', False)
-        col_maps = all_kw.pop('col_maps', dict())
+        if scope.startswith('xbbg.blp.'):
+            raw = all_kw.pop('raw', False)
+            col_maps = all_kw.pop('col_maps', dict())
+        else:
+            raw, col_maps = False, dict()
+
         _, new = create_connection(port=port, timeout=timeout, restart=restart)
         res = func(**all_kw)
         if new: delete_connection()
 
-        if ('xbbg.blp.' in scope) and isinstance(res, list):
+        if scope.startswith('xbbg.blp.') and isinstance(res, list):
             final = cached_data + res
             if not final: return pd.DataFrame()
             res = pd.DataFrame(pd.concat(final, sort=False))
