@@ -31,6 +31,7 @@ def with_bloomberg(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
 
+        scope = utils.func_scope(func=func)
         param = inspect.signature(func).parameters
         port = kwargs.pop('port', _PORT_)
         timeout = kwargs.pop('timeout', _TIMEOUT_)
@@ -50,7 +51,7 @@ def with_bloomberg(func):
                 all_kw[to_list] = [conv]
 
         cached_data = []
-        if func.__name__ in ['bdp', 'bds']:
+        if scope in ['xbbg.blp.bdp', 'xbbg.blp.bds']:
             to_qry = cached.bdp_bds_cache(func=func.__name__, **all_kw)
             cached_data += to_qry.cached_data
 
@@ -67,7 +68,7 @@ def with_bloomberg(func):
             all_kw['tickers'] = to_qry.tickers
             all_kw['flds'] = to_qry.flds
 
-        if func.__name__ in ['bdib']:
+        if scope in ['xbbg.blp.bdib']:
             data_file = storage.hist_file(
                 ticker=all_kw['ticker'], dt=all_kw['dt'], typ=all_kw['typ'],
             )
@@ -85,12 +86,12 @@ def with_bloomberg(func):
         res = func(**all_kw)
         if new: delete_connection()
 
-        if isinstance(res, list):
+        if ('xbbg.blp.' in scope) and isinstance(res, list):
             final = cached_data + res
             if not final: return pd.DataFrame()
             res = pd.DataFrame(pd.concat(final, sort=False))
 
-        if (func.__name__ in ['bdp', 'bds']) and (not raw):
+        if (scope in ['xbbg.blp.bdp', 'xbbg.blp.bds']) and (not raw):
             res = assist.format_output(
                 data=res.reset_index(drop=True),
                 source=func.__name__, col_maps=col_maps,
