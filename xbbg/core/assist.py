@@ -155,9 +155,8 @@ def format_earning(data: pd.DataFrame, header: pd.DataFrame):
     res = pd.concat([
         grp.loc[:, ['value']].set_index(header.value)
         for _, grp in data.groupby(data.position)
-    ], axis=1)
+    ], axis=1).rename_axis(None)
     res.columns = res.iloc[0]
-    res.index.name = None
     res = res.iloc[1:].transpose().reset_index().apply(
         pd.to_numeric, downcast='float', errors='ignore'
     )
@@ -185,9 +184,7 @@ def format_earning(data: pd.DataFrame, header: pd.DataFrame):
                 sub_pct = []
             if snap.level == 2: sub_pct.append(snap)
 
-    res.set_index('segment_name', inplace=True)
-    res.index.name = None
-    return res
+    return res.set_index('segment_name').rename_axis(None)
 
 
 def format_output(data: pd.DataFrame, source, col_maps=None):

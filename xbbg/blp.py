@@ -171,13 +171,10 @@ def bdh(tickers, flds, start_date, end_date='today', adjust=None, **kwargs):
         pd.DataFrame
 
     Examples:
-        >>> d = bdh(
+        >>> bdh(
         ...     tickers='VIX Index', flds=['High', 'Low', 'Last_Price'],
         ...     start_date='2018-02-05', end_date='2018-02-07',
-        ... ).round(2)
-        >>> r = d.transpose()
-        >>> r.index.names = (None, None)
-        >>> r
+        ... ).round(2).transpose().rename_axis((None, None))
                               2018-02-05  2018-02-06  2018-02-07
         VIX Index High             38.80       50.30       31.64
                   Low              16.80       22.42       21.17
@@ -229,12 +226,10 @@ def bdh(tickers, flds, start_date, end_date='today', adjust=None, **kwargs):
         f'{assist.info_qry(tickers=tickers, flds=flds)}'
     )
 
-    data = con.bdh(
+    return con.bdh(
         tickers=tickers, flds=flds, elms=elms, ovrds=ovrds,
         start_date=s_dt, end_date=e_dt,
-    )
-    data.index.name = None
-    return data
+    ).rename_axis(None)
 
 
 @with_bloomberg
@@ -404,11 +399,12 @@ def dividend(tickers, typ='all', start_date=None, end_date=None, **kwargs):
         pd.DataFrame
 
     Examples:
-        >>> tickers = ['C US Equity', 'NVDA US Equity', 'MS US Equity']
-        >>> s_dt, e_dt = '2018-01-01', '2018-05-01'
-        >>> dvd = dividend(tickers=tickers, start_date=s_dt, end_date=e_dt)
-        >>> dvd.index.name = None
-        >>> dvd.loc[:, ['ex_date', 'rec_date', 'dvd_amt']].round(2)
+        >>> dividend(
+        ...     tickers=['C US Equity', 'NVDA US Equity', 'MS US Equity'],
+        ...     start_date='2018-01-01', end_date='2018-05-01'
+        ... ).rename_axis(None).loc[:, [
+        ...     'ex_date', 'rec_date', 'dvd_amt'
+        ... ]].round(2)
                            ex_date    rec_date  dvd_amt
         C US Equity     2018-02-02  2018-02-05     0.32
         MS US Equity    2018-04-27  2018-04-30     0.25
