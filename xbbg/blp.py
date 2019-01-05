@@ -160,9 +160,9 @@ def bdh(tickers, flds, start_date, end_date='today', adjust=None, **kwargs):
         flds: field(s)
         start_date: start date
         end_date: end date - default today
-        adjust: `all`, `dvd`, `normal`, `abn` (=abnormal), `split`, or None
+        adjust: `all`, `dvd`, `normal`, `abn` (=abnormal), `split`, `-` or None
                 exact match of above words will adjust for corresponding events
-                Case 0: `-` will ignore kwargs and use Bloomberg default (DPDF<GO>)
+                Case 0: `-` no adjustment for dividend or split
                 Case 1: `dvd` or `normal|abn` will adjust for all dividends except splits
                 Case 2: `adjust` will adjust for splits and ignore all dividends
                 Case 3: `all` == `dvd|split` == adjust for all
