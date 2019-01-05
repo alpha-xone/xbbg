@@ -49,6 +49,8 @@ What's New
 
 *0.1.22* - Remove PyYAML dependency due to security vulnerability
 
+*0.1.17* - Add ``adjust`` argument in ``bdh`` for easier dividend / split adjustments
+
 Tutorial
 ========
 

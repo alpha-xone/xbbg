@@ -43,6 +43,8 @@ pip install xbbg
 
 _0.1.22_ - Remove PyYAML dependency due to security vulnerability
 
+_0.1.17_ - Add `adjust` argument in `bdh` for easier dividend / split adjustments
+
 ## Tutorial
 
 ```python
