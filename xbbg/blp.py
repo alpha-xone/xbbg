@@ -127,6 +127,7 @@ def bds(tickers, flds, cache=False, **kwargs):
         4      CSCO UW            1.26
     """
     logger = logs.get_logger(bds, level=kwargs.pop('log', logs.LOG_LEVEL))
+    has_date = kwargs.pop('has_date', True)
     con, _ = create_connection()
     ovrds = assist.proc_ovrds(**kwargs)
 
@@ -140,7 +141,7 @@ def bds(tickers, flds, cache=False, **kwargs):
     qry_data = []
     for (ticker, fld), grp in data.groupby(['ticker', 'field']):
         data_file = storage.ref_file(
-            ticker=ticker, fld=fld, has_date=True, ext='pkl', cache=cache, **kwargs
+            ticker=ticker, fld=fld, has_date=has_date, ext='pkl', cache=cache, **kwargs
         )
         if data_file:
             if not files.exists(data_file): qry_data.append(grp)
