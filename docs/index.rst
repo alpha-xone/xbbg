@@ -31,7 +31,7 @@ Requirements
 
 - pdblp_ - pandas wrapper for Bloomberg Open API
 
-- numpy, pandas, pyyaml and pyarrow
+- numpy, pandas, ruamel.yaml and pyarrow
 
 .. _pdblp: https://github.com/matthewgilbert/pdblp
 .. _download: https://bloomberg.bintray.com/BLPAPI-Experimental-Generic/blpapi_cpp_3.12.2.1-linux.tar.gz
@@ -43,6 +43,11 @@ Installation
 
    pip install blpapi --index-url=https://bloomberg.bintray.com/pip/simple
    pip install xbbg
+
+What's New
+==========
+
+*0.1.22* - Remove PyYAML dependency due to security vulnerability
 
 Tutorial
 ========

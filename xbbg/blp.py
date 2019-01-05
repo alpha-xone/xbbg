@@ -3,8 +3,10 @@ import pandas as pd
 import sys
 import pytest
 
+from xbbg import const
 from xbbg.io import files, logs, storage
-from xbbg.core import utils, assist, const
+from xbbg.core import utils, assist
+
 from xbbg.core.timezone import DEFAULT_TZ
 from xbbg.core.conn import with_bloomberg, create_connection
 

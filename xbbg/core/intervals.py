@@ -3,8 +3,8 @@ import numpy as np
 
 from collections import namedtuple
 
+from xbbg import const
 from xbbg.io import logs, param
-from xbbg.core import const
 
 Session = namedtuple('Session', ['start_time', 'end_time'])
 SessNA = Session(None, None)

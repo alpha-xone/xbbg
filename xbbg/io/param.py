@@ -1,7 +1,8 @@
 import pandas as pd
 
-import yaml
 import os
+
+from ruamel.yaml import YAML
 
 from xbbg.io import files
 
@@ -55,7 +56,7 @@ def _load_yaml_(file_name):
     if not os.path.exists(file_name): return dict()
 
     with open(file_name, 'r', encoding='utf-8') as fp:
-        return yaml.safe_load(fp)
+        return YAML().load(stream=fp)
 
 
 def to_hour(num):

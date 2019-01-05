@@ -30,7 +30,7 @@ Bloomberg data toolkit for humans
 
 - [pdbdp](https://github.com/matthewgilbert/pdblp) - pandas wrapper for Bloomberg Open API
 
-- numpy, pandas, pyyaml and pyarrow
+- numpy, pandas, ruamel.yaml and pyarrow
 
 ## Installation
 
@@ -38,6 +38,10 @@ Bloomberg data toolkit for humans
 pip install blpapi --index-url=https://bloomberg.bintray.com/pip/simple
 pip install xbbg
 ```
+
+## What's New
+
+_0.1.22_ - Remove PyYAML dependency due to security vulnerability
 
 ## Tutorial
 

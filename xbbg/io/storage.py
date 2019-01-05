@@ -2,7 +2,8 @@ import pandas as pd
 
 import os
 
-from xbbg.core import utils, const, assist
+from xbbg import const
+from xbbg.core import utils, assist
 from xbbg.io import files, logs
 
 

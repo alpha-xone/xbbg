@@ -244,12 +244,9 @@ def market_timing(ticker, dt, timing='EOD', tz='local'):
         logger.error(f'required exchange info cannot be found in {ticker} ...')
         return ''
 
-    if timing == 'BOD':
-        mkt_time = exch.day[0]
-    elif timing == 'FINISHED':
-        mkt_time = exch.allday[-1]
-    else:
-        mkt_time = exch.day[-1]
+    mkt_time = {
+        'BOD': exch.day[0], 'FINISHED': exch.allday[-1]
+    }.get(timing, exch.day[-1])
 
     cur_dt = pd.Timestamp(str(dt)).strftime('%Y-%m-%d')
     if tz == 'local':
