@@ -83,6 +83,7 @@ def with_bloomberg(func):
         if scope.startswith('xbbg.blp.'):
             raw = all_kw.pop('raw', False)
             col_maps = all_kw.pop('col_maps', dict())
+            all_kw.pop('has_date')
         else:
             raw, col_maps = False, dict()
 
