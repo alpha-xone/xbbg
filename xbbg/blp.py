@@ -11,7 +11,9 @@ from xbbg.core.timezone import DEFAULT_TZ
 from xbbg.core.conn import with_bloomberg, create_connection
 
 if hasattr(pytest, 'config'):
-    if not pytest.config.option.get('with_bbg', False):
+    if 'with_bbg' not in pytest.config.option:
+        pytest.skip('no Bloomberg')
+    if not pytest.config.option.with_bbg:
         pytest.skip('no Bloomberg')
 
 if hasattr(sys, 'pytest_call'): create_connection()

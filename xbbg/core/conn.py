@@ -17,6 +17,8 @@ _CON_SYM_ = '_xcon_'
 _PORT_, _TIMEOUT_ = 8194, 30000
 
 if hasattr(pytest, 'config'):
+    if 'with_bbg' not in pytest.config.option:
+        pytest.skip('no Bloomberg')
     if not pytest.config.option.with_bbg:
         pytest.skip('no Bloomberg')
 
