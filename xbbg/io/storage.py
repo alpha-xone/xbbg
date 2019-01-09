@@ -1,6 +1,7 @@
 import pandas as pd
 
 import os
+import re
 
 from xbbg import const
 from xbbg.core import utils, assist
@@ -95,6 +96,12 @@ def ref_file(ticker: str, fld: str, has_date=False, cache=False, ext='parq', **k
         ...     has_date=True, cache=True, ext='pkl'
         ... )
         >>> exist_file == updated_file
+        False
+        >>> exist_file = ref_file(
+        ...     'AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101',
+        ...     DVD_End_Dt='20180501', has_date=True, cache=True, ext='pkl'
+        ... )
+        >>> exist_file == updated_file
         True
     """
     data_path = os.environ.get(assist.BBG_ROOT, '').replace('\\', '/')
@@ -109,13 +116,15 @@ def ref_file(ticker: str, fld: str, has_date=False, cache=False, ext='parq', **k
     # Check date info
     if has_date:
         cur_dt = utils.cur_time()
-        cur_files = files.all_files(path_name=root, keyword=info, ext=ext)
         missing = f'{root}/asof={cur_dt}, {info}.{ext}'
+        to_find = re.compile(rf'{root}/asof=(.*), {info}\.pkl')
+        cur_files = list(filter(to_find.match, sorted(
+            files.all_files(path_name=root, keyword=info, ext=ext)
+        )))
         if len(cur_files) > 0:
-            upd_dt = [val for val in sorted(cur_files)[-1][:-4].split(', ') if 'asof=' in val]
-            if len(upd_dt) > 0:
-                diff = pd.Timestamp('today') - pd.Timestamp(upd_dt[0].split('=')[-1])
-                if diff >= pd.Timedelta('10D'): return missing
+            upd_dt = to_find.match(cur_files[-1]).group(1)
+            diff = pd.Timestamp('today') - pd.Timestamp(upd_dt)
+            if diff >= pd.Timedelta('10D'): return missing
             return sorted(cur_files)[-1]
         else: return missing
 
