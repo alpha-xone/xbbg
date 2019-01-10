@@ -12,6 +12,8 @@ verify_ssl = true
 ipykernel = "*"
 pytest = "*"
 xone = "*"
+pytest-cov = "*"
+coverage = "*"
 
 [packages]
 numpy = "*"

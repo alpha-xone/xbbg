@@ -6,7 +6,6 @@ Latest Release |pypi|
 \              |version|
 Docs           |docs|
 Build          |travis|
-\              |azure|
 Coverage       |codecov|
 Quality        |codacy|
 \              |codeFactor|
