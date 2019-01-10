@@ -82,14 +82,10 @@ def with_bloomberg(func):
                     data=pd.read_parquet(data_file), ticker=all_kw['ticker']
                 )
 
-        if scope.startswith('xbbg.blp.'):
-            raw = all_kw.pop('raw', False)
-            col_maps = all_kw.pop('col_maps', dict())
-        else:
-            raw, col_maps = False, dict()
-
         _, new = create_connection(port=port, timeout=timeout, restart=restart)
-        res = func(**all_kw)
+        res = func(**{
+            k: v for k, v in all_kw.items() if k not in ['raw', 'col_maps']
+        })
         if new: delete_connection()
 
         if scope.startswith('xbbg.blp.') and isinstance(res, list):
@@ -97,10 +93,11 @@ def with_bloomberg(func):
             if not final: return pd.DataFrame()
             res = pd.DataFrame(pd.concat(final, sort=False))
 
-        if (scope in ['xbbg.blp.bdp', 'xbbg.blp.bds']) and (not raw):
+        if (scope in ['xbbg.blp.bdp', 'xbbg.blp.bds']) \
+                and (not all_kw.get('raw', False)):
             res = assist.format_output(
-                data=res.reset_index(drop=True),
-                source=func.__name__, col_maps=col_maps,
+                data=res.reset_index(drop=True), source=func.__name__,
+                col_maps=all_kw.get('col_maps', dict()),
             )
 
         return res

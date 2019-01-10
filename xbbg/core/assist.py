@@ -6,6 +6,8 @@ from xbbg.core import utils
 #     to enable xbbg saving data locally
 BBG_ROOT = 'BBG_ROOT'
 
+PRSV_COLS = ['raw', 'has_date', 'cache', 'cache_days', 'col_maps']
+
 ELEMENTS = [
     'periodicityAdjustment', 'periodicitySelection', 'currency',
     'nonTradingDayFillOption', 'nonTradingDayFillMethod',
@@ -67,10 +69,12 @@ def proc_ovrds(**kwargs):
     Examples:
         >>> proc_ovrds(DVD_Start_Dt='20180101')
         [('DVD_Start_Dt', '20180101')]
+        >>> proc_ovrds(DVD_Start_Dt='20180101', cache=True, has_date=True)
+        [('DVD_Start_Dt', '20180101')]
     """
     return [
         (k, v) for k, v in kwargs.items()
-        if k not in list(ELEM_KEYS.keys()) + list(ELEM_KEYS.values())
+        if k not in list(ELEM_KEYS.keys()) + list(ELEM_KEYS.values()) + PRSV_COLS
     ]
 
 
@@ -95,11 +99,14 @@ def proc_elms(**kwargs):
         [('periodicitySelection', 'WEEKLY'), ('overrideOption', 'OVERRIDE_OPTION_GPA')]
         >>> proc_elms(QuoteType='Y')
         [('pricingOption', 'PRICING_OPTION_YIELD')]
+        >>> proc_elms(QuoteType='Y', cache=True)
+        [('pricingOption', 'PRICING_OPTION_YIELD')]
     """
     return [
         (ELEM_KEYS.get(k, k), ELEM_VALS.get(ELEM_KEYS.get(k, k), dict()).get(v, v))
         for k, v in kwargs.items()
-        if k in list(ELEM_KEYS.keys()) + list(ELEM_KEYS.values())
+        if (k in list(ELEM_KEYS.keys()) + list(ELEM_KEYS.values()))
+        and (k not in PRSV_COLS)
     ]
 
 

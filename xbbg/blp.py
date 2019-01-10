@@ -20,15 +20,14 @@ if hasattr(sys, 'pytest_call'): create_connection()
 
 
 @with_bloomberg
-def bdp(tickers, flds, cache=False, **kwargs):
+def bdp(tickers, flds, **kwargs):
     """
     Bloomberg reference data
 
     Args:
         tickers: tickers
         flds: fields to query
-        cache: bool - use cache to store data
-        **kwargs: overrides
+        **kwargs: bbg overrides
 
     Returns:
         pd.DataFrame
@@ -50,13 +49,13 @@ def bdp(tickers, flds, cache=False, **kwargs):
         f'{assist.info_qry(tickers=tickers, flds=flds)}'
     )
     data = con.ref(tickers=tickers, flds=flds, ovrds=ovrds)
-    if not cache: return [data]
+    if not kwargs.get('cache', False): return [data]
 
     qry_data = []
     for r, snap in data.iterrows():
         subset = [r]
         data_file = storage.ref_file(
-            ticker=snap.ticker, fld=snap.field, ext='pkl', cache=cache, **kwargs
+            ticker=snap.ticker, fld=snap.field, ext='pkl', **kwargs
         )
         if data_file:
             if not files.exists(data_file): qry_data.append(data.iloc[subset])
@@ -67,14 +66,13 @@ def bdp(tickers, flds, cache=False, **kwargs):
 
 
 @with_bloomberg
-def bds(tickers, flds, cache=False, **kwargs):
+def bds(tickers, flds, **kwargs):
     """
     Bloomberg block data
 
     Args:
         tickers: ticker(s)
         flds: field(s)
-        cache: whether read from cache
         **kwargs: other overrides for query
           -> raw: raw output from `pdbdp` library, default False
 
@@ -129,7 +127,6 @@ def bds(tickers, flds, cache=False, **kwargs):
         4      CSCO UW            1.26
     """
     logger = logs.get_logger(bds, level=kwargs.pop('log', logs.LOG_LEVEL))
-    has_date = kwargs.pop('has_date', True)
     con, _ = create_connection()
     ovrds = assist.proc_ovrds(**kwargs)
 
@@ -138,12 +135,13 @@ def bds(tickers, flds, cache=False, **kwargs):
         f'{assist.info_qry(tickers=tickers, flds=flds)}'
     )
     data = con.bulkref(tickers=tickers, flds=flds, ovrds=ovrds)
-    if not cache: return [data]
+    if not kwargs.get('cache', False): return [data]
 
     qry_data = []
     for (ticker, fld), grp in data.groupby(['ticker', 'field']):
         data_file = storage.ref_file(
-            ticker=ticker, fld=fld, has_date=has_date, ext='pkl', cache=cache, **kwargs
+            ticker=ticker, fld=fld, ext='pkl',
+            has_date=kwargs.get('has_date', True), **kwargs
         )
         if data_file:
             if not files.exists(data_file): qry_data.append(grp)
