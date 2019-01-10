@@ -108,6 +108,7 @@ def ref_file(ticker: str, fld: str, has_date=False, cache=False, ext='parq', **k
     if (not data_path) or (not cache): return ''
 
     proper_ticker = ticker.replace('/', '_')
+    cache_days = kwargs.pop('cache_days', 10)
     root = f'{data_path}/{ticker.split()[-1]}/{proper_ticker}/{fld}'
 
     if len(kwargs) > 0: info = utils.to_str(kwargs)[1:-1].replace('|', '_')
@@ -124,7 +125,7 @@ def ref_file(ticker: str, fld: str, has_date=False, cache=False, ext='parq', **k
         if len(cur_files) > 0:
             upd_dt = to_find.match(cur_files[-1]).group(1)
             diff = pd.Timestamp('today') - pd.Timestamp(upd_dt)
-            if diff >= pd.Timedelta('10D'): return missing
+            if diff >= pd.Timedelta(days=cache_days): return missing
             return sorted(cur_files)[-1]
         else: return missing
 

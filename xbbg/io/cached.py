@@ -7,7 +7,7 @@ from xbbg.core import utils
 from xbbg.io import files, logs, storage
 
 ToQuery = namedtuple('ToQuery', ['tickers', 'flds', 'cached_data'])
-EXC_COLS = ['tickers', 'flds', 'cache', 'raw', 'log', 'col_maps']
+EXC_COLS = ['tickers', 'flds', 'raw', 'log', 'col_maps']
 
 
 def bdp_bds_cache(func, tickers, flds, **kwargs) -> ToQuery:
@@ -26,8 +26,8 @@ def bdp_bds_cache(func, tickers, flds, **kwargs) -> ToQuery:
     cache_data = []
     log_level = kwargs.get('log', logs.LOG_LEVEL)
     logger = logs.get_logger(bdp_bds_cache, level=log_level)
-    has_date = kwargs.pop('has_date', func == 'bds')
-    cache = kwargs.get('cache', True)
+    kwargs['has_date'] = kwargs.pop('has_date', func == 'bds')
+    kwargs['cache'] = kwargs.get('cache', True)
 
     tickers = utils.flatten(tickers)
     flds = utils.flatten(flds)
@@ -35,8 +35,9 @@ def bdp_bds_cache(func, tickers, flds, **kwargs) -> ToQuery:
 
     for ticker, fld in product(tickers, flds):
         data_file = storage.ref_file(
-            ticker=ticker, fld=fld, has_date=has_date, cache=cache, ext='pkl',
-            **{k: v for k, v in kwargs.items() if k not in EXC_COLS}
+            ticker=ticker, fld=fld, ext='pkl', **{
+                k: v for k, v in kwargs.items() if k not in EXC_COLS
+            }
         )
         if not files.exists(data_file): continue
         logger.debug(f'reading from {data_file} ...')
