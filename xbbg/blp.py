@@ -12,7 +12,7 @@ from xbbg.core.conn import with_bloomberg, create_connection
 
 if hasattr(pytest, 'config'):
     if 'with_bbg' not in pytest.config.option:
-        pytest.skip('no Bloomberg')
+        pytest.skip('not in xbbg scope')
     if not pytest.config.option.with_bbg:
         pytest.skip('no Bloomberg')
 
@@ -22,7 +22,7 @@ if hasattr(sys, 'pytest_call'): create_connection()
 @with_bloomberg
 def bdp(tickers, flds, cache=False, **kwargs):
     """
-    Get reference data and save to
+    Bloomberg reference data
 
     Args:
         tickers: tickers
@@ -69,7 +69,7 @@ def bdp(tickers, flds, cache=False, **kwargs):
 @with_bloomberg
 def bds(tickers, flds, cache=False, **kwargs):
     """
-    Download block data from Bloomberg
+    Bloomberg block data
 
     Args:
         tickers: ticker(s)
@@ -240,7 +240,7 @@ def bdh(tickers, flds, start_date, end_date='today', adjust=None, **kwargs):
 @with_bloomberg
 def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.LOG_LEVEL) -> pd.DataFrame:
     """
-    Download intraday data and save to cache
+    Bloomberg intraday bar data
 
     Args:
         ticker: ticker name
@@ -323,7 +323,7 @@ def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.LOG_LEVEL) -> pd.DataFra
 
 def intraday(ticker, dt, session='', start_time=None, end_time=None, typ='TRADE'):
     """
-    Retrieve interval data for ticker
+    Bloomberg intraday bar data within market session
 
     Args:
         ticker: ticker
@@ -390,7 +390,7 @@ def earning(ticker, by='Geo', cache=False, **kwargs):
 
 def dividend(tickers, typ='all', start_date=None, end_date=None, **kwargs):
     """
-    Dividend history
+    Bloomberg dividend / split history
 
     Args:
         tickers: list of tickers
@@ -547,7 +547,7 @@ def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.LOG_LEVEL):
 @with_bloomberg
 def check_hours(tickers, tz_exch, tz_loc=DEFAULT_TZ):
     """
-    Check exchange hours for tickers
+    Check exchange hours vs local hours
 
     Args:
         tickers: list of tickers
