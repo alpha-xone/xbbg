@@ -13,7 +13,7 @@ CurrencyPair = namedtuple('CurrencyPair', ['ticker', 'factor', 'power'])
 ValidSessions = ['allday', 'day', 'am', 'pm', 'night', 'pre', 'post']
 
 
-def exch_info(ticker: str):
+def exch_info(ticker: str) -> pd.Series:
     """
     Exchange info for given ticker
 
@@ -62,7 +62,7 @@ def exch_info(ticker: str):
     return pd.Series(info)
 
 
-def market_info(ticker: str):
+def market_info(ticker: str) -> dict:
     """
     Get info for given market
 
@@ -157,7 +157,7 @@ def market_info(ticker: str):
     return dict()
 
 
-def ccy_pair(local, base='USD'):
+def ccy_pair(local, base='USD') -> CurrencyPair:
     """
     Currency pair info
 
@@ -209,7 +209,7 @@ def ccy_pair(local, base='USD'):
     return CurrencyPair(**info)
 
 
-def market_timing(ticker, dt, timing='EOD', tz='local'):
+def market_timing(ticker, dt, timing='EOD', tz='local') -> str:
     """
     Market close time for ticker
 

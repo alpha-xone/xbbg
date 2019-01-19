@@ -4,11 +4,12 @@ import time
 import pytz
 import inspect
 import sys
+import datetime
 
 DEFAULT_TZ = pytz.FixedOffset(-time.timezone / 60)
 
 
-def flatten(iterable, maps=None, unique=False):
+def flatten(iterable, maps=None, unique=False) -> list:
     """
     Flatten any array of items to list
 
@@ -58,7 +59,7 @@ def _to_gen_(iterable):
         else: yield elm
 
 
-def fmt_dt(dt, fmt='%Y-%m-%d'):
+def fmt_dt(dt, fmt='%Y-%m-%d') -> str:
     """
     Format date string
 
@@ -78,7 +79,7 @@ def fmt_dt(dt, fmt='%Y-%m-%d'):
     return pd.Timestamp(dt).strftime(fmt)
 
 
-def cur_time(typ='date', tz=DEFAULT_TZ):
+def cur_time(typ='date', tz=DEFAULT_TZ) -> (datetime.date, str):
     """
     Current time
 
@@ -123,7 +124,7 @@ class FString(object):
         return self.str_fmt.format(**kwargs)
 
 
-def fstr(fmt, **kwargs):
+def fstr(fmt, **kwargs) -> str:
     """
     Delayed evaluation of f-strings
 
@@ -147,7 +148,9 @@ def fstr(fmt, **kwargs):
     return f'{FString(str_fmt=fmt)}'
 
 
-def to_str(data: dict, fmt='{key}={value}', sep=', ', public_only=True):
+def to_str(
+        data: dict, fmt='{key}={value}', sep=', ', public_only=True
+) -> str:
     """
     Convert dict to string
 
@@ -178,7 +181,7 @@ def to_str(data: dict, fmt='{key}={value}', sep=', ', public_only=True):
     ]) + '}'
 
 
-def func_scope(func):
+def func_scope(func) -> str:
     """
     Function scope name
 

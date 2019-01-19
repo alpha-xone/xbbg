@@ -10,7 +10,7 @@ Session = namedtuple('Session', ['start_time', 'end_time'])
 SessNA = Session(None, None)
 
 
-def get_interval(ticker, session):
+def get_interval(ticker, session) -> Session:
     """
     Get interval from defined session
 
@@ -56,7 +56,7 @@ def get_interval(ticker, session):
     return getattr(interval, f'market_{ss_info.pop(1)}')(*ss_info)
 
 
-def shift_time(start_time, mins):
+def shift_time(start_time, mins) -> str:
     """
     Shift start time by mins
 
@@ -82,7 +82,7 @@ class Intervals(object):
         self.ticker = ticker
         self.exch = const.exch_info(ticker=ticker)
 
-    def market_open(self, session, mins):
+    def market_open(self, session, mins) -> Session:
         """
         Time intervals for market open
 
@@ -97,7 +97,7 @@ class Intervals(object):
         start_time = self.exch[session][0]
         return Session(start_time, shift_time(start_time, int(mins)))
 
-    def market_close(self, session, mins):
+    def market_close(self, session, mins) -> Session:
         """
         Time intervals for market close
 
@@ -112,7 +112,7 @@ class Intervals(object):
         end_time = self.exch[session][-1]
         return Session(shift_time(end_time, -int(mins) + 1), end_time)
 
-    def market_normal(self, session, after_open, before_close):
+    def market_normal(self, session, after_open, before_close) -> Session:
         """
         Time intervals between market
 
@@ -140,7 +140,7 @@ class Intervals(object):
 
         return Session(s_time, e_time)
 
-    def market_exact(self, session, start_time: str, end_time: str):
+    def market_exact(self, session, start_time: str, end_time: str) -> Session:
         """
         Explicitly specify start time and end time
 

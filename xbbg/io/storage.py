@@ -8,7 +8,7 @@ from xbbg.core import utils, assist
 from xbbg.io import files, logs
 
 
-def hist_file(ticker: str, dt, typ='TRADE'):
+def hist_file(ticker: str, dt, typ='TRADE') -> str:
     """
     Data file location for Bloomberg historical data
 
@@ -36,7 +36,9 @@ def hist_file(ticker: str, dt, typ='TRADE'):
     return f'{data_path}/{asset}/{proper_ticker}/{typ}/{cur_dt}.parq'
 
 
-def ref_file(ticker: str, fld: str, has_date=False, cache=False, ext='parq', **kwargs):
+def ref_file(
+        ticker: str, fld: str, has_date=False, cache=False, ext='parq', **kwargs
+) -> str:
     """
     Data file location for Bloomberg reference data
 

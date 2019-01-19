@@ -152,7 +152,9 @@ def bds(tickers, flds, **kwargs):
 
 
 @with_bloomberg
-def bdh(tickers, flds, start_date, end_date='today', adjust=None, **kwargs):
+def bdh(
+        tickers, flds, start_date, end_date='today', adjust=None, **kwargs
+) -> pd.DataFrame:
     """
     Bloomberg historical data
 
@@ -319,7 +321,9 @@ def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.LOG_LEVEL) -> pd.DataFra
     return pd.DataFrame() if batch else assist.format_intraday(data=data, ticker=ticker)
 
 
-def intraday(ticker, dt, session='', start_time=None, end_time=None, typ='TRADE'):
+def intraday(
+        ticker, dt, session='', start_time=None, end_time=None, typ='TRADE'
+) -> pd.DataFrame:
     """
     Bloomberg intraday bar data within market session
 
@@ -349,13 +353,15 @@ def intraday(ticker, dt, session='', start_time=None, end_time=None, typ='TRADE'
         end_time = pd.Timestamp(ss.end_time).strftime(fmt)
 
     if start_time and end_time:
-        return cur_data.between_time(start_time=start_time, end_time=end_time)
+        return pd.DataFrame(
+            cur_data.between_time(start_time=start_time, end_time=end_time)
+        )
 
     return cur_data
 
 
 @with_bloomberg
-def earning(ticker, by='Geo', cache=False, **kwargs):
+def earning(ticker, by='Geo', cache=False, **kwargs) -> pd.DataFrame:
     """
     Earning exposures by Geo or Products
 
@@ -386,7 +392,9 @@ def earning(ticker, by='Geo', cache=False, **kwargs):
     return assist.format_earning(data=data, header=header)
 
 
-def dividend(tickers, typ='all', start_date=None, end_date=None, **kwargs):
+def dividend(
+        tickers, typ='all', start_date=None, end_date=None, **kwargs
+) -> pd.DataFrame:
     """
     Bloomberg dividend / split history
 
@@ -452,7 +460,7 @@ def dividend(tickers, typ='all', start_date=None, end_date=None, **kwargs):
 
 
 @with_bloomberg
-def active_futures(ticker: str, dt):
+def active_futures(ticker: str, dt) -> str:
     """
     Active futures contract
 
@@ -482,7 +490,7 @@ def active_futures(ticker: str, dt):
 
 
 @with_bloomberg
-def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.LOG_LEVEL):
+def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.LOG_LEVEL) -> str:
     """
     Get proper ticker from generic ticker
 
@@ -543,7 +551,7 @@ def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.LOG_LEVEL):
 
 
 @with_bloomberg
-def check_hours(tickers, tz_exch, tz_loc=DEFAULT_TZ):
+def check_hours(tickers, tz_exch, tz_loc=DEFAULT_TZ) -> pd.DataFrame:
     """
     Check exchange hours vs local hours
 

@@ -78,7 +78,7 @@ def proc_ovrds(**kwargs):
     ]
 
 
-def proc_elms(**kwargs):
+def proc_elms(**kwargs) -> list:
     """
     Bloomberg overrides for elements
 
@@ -110,7 +110,7 @@ def proc_elms(**kwargs):
     ]
 
 
-def info_key(ticker: str, dt, typ='TRADE', **kwargs):
+def info_key(ticker: str, dt, typ='TRADE', **kwargs) -> str:
     """
     Generate key from given info
 
@@ -132,7 +132,7 @@ def info_key(ticker: str, dt, typ='TRADE', **kwargs):
     ))
 
 
-def format_earning(data: pd.DataFrame, header: pd.DataFrame):
+def format_earning(data: pd.DataFrame, header: pd.DataFrame) -> pd.DataFrame:
     """
     Standardized earning outputs and add percentage by each blocks
 
@@ -194,7 +194,7 @@ def format_earning(data: pd.DataFrame, header: pd.DataFrame):
     return res.set_index('segment_name').rename_axis(None)
 
 
-def format_output(data: pd.DataFrame, source, col_maps=None):
+def format_output(data: pd.DataFrame, source, col_maps=None) -> pd.DataFrame:
     """
     Format `pdblp` outputs to column-based results
 
@@ -248,7 +248,7 @@ def format_output(data: pd.DataFrame, source, col_maps=None):
     ).apply(pd.to_numeric, errors='ignore', downcast='float')
 
 
-def format_intraday(data: pd.DataFrame, ticker):
+def format_intraday(data: pd.DataFrame, ticker) -> pd.DataFrame:
     """
     Format intraday data
 
@@ -279,7 +279,7 @@ def format_intraday(data: pd.DataFrame, ticker):
     return data
 
 
-def info_qry(tickers, flds):
+def info_qry(tickers, flds) -> str:
     """
     Logging info for given tickers and fields
 

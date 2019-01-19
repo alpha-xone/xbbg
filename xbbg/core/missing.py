@@ -8,12 +8,12 @@ from xbbg.core.assist import BBG_ROOT, info_key
 _MISSING_ = '_missing_'
 
 
-def current_missing(**kwargs):
+def current_missing(**kwargs) -> int:
     """
     Check number of trials for missing values
 
     Returns:
-        dict
+        int
     """
     cur_miss = globals().get(_MISSING_, dict())
     if not cur_miss:
@@ -27,7 +27,7 @@ def current_missing(**kwargs):
     return cur_miss.get(info_key(**kwargs), 0)
 
 
-def update_missing(**kwargs):
+def update_missing(**kwargs) -> dict:
     """
     Update number of trials for missing values
 

@@ -8,7 +8,7 @@ from xbbg.io import logs
 DEFAULT_TZ = pytz.FixedOffset(-time.timezone / 60)
 
 
-def get_tz(tz):
+def get_tz(tz) -> str:
     """
     Convert tz from ticker / shorthands to timezone
 
@@ -42,7 +42,7 @@ def get_tz(tz):
     return to_tz
 
 
-def tz_convert(dt, to_tz, from_tz=None):
+def tz_convert(dt, to_tz, from_tz=None) -> str:
     """
     Convert to tz
 

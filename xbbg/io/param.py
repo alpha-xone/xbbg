@@ -59,7 +59,7 @@ def _load_yaml_(file_name):
         return YAML().load(stream=fp)
 
 
-def to_hour(num):
+def to_hour(num) -> str:
     """
     Convert YAML input to hours
 
