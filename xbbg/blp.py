@@ -176,10 +176,13 @@ def bdh(
         pd.DataFrame
 
     Examples:
-        >>> bdh(
+        >>> res = bdh(
         ...     tickers='VIX Index', flds=['High', 'Low', 'Last_Price'],
         ...     start_date='2018-02-05', end_date='2018-02-07',
-        ... ).round(2).transpose().rename_axis((None, None))
+        ... ).round(2).transpose()
+        >>> res.index.name = None
+        >>> res.columns.name = None
+        >>> res
                               2018-02-05  2018-02-06  2018-02-07
         VIX Index High             38.80       50.30       31.64
                   Low              16.80       22.42       21.17
@@ -231,10 +234,12 @@ def bdh(
         f'{assist.info_qry(tickers=tickers, flds=flds)}'
     )
 
-    return con.bdh(
+    res = con.bdh(
         tickers=tickers, flds=flds, elms=elms, ovrds=ovrds,
         start_date=s_dt, end_date=e_dt,
-    ).rename_axis(None)
+    )
+    res.index.name = None
+    return res
 
 
 @with_bloomberg
@@ -415,12 +420,12 @@ def dividend(
         pd.DataFrame
 
     Examples:
-        >>> dividend(
+        >>> res = dividend(
         ...     tickers=['C US Equity', 'NVDA US Equity', 'MS US Equity'],
         ...     start_date='2018-01-01', end_date='2018-05-01'
-        ... ).rename_axis(None).loc[:, [
-        ...     'ex_date', 'rec_date', 'dvd_amt'
-        ... ]].round(2)
+        ... )
+        >>> res.index.name = None
+        >>> res.loc[:, ['ex_date', 'rec_date', 'dvd_amt']].round(2)
                            ex_date    rec_date  dvd_amt
         C US Equity     2018-02-02  2018-02-05     0.32
         MS US Equity    2018-04-27  2018-04-30     0.25
@@ -526,7 +531,7 @@ def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.LOG_LEVEL) -> str:
         return ''
 
     month_ext = 4 if asset == 'Comdty' else 2
-    months = pd.DatetimeIndex(start=dt, periods=max(idx + month_ext, 3), freq=freq)
+    months = pd.date_range(start=dt, periods=max(idx + month_ext, 3), freq=freq)
     logger.debug(f'pulling expiry dates for months: {months}')
 
     def to_fut(month):
