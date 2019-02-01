@@ -301,11 +301,16 @@ def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.LOG_LEVEL) -> pd.DataFra
 
     logger.info(f'loading data from Bloomberg: {info_log} ...')
     con, _ = create_connection()
-    data = con.bdib(
-        ticker=q_tckr, event_type=typ, interval=1,
-        start_datetime=time_idx[0].strftime(time_fmt),
-        end_datetime=time_idx[1].strftime(time_fmt),
-    )
+    try:
+        data = con.bdib(
+            ticker=q_tckr, event_type=typ, interval=1,
+            start_datetime=time_idx[0].strftime(time_fmt),
+            end_datetime=time_idx[1].strftime(time_fmt),
+        )
+    except KeyError:
+        # Ignores missing data errors from pdblp library
+        # Warning msg will be displayed later
+        data = pd.DataFrame()
 
     if not isinstance(data, pd.DataFrame):
         raise ValueError(f'unknown output format: {type(data)}')
