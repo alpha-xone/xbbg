@@ -2,6 +2,7 @@ import pandas as pd
 
 import sys
 import pytest
+import warnings
 
 from xbbg import const
 from xbbg.io import files, logs, storage
@@ -17,6 +18,11 @@ if hasattr(pytest, 'config'):
         pytest.skip('no Bloomberg')
 
 if hasattr(sys, 'pytest_call'): create_connection()
+
+# Suppress warnings from pyarrow under latest release of pandas
+warnings.filterwarnings(
+    action='ignore', category=FutureWarning, module='pyarrow',
+)
 
 
 @with_bloomberg
