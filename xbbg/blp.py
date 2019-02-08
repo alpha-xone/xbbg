@@ -416,8 +416,17 @@ def dividend(
 
     Args:
         tickers: list of tickers
-        typ: `all`, `dvd`, `split`, `split`, `gross`, `adjust`, `adj_fund`,
-             `with_amt`, `dvd_amt`, `gross_amt`, `projected`
+        typ: dividend adjustment type
+            `all`:       `DVD_Hist_All`
+            `dvd`:       `DVD_Hist`
+            `split`:     `Eqy_DVD_Hist_Splits`
+            `gross`:     `Eqy_DVD_Hist_Gross`
+            `adjust`:    `Eqy_DVD_Adjust_Fact`
+            `adj_fund`:  `Eqy_DVD_Adj_Fund`
+            `with_amt`:  `DVD_Hist_All_with_Amt_Status`
+            `dvd_amt`:   `DVD_Hist_with_Amt_Status`
+            `gross_amt`: `DVD_Hist_Gross_with_Amt_Stat`
+            `projected`: `BDVD_Pr_Ex_Dts_DVD_Amts_w_Ann`
         start_date: start date
         end_date: end date
         **kwargs: overrides
