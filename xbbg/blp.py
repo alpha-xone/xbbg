@@ -377,7 +377,7 @@ def intraday(ticker, dt, session='', **kwargs) -> pd.DataFrame:
 
     if start_time and end_time:
         kw = dict(start_time=start_time, end_time=end_time)
-        if not exch.empty():
+        if not exch.empty:
             cur_tz = cur_data.index.tz
             res = cur_data.tz_convert(exch.tz).between_time(**kw)
             if kwargs.get('keep_tz', False):
