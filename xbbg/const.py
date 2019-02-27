@@ -18,7 +18,7 @@ def exch_info(ticker: str) -> pd.Series:
     Exchange info for given ticker
 
     Args:
-        ticker: ticker
+        ticker: ticker or exchange
 
     Returns:
         pd.Series
@@ -43,8 +43,17 @@ def exch_info(ticker: str) -> pd.Series:
         dtype: object
         >>> exch_info('TESTTICKER Corp').empty
         True
+        >>> exch_info('US')
+        tz        America/New_York
+        allday      [04:00, 20:00]
+        day         [09:30, 16:00]
+        pre         [04:00, 09:30]
+        post        [16:01, 20:00]
+        dtype: object
     """
     logger = logs.get_logger(exch_info, level='debug')
+    if ' ' not in ticker.strip():
+        ticker = f'XYZ {ticker.strip()} Equity'
     info = param.load_info(cat='exch').get(
         market_info(ticker=ticker).get('exch', ''), dict()
     )
