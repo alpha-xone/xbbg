@@ -389,7 +389,9 @@ def intraday(ticker, dt, session='', **kwargs) -> pd.DataFrame:
 
 
 @with_bloomberg
-def earning(ticker, by='Geo', typ='Revenue', ccy=None, **kwargs) -> pd.DataFrame:
+def earning(
+        ticker, by='Geo', typ='Revenue', ccy=None, level=None, **kwargs
+) -> pd.DataFrame:
     """
     Earning exposures by Geo or Products
 
@@ -399,6 +401,7 @@ def earning(ticker, by='Geo', typ='Revenue', ccy=None, **kwargs) -> pd.DataFrame
         typ: type of earning, start with `PG_` in Bloomberg FLDS - default `Revenue`
              Examples: `Gross_Profit`, `Cost_Of_Revenue`, `Gross_Merch_Trans_Value`, etc.
         ccy: currency of earnings
+        level: hierarchy level of earnings
 
     Returns:
         pd.DataFrame
@@ -419,6 +422,7 @@ def earning(ticker, by='Geo', typ='Revenue', ccy=None, **kwargs) -> pd.DataFrame
     new_kw = dict(raw=True, Product_Geo_Override=ovrd)
     header = bds(tickers=ticker, flds='PG_Bulk_Header', **new_kw, **kwargs)
     if ccy: kwargs['Eqy_Fund_Crncy'] = ccy
+    if level: kwargs['PG_Hierarchy_Level'] = level
     data = bds(tickers=ticker, flds=f'PG_{typ}', **new_kw, **kwargs)
     return assist.format_earning(data=data, header=header)
 
