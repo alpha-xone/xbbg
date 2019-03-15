@@ -291,6 +291,7 @@ def format_intraday(data: pd.DataFrame, ticker, **kwargs) -> pd.DataFrame:
     data.columns = pd.MultiIndex.from_product([
         [ticker], data.rename(columns=dict(numEvents='num_trds')).columns
     ], names=['ticker', 'field'])
+    data.index.name = None
     if kwargs.get('price_only', False):
         kw_xs = dict(axis=1, level=1)
         return data.xs('close', **kw_xs).loc[
