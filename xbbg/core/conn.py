@@ -78,9 +78,7 @@ def with_bloomberg(func):
                 logger = logs.get_logger(func, level=log_level)
                 if all_kw.get('batch', False): return
                 logger.debug(f'reading from {data_file} ...')
-                return assist.format_intraday(
-                    data=pd.read_parquet(data_file), ticker=all_kw['ticker']
-                )
+                return assist.format_intraday(data=pd.read_parquet(data_file), **all_kw)
 
         _, new = create_connection(port=port, timeout=timeout, restart=restart)
         res = func(**{
@@ -104,9 +102,7 @@ def with_bloomberg(func):
     return wrapper
 
 
-def create_connection(
-        port=_PORT_, timeout=_TIMEOUT_, restart=False
-):
+def create_connection(port=_PORT_, timeout=_TIMEOUT_, restart=False):
     """
     Create Bloomberg connection
 

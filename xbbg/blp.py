@@ -3,6 +3,7 @@ import pandas as pd
 import sys
 import pytest
 import warnings
+from dateutil.relativedelta import relativedelta
 
 from xbbg import const
 from xbbg.io import files, logs, storage
@@ -159,7 +160,7 @@ def bds(tickers, flds, **kwargs):
 
 @with_bloomberg
 def bdh(
-        tickers, flds, start_date, end_date='today', adjust=None, **kwargs
+        tickers, flds=None, start_date=None, end_date='today', adjust=None, **kwargs
 ) -> pd.DataFrame:
     """
     Bloomberg historical data
@@ -231,25 +232,32 @@ def bdh(
     ovrds = assist.proc_ovrds(**kwargs)
 
     if isinstance(tickers, str): tickers = [tickers]
+    if flds is None: flds = ['Last_Price']
     if isinstance(flds, str): flds = [flds]
-    s_dt = utils.fmt_dt(start_date, fmt='%Y%m%d')
     e_dt = utils.fmt_dt(end_date, fmt='%Y%m%d')
+    if start_date is None:
+        start_date = pd.Timestamp(e_dt) - relativedelta(months=3)
+    s_dt = utils.fmt_dt(start_date, fmt='%Y%m%d')
 
     logger.info(
         f'loading historical data from Bloomberg:\n'
         f'{assist.info_qry(tickers=tickers, flds=flds)}'
     )
 
+    logger.debug(
+        f'\nflds={flds}\nelms={elms}\novrds={ovrds}\nstart_date={s_dt}\nend_date={e_dt}'
+    )
     res = con.bdh(
-        tickers=tickers, flds=flds, elms=elms, ovrds=ovrds,
-        start_date=s_dt, end_date=e_dt,
+        tickers=tickers, flds=flds, elms=elms, ovrds=ovrds, start_date=s_dt, end_date=e_dt
     )
     res.index.name = None
+    if (len(flds) == 1) and kwargs.get('keep_one', False):
+        return res.xs(flds[0], axis=1, level=1)
     return res
 
 
 @with_bloomberg
-def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.LOG_LEVEL) -> pd.DataFrame:
+def bdib(ticker, dt, typ='TRADE', **kwargs) -> pd.DataFrame:
     """
     Bloomberg intraday bar data
 
@@ -257,18 +265,20 @@ def bdib(ticker, dt, typ='TRADE', batch=False, log=logs.LOG_LEVEL) -> pd.DataFra
         ticker: ticker name
         dt: date to download
         typ: [TRADE, BID, ASK, BID_BEST, ASK_BEST, BEST_BID, BEST_ASK]
-        batch: whether is batch process to download data
-        log: level of logs
+        **kwargs:
+            batch: whether is batch process to download data
+            log: level of logs
 
     Returns:
         pd.DataFrame
     """
     from xbbg.core import missing
 
-    logger = logs.get_logger(bdib, level=log)
+    logger = logs.get_logger(bdib, level=kwargs.pop('log', logs.LOG_LEVEL))
 
     t_1 = pd.Timestamp('today').date() - pd.Timedelta('1D')
     whole_day = pd.Timestamp(dt).date() < t_1
+    batch = kwargs.pop('batch', False)
     if (not whole_day) and batch:
         logger.warning(f'querying date {t_1} is too close, ignoring download ...')
         return pd.DataFrame()
@@ -399,7 +409,6 @@ def earning(
         ticker: ticker name
         by: [G(eo), P(roduct)]
         typ: type of earning, start with `PG_` in Bloomberg FLDS - default `Revenue`
-             Examples: `Gross_Profit`, `Cost_Of_Revenue`, `Gross_Merch_Trans_Value`, etc.
         ccy: currency of earnings
         level: hierarchy level of earnings
 

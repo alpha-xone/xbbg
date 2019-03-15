@@ -6,7 +6,9 @@ from xbbg.core import utils
 #     to enable xbbg saving data locally
 BBG_ROOT = 'BBG_ROOT'
 
-PRSV_COLS = ['raw', 'has_date', 'cache', 'cache_days', 'col_maps']
+PRSV_COLS = [
+    'raw', 'has_date', 'cache', 'cache_days', 'col_maps', 'keep_one', 'price_only'
+]
 
 ELEMENTS = [
     'periodicityAdjustment', 'periodicitySelection', 'currency',
@@ -251,7 +253,7 @@ def format_output(data: pd.DataFrame, source, col_maps=None) -> pd.DataFrame:
     ).apply(pd.to_numeric, errors='ignore', downcast='float')
 
 
-def format_intraday(data: pd.DataFrame, ticker) -> pd.DataFrame:
+def format_intraday(data: pd.DataFrame, ticker, **kwargs) -> pd.DataFrame:
     """
     Format intraday data
 
@@ -266,7 +268,7 @@ def format_intraday(data: pd.DataFrame, ticker) -> pd.DataFrame:
         >>> format_intraday(
         ...     data=pd.read_parquet('xbbg/tests/data/sample_bdib.parq'),
         ...     ticker='SPY US Equity',
-        ... )[[('SPY US Equity', 'close')]]
+        ... ).xs('close', axis=1, level=1, drop_level=False)
         ticker                    SPY US Equity
         field                             close
         2018-12-28 09:30:00-05:00        249.67
@@ -274,12 +276,27 @@ def format_intraday(data: pd.DataFrame, ticker) -> pd.DataFrame:
         2018-12-28 09:32:00-05:00        249.22
         2018-12-28 09:33:00-05:00        249.01
         2018-12-28 09:34:00-05:00        248.86
+        >>> format_intraday(
+        ...     data=pd.read_parquet('xbbg/tests/data/sample_bdib.parq'),
+        ...     ticker='SPY US Equity', price_only=True
+        ... )
+        ticker                     SPY US Equity
+        2018-12-28 09:30:00-05:00         249.67
+        2018-12-28 09:31:00-05:00         249.54
+        2018-12-28 09:32:00-05:00         249.22
+        2018-12-28 09:33:00-05:00         249.01
+        2018-12-28 09:34:00-05:00         248.86
     """
     if data.empty: return pd.DataFrame()
     data.columns = pd.MultiIndex.from_product([
         [ticker], data.rename(columns=dict(numEvents='num_trds')).columns
     ], names=['ticker', 'field'])
-    return data
+    if kwargs.get('price_only', False):
+        kw_xs = dict(axis=1, level=1)
+        return data.xs('close', **kw_xs).loc[
+            data.xs('volume', **kw_xs).iloc[:, 0] > 0
+        ]
+    else: return data
 
 
 def info_qry(tickers, flds) -> str:
