@@ -294,9 +294,9 @@ def format_intraday(data: pd.DataFrame, ticker, **kwargs) -> pd.DataFrame:
     data.index.name = None
     if kwargs.get('price_only', False):
         kw_xs = dict(axis=1, level=1)
-        return data.xs('close', **kw_xs).loc[
-            data.xs('volume', **kw_xs).iloc[:, 0] > 0
-        ]
+        close = data.xs('close', **kw_xs)
+        volume = data.xs('volume', **kw_xs).iloc[:, 0]
+        return close.loc[volume > 0] if volume.min() > 0 else close
     else: return data
 
 
