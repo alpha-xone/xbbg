@@ -534,12 +534,12 @@ def active_futures(ticker: str, dt) -> str:
 
     fut_tk = bdp(tickers=[fut_1, fut_2], flds='Last_Tradeable_Dt', cache=True)
 
-    if pd.Timestamp(dt).month < pd.Timestamp(fut_tk.value[0]).month: return fut_1
+    if pd.Timestamp(dt).month < pd.Timestamp(fut_tk.last_tradeable_dt[0]).month: return fut_1
 
     d1 = bdib(ticker=f1, dt=dt)
     d2 = bdib(ticker=f2, dt=dt)
 
-    return fut_1 if d1.volume.sum() > d2.volume.sum() else fut_2
+    return fut_1 if d1[f1].volume.sum() > d2[f2].volume.sum() else fut_2
 
 
 @with_bloomberg
@@ -597,10 +597,10 @@ def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.LOG_LEVEL) -> str:
             logger.error(f'error downloading futures contracts (2nd trial) {e2}:\n{fut}')
             return ''
 
-    sub_fut = fut_matu[pd.DatetimeIndex(fut_matu.value) > dt]
+    sub_fut = fut_matu[pd.DatetimeIndex(fut_matu.last_tradeable_dt) > dt]
     logger.debug(f'futures full chain:\n{fut_matu.to_string()}')
     logger.debug(f'getting index {idx} from:\n{sub_fut.to_string()}')
-    return sub_fut.ticker.values[idx]
+    return sub_fut.index.values[idx]
 
 
 @with_bloomberg
