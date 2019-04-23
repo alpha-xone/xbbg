@@ -1,7 +1,5 @@
 import pandas as pd
 
-from xbbg.core import utils
-
 # Set os.environ['BBG_ROOT'] = '/your/bbg/data/path'
 #     to enable xbbg saving data locally
 BBG_ROOT = 'BBG_ROOT'
