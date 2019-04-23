@@ -1,11 +1,18 @@
-import json
 import os
-import time
 
 from xbbg.io import files
-from xbbg.core.assist import BBG_ROOT, info_key
+from xbbg.core import utils
+from xbbg.core.assist import BBG_ROOT
 
-_MISSING_ = '_missing_'
+
+def missing_info(**kwargs) -> str:
+    """
+    Full infomation for missing query
+    """
+    func = kwargs.pop('func', 'unknown')
+    if 'ticker' in kwargs: kwargs['ticker'] = kwargs['ticker'].replace('/', '_')
+    info = utils.to_str(kwargs, fmt='{value}', sep='/')[1:-1]
+    return f'{func}/{info}'
 
 
 def current_missing(**kwargs) -> int:
@@ -13,45 +20,23 @@ def current_missing(**kwargs) -> int:
     Check number of trials for missing values
 
     Returns:
-        int
+        int: number of trials already tried
     """
-    cur_miss = globals().get(_MISSING_, dict())
-    if not cur_miss:
-        data_path = os.environ.get(BBG_ROOT, '').replace('\\', '/')
-        empty_log = f'{data_path}/Logs/EmptyQueries.json'
-        if not files.exists(empty_log): return 0
-        with open(empty_log, 'r') as fp:
-            cur_miss = json.load(fp=fp)
-        globals()[_MISSING_] = cur_miss
-
-    return cur_miss.get(info_key(**kwargs), 0)
+    data_path = os.environ.get(BBG_ROOT, '').replace('\\', '/')
+    if not data_path: return 0
+    return len(files.all_files(f'{data_path}/Logs/{missing_info(**kwargs)}'))
 
 
-def update_missing(**kwargs) -> dict:
+def update_missing(**kwargs):
     """
     Update number of trials for missing values
-
-    Returns:
-        dict
     """
-    key = info_key(**kwargs)
-
     data_path = os.environ.get(BBG_ROOT, '').replace('\\', '/')
-    empty_log = f'{data_path}/Logs/EmptyQueries.json'
+    if not data_path: return
+    if len(kwargs) == 0: return
 
-    cur_miss = dict()
-    if files.exists(empty_log):
-        with open(empty_log, 'r') as fp:
-            cur_miss = json.load(fp=fp)
+    log_path = f'{data_path}/Logs/{missing_info(**kwargs)}'
 
-    cur_miss[key] = cur_miss.get(key, 0) + 1
-    if files.exists(empty_log):
-        while not os.access(empty_log, os.W_OK): time.sleep(1)
-    else:
-        files.create_folder(empty_log, is_file=True)
-
-    with open(empty_log, 'w') as fp:
-        json.dump(cur_miss, fp=fp, indent=2)
-
-    globals()[_MISSING_] = cur_miss
-    return cur_miss
+    cnt = len(files.all_files(log_path)) + 1
+    files.create_folder(log_path)
+    open(f'{log_path}/{cnt}.log', 'a').close()

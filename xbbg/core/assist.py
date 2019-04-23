@@ -112,28 +112,6 @@ def proc_elms(**kwargs) -> list:
     ]
 
 
-def info_key(ticker: str, dt, typ='TRADE', **kwargs) -> str:
-    """
-    Generate key from given info
-
-    Args:
-        ticker: ticker name
-        dt: date to download
-        typ: [TRADE, BID, ASK, BID_BEST, ASK_BEST, BEST_BID, BEST_ASK]
-        **kwargs: other kwargs
-
-    Returns:
-        str
-
-    Examples:
-        >>> info_key('X US Equity', '2018-02-01', OtherInfo='Any')
-        '{ticker=X US Equity, dt=2018-02-01, typ=TRADE, OtherInfo=Any}'
-    """
-    return utils.to_str(dict(
-        ticker=ticker, dt=pd.Timestamp(dt).strftime('%Y-%m-%d'), typ=typ, **kwargs
-    ))
-
-
 def format_earning(data: pd.DataFrame, header: pd.DataFrame) -> pd.DataFrame:
     """
     Standardized earning outputs and add percentage by each blocks

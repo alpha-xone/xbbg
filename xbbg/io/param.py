@@ -39,7 +39,12 @@ def load_info(cat):
     """
     res = _load_yaml_(f'{PKG_PATH}/markets/{cat}.yml')
     root = os.environ.get('BBG_ROOT', '').replace('\\', '/')
-    if root: res.update(_load_yaml_(f'{root}/markets/{cat}.yml'))
+    if not root: return res
+    for cat, ovrd in _load_yaml_(f'{root}/markets/{cat}.yml').items():
+        if isinstance(ovrd, dict):
+            if cat in res: res[cat].update(ovrd)
+            else: res[cat] = ovrd
+        if isinstance(ovrd, list) and isinstance(res[cat], list): res[cat] += ovrd
     return res
 
 
