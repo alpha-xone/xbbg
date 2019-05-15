@@ -28,7 +28,7 @@ Bloomberg data toolkit for humans
 
 - Bloomberg Open API (need to install manually as shown below)
 
-- [pdbdp](https://github.com/matthewgilbert/pdblp) - pandas wrapper for Bloomberg Open API
+- [pdblp](https://github.com/matthewgilbert/pdblp) - pandas wrapper for Bloomberg Open API
 
 - numpy, pandas, ruamel.yaml and pyarrow
 
