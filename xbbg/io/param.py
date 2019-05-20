@@ -37,14 +37,29 @@ def load_info(cat):
         >>> pd.Series(ovrd_exch['EquityUS']).allday
         [300, 2100]
     """
-    res = _load_yaml_(f'{PKG_PATH}/markets/{cat}.yml')
+    yaml_file = f'{PKG_PATH}/markets/{cat}.yml'
     root = os.environ.get('BBG_ROOT', '').replace('\\', '/')
-    if not root: return res
-    for cat, ovrd in _load_yaml_(f'{root}/markets/{cat}.yml').items():
-        if isinstance(ovrd, dict):
-            if cat in res: res[cat].update(ovrd)
-            else: res[cat] = ovrd
-        if isinstance(ovrd, list) and isinstance(res[cat], list): res[cat] += ovrd
+    yaml_ovrd = f'{root}/markets/{cat}.yml' if root else ''
+    if not files.exists(yaml_ovrd): yaml_ovrd = ''
+
+    pkl_file = f'{PKG_PATH}/markets/cached/{cat}.pkl'
+    ytime = files.file_modified_time(yaml_file)
+    if yaml_ovrd: ytime = max(ytime, files.file_modified_time(yaml_ovrd))
+    if files.exists(pkl_file) and files.file_modified_time(pkl_file) > ytime:
+        return pd.read_pickle(pkl_file).to_dict()
+
+    res = _load_yaml_(yaml_file)
+    if yaml_ovrd:
+        for cat, ovrd in _load_yaml_(yaml_ovrd).items():
+            if isinstance(ovrd, dict):
+                if cat in res: res[cat].update(ovrd)
+                else: res[cat] = ovrd
+            if isinstance(ovrd, list) and isinstance(res[cat], list):
+                res[cat] += ovrd
+
+    files.create_folder(pkl_file, is_file=True)
+    pd.Series(res).to_pickle(pkl_file)
+
     return res
 
 
