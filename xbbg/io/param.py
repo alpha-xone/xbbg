@@ -57,8 +57,9 @@ def load_info(cat):
             if isinstance(ovrd, list) and isinstance(res[cat], list):
                 res[cat] += ovrd
 
-    files.create_folder(pkl_file, is_file=True)
-    pd.Series(res).to_pickle(pkl_file)
+    if pkl_file:
+        files.create_folder(pkl_file, is_file=True)
+        pd.Series(res).to_pickle(pkl_file)
 
     return res
 
