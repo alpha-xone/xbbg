@@ -20,7 +20,6 @@ install:
 
 script:
   - flake8 --extend-ignore=E701,E501 xbbg
-  - chmod +x pytest
   - pytest --doctest-module --cov -v xbbg
 
 after_success:
