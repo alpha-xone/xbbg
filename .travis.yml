@@ -22,5 +22,8 @@ script:
   - flake8 --extend-ignore=E701,E501 xbbg
   - pytest --doctest-module --cov -v xbbg
 
+before_install:
+  - chmod +x build.sh
+
 after_success:
   - codecov --token=ff17768d-30bd-4917-98f2-a011606597ea
