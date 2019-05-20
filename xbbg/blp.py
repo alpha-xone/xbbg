@@ -409,6 +409,11 @@ def earning(
         ticker: ticker name
         by: [G(eo), P(roduct)]
         typ: type of earning, start with `PG_` in Bloomberg FLDS - default `Revenue`
+            `Revenue` - Revenue of the company
+            `Operating_Income` - Operating Income (also named as EBIT) of the company
+            `Assets` - Assets of the company
+            `Gross_Profit` - Gross profit of the company
+            `Capital_Expenditures` - Capital expenditures of the company
         ccy: currency of earnings
         level: hierarchy level of earnings
 
