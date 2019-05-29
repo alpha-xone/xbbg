@@ -10,7 +10,8 @@ from xbbg.io import files, logs, storage, cached
 
 try:
     import pdblp
-except ImportError:
+except ImportError as imp_err:
+    print(imp_err)
     pdblp = utils.load_module(f'{files.abspath(__file__)}/pdblp.py')
 
 _CON_SYM_ = '_xcon_'
