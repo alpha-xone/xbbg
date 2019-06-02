@@ -541,10 +541,12 @@ def active_futures(ticker: str, dt) -> str:
 
     if pd.Timestamp(dt).month < pd.Timestamp(fut_tk.last_tradeable_dt[0]).month: return fut_1
 
-    d1 = bdib(ticker=f1, dt=dt)
-    d2 = bdib(ticker=f2, dt=dt)
-
-    return fut_1 if d1[f1].volume.sum() > d2[f2].volume.sum() else fut_2
+    dts = pd.bdate_range(end=dt, periods=10)
+    volume = bdh(
+        fut_tk.index, flds='volume', start_date=dts[0], end_date=dts[-1], keep_one=True
+    )
+    if volume.empty: return fut_1
+    return volume.iloc[-1].idxmax()
 
 
 @with_bloomberg
@@ -564,6 +566,8 @@ def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.LOG_LEVEL) -> str:
     logger = logs.get_logger(fut_ticker, level=log)
     dt = pd.Timestamp(dt)
     t_info = gen_ticker.split()
+    pre_dt = pd.bdate_range(end='today', periods=1)[-1]
+    same_month = (pre_dt.month == dt.month) and (pre_dt.year == dt.year)
 
     asset = t_info[-1]
     if asset in ['Index', 'Curncy', 'Comdty']:
@@ -584,7 +588,7 @@ def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.LOG_LEVEL) -> str:
 
     def to_fut(month):
         return prefix + const.Futures[month.strftime('%b')] + \
-               month.strftime('%y')[-1] + ' ' + postfix
+            month.strftime('%y')[-1 if same_month else -2:] + ' ' + postfix
 
     fut = [to_fut(m) for m in months]
     logger.debug(f'trying futures: {fut}')
