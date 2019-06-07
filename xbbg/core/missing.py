@@ -11,6 +11,9 @@ def missing_info(**kwargs) -> str:
     """
     func = kwargs.pop('func', 'unknown')
     if 'ticker' in kwargs: kwargs['ticker'] = kwargs['ticker'].replace('/', '_')
+    for dt in ['dt', 'start_dt', 'end_dt', 'start_date', 'end_date']:
+        if dt not in kwargs: continue
+        kwargs[dt] = utils.fmt_dt(kwargs[dt])
     info = utils.to_str(kwargs, fmt='{value}', sep='/')[1:-1]
     return f'{func}/{info}'
 
