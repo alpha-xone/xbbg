@@ -29,6 +29,7 @@ NTN+1MUSD:
 
 CNYHKD:
   ticker: CNYHKD Curncy
+  power: -1
 
 CNHHKD:
   ticker: CNHHKD Curncy

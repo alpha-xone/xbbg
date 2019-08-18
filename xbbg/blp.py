@@ -606,6 +606,11 @@ def fut_ticker(gen_ticker: str, dt, freq: str, log=logs.LOG_LEVEL) -> str:
             logger.error(f'error downloading futures contracts (2nd trial) {e2}:\n{fut}')
             return ''
 
+    if 'last_tradeable_dt' not in fut_matu:
+        logger.warning(f'no futures found for {fut}')
+        return ''
+
+    fut_matu.sort_values(by='last_tradeable_dt', ascending=True, inplace=True)
     sub_fut = fut_matu[pd.DatetimeIndex(fut_matu.last_tradeable_dt) > dt]
     logger.debug(f'futures full chain:\n{fut_matu.to_string()}')
     logger.debug(f'getting index {idx} from:\n{sub_fut.to_string()}')

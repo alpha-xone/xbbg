@@ -29,7 +29,7 @@ Comdty:
 
 Curncy:
   - tickers: [
-      JPY, AUD, HKD, CNHHKD, CNH, EUR, GBP, GBPAUD,
+      JPY, AUD, HKD, CNHHKD, CNH, EUR, GBP, GBPAUD, SEK,
       GBPEUR, AUDGBP, GBPHKD, KWN, IRN, NTN, CNH1M, ZAR
     ]
     exch: CurrencyGeneric
@@ -79,6 +79,8 @@ Equity:
     exch: EquityDublin
   - exch_codes: [SQ, SM]
     exch: EquitySpain
+  - exch_codes: [SS]
+    exch: EquityStockholm
   - exch_codes: [US]
     exch: EquityUS
 
@@ -147,6 +149,8 @@ Index:
     exch: FuturesFinancialsICE
     freq: Q
     is_fut: True
+  - tickers: [OMX]
+    exch: IndexLondon
   - tickers: [UX]
     exch: FuturesCBOE
     freq: M

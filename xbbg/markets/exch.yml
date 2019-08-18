@@ -40,11 +40,11 @@ EquityTaiwan:
 
 EquityHongKong:
   tz: Asia/Hong_Kong
-  allday: [915, 1615]
+  allday: [845, 1615]
   day: [930, 1600]
   am: [930, 1200]
   pm: [1300, 1600]
-  pre: [0915, 930]
+  pre: [845, 930]
   post: [1601, 1615]
 
 EquityChina:
@@ -86,6 +86,12 @@ EquitySpain:
   post: [1631, 1700]
 
 EquityFrance:
+  tz: Europe/London
+  allday: [800, 1700]
+  day: [800, 1630]
+  post: [1631, 1700]
+
+EquityStockholm:
   tz: Europe/London
   allday: [800, 1700]
   day: [800, 1630]
