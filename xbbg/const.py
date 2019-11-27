@@ -135,7 +135,8 @@ def market_info(ticker: str) -> dict:
     if t_info[-1] == 'Comdty':
         for info in assets.get('Comdty', [dict()]):
             if 'tickers' not in info: continue
-            if t_info[0][:-1] in info['tickers']: return info
+            end_idx = -2 if t_info[-2].upper() in ['ELEC', 'PIT'] else -1
+            if ' '.join(t_info[:-end_idx])[:-1].rstrip() in info['tickers']: return info
         return dict()
 
     # =================================== #
