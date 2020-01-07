@@ -44,7 +44,7 @@ Installation
 What's New
 ==========
 
-*0.2.0* - Rewritten library to add subscription, BEQS, simplify interface and remove dependency of `pdblp`
+*0.5.0* - Rewritten library to add subscription, BEQS, simplify interface and remove dependency of `pdblp`
 
 *0.1.22* - Remove PyYAML dependency due to security vulnerability
 

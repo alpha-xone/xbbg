@@ -39,7 +39,7 @@ pip install xbbg
 
 ## What's New
 
-_0.2.0_ - Rewritten library to add subscription, BEQS, simplify interface and remove dependency of `pdblp`
+_0.5.0_ - Rewritten library to add subscription, BEQS, simplify interface and remove dependency of `pdblp`
 
 _0.1.22_ - Remove PyYAML dependency due to security vulnerability
 
