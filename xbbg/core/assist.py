@@ -5,7 +5,8 @@ import pandas as pd
 BBG_ROOT = 'BBG_ROOT'
 
 PRSV_COLS = [
-    'raw', 'has_date', 'cache', 'cache_days', 'col_maps', 'keep_one', 'price_only'
+    'raw', 'has_date', 'cache', 'cache_days', 'col_maps',
+    'keep_one', 'price_only', 'port', 'log',
 ]
 
 ELEMENTS = [

@@ -1,135 +1,118 @@
-import pandas as pd
+import blpapi
 
-import inspect
-import pytest
-
-from functools import wraps
-
-from xbbg.core import utils, assist
-from xbbg.io import files, logs, storage, cached
-
-try:
-    import pdblp
-except ImportError as imp_err:
-    print(imp_err)
-    pdblp = utils.load_module(f'{files.abspath(__file__)}/pdblp.py')
+from xbbg.io import logs
 
 _CON_SYM_ = '_xcon_'
-_PORT_, _TIMEOUT_ = 8194, 30000
-
-if hasattr(pytest, 'config'):
-    if 'with_bbg' not in pytest.config.option:
-        pytest.skip('no Bloomberg')
-    if not pytest.config.option.with_bbg:
-        pytest.skip('no Bloomberg')
+_PORT_ = 8194
 
 
-def with_bloomberg(func):
+def connect_bbg(**kwargs) -> blpapi.session.Session:
     """
-    Wrapper function for Bloomberg connection
+    Create Bloomberg session and make connection
+    """
+    logger = logs.get_logger(connect_bbg, **kwargs)
+
+    sess_opts = blpapi.SessionOptions()
+    sess_opts.setServerHost('localhost')
+    sess_opts.setServerPort(kwargs.get('port', _PORT_))
+    session = blpapi.Session(sess_opts)
+    logger.debug('Connecting to Bloomberg ...')
+    if session.start(): return session
+    else: raise ConnectionError('Cannot connect to Bloomberg')
+
+
+def bbg_session(**kwargs) -> blpapi.session.Session:
+    """
+    Bloomberg session - initiate if not given
 
     Args:
-        func: function to wrap
-    """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-
-        scope = utils.func_scope(func=func)
-        param = inspect.signature(func).parameters
-        port = kwargs.pop('port', _PORT_)
-        timeout = kwargs.pop('timeout', _TIMEOUT_)
-        restart = kwargs.pop('restart', False)
-        all_kw = {
-            k: args[n] if n < len(args) else v.default
-            for n, (k, v) in enumerate(param.items()) if k != 'kwargs'
-        }
-        all_kw.update(kwargs)
-        log_level = kwargs.get('log', logs.LOG_LEVEL)
-
-        for to_list in ['tickers', 'flds']:
-            conv = all_kw.get(to_list, None)
-            if hasattr(conv, 'tolist'):
-                all_kw[to_list] = getattr(conv, 'tolist')()
-            if isinstance(conv, str):
-                all_kw[to_list] = [conv]
-
-        cached_data = []
-        if scope in ['xbbg.blp.bdp', 'xbbg.blp.bds']:
-            to_qry = cached.bdp_bds_cache(func=func.__name__, **all_kw)
-            cached_data += to_qry.cached_data
-
-            if not (to_qry.tickers and to_qry.flds):
-                if not cached_data: return pd.DataFrame()
-                res = pd.concat(cached_data, sort=False).reset_index(drop=True)
-                if not all_kw.get('raw', False):
-                    res = assist.format_output(
-                        data=res, source=func.__name__,
-                        col_maps=all_kw.get('col_maps', dict())
-                    )
-                return res
-
-            all_kw['tickers'] = to_qry.tickers
-            all_kw['flds'] = to_qry.flds
-
-        if scope in ['xbbg.blp.bdib']:
-            data_file = storage.hist_file(
-                ticker=all_kw['ticker'], dt=all_kw['dt'], typ=all_kw['typ'],
-            )
-            if files.exists(data_file):
-                logger = logs.get_logger(func, level=log_level)
-                if all_kw.get('batch', False): return
-                logger.debug(f'reading from {data_file} ...')
-                return assist.format_intraday(data=pd.read_parquet(data_file), **all_kw)
-
-        _, new = create_connection(port=port, timeout=timeout, restart=restart)
-        res = func(**{
-            k: v for k, v in all_kw.items() if k not in ['raw', 'col_maps']
-        })
-        if new: delete_connection()
-
-        if scope.startswith('xbbg.blp.') and isinstance(res, list):
-            final = cached_data + res
-            if not final: return pd.DataFrame()
-            res = pd.DataFrame(pd.concat(final, sort=False))
-
-        if (scope in ['xbbg.blp.bdp', 'xbbg.blp.bds']) \
-                and (not all_kw.get('raw', False)):
-            res = assist.format_output(
-                data=res.reset_index(drop=True), source=func.__name__,
-                col_maps=all_kw.get('col_maps', dict()),
-            )
-
-        return res
-    return wrapper
-
-
-def create_connection(port=_PORT_, timeout=_TIMEOUT_, restart=False):
-    """
-    Create Bloomberg connection
+        **kwargs:
+            port: port number (default 8194)
+            restart: whether to restart session
 
     Returns:
-        (Bloomberg connection, if connection is new)
+        Bloomberg session instance
     """
-    if _CON_SYM_ in globals():
-        if not isinstance(globals()[_CON_SYM_], pdblp.BCon):
-            del globals()[_CON_SYM_]
+    port = kwargs.get('port', _PORT_)
+    con_sym = f'{_CON_SYM_}//{port}'
 
-    if (_CON_SYM_ in globals()) and (not restart):
-        con = globals()[_CON_SYM_]
-        if getattr(con, '_session').start(): con.start()
-        return con, False
+    if con_sym in globals():
+        if not isinstance(globals()[con_sym], blpapi.session.Session):
+            del globals()[con_sym]
 
-    else:
-        con = pdblp.BCon(port=port, timeout=timeout)
-        globals()[_CON_SYM_] = con
-        con.start()
-        return con, True
+    if con_sym not in globals():
+        globals()[con_sym] = connect_bbg(port=port, **kwargs)
+
+    return globals()[con_sym]
 
 
-def delete_connection():
+def _service_symbol_(service: str, **kwargs) -> str:
     """
-    Stop and destroy Bloomberg connection
+    Service symbol for global storage
+
+    Args:
+        service: service name
+        **kwargs:
+            port: port number
+
+    Returns:
+        str: name of service symbol
     """
-    if _CON_SYM_ in globals():
-        con = globals().pop(_CON_SYM_)
-        if not getattr(con, '_session').start(): con.stop()
+    port = kwargs.get('port', _PORT_)
+    return f'{_CON_SYM_}/{port}{service}'
+
+
+def bbg_service(service: str, **kwargs) -> blpapi.service.Service:
+    """
+    Initiate service
+
+    Args:
+        service: service name
+        **kwargs:
+            port: port number
+
+    Returns:
+        Bloomberg service
+    """
+    serv_sym = _service_symbol_(service=service, **kwargs)
+    if serv_sym in globals():
+        if isinstance(globals()[serv_sym], blpapi.service.Service):
+            return globals()[serv_sym]
+        else: del globals()[serv_sym]
+    return _init_service_(service=service, **kwargs)
+
+
+def event_types() -> dict:
+    """
+    Bloomberg event types
+    """
+    return {
+        getattr(blpapi.Event, ev_typ): ev_typ
+        for ev_typ in dir(blpapi.Event) if ev_typ.isupper()
+    }
+
+
+# noinspection PyBroadException
+def _init_service_(service: str, **kwargs) -> blpapi.service.Service:
+    """
+    Initiate service
+    """
+    logger = logs.get_logger(_init_service_, **kwargs)
+    try:
+        _get_service_(service=service, **kwargs)
+    except Exception:
+        logger.debug(f'Initiating {service} ...')
+        bbg_session(**kwargs).openService(service)
+        try:
+            return _get_service_(service=service, **kwargs)
+        except Exception:
+            raise ConnectionError(f'Cannot initiate {service}')
+
+
+def _get_service_(service: str, **kwargs) -> blpapi.service.Service:
+    """
+    Get service after initiation
+    """
+    serv_sym = _service_symbol_(service=service, **kwargs)
+    globals()[serv_sym] = bbg_session(**kwargs).getService(service)
+    return globals()[serv_sym]

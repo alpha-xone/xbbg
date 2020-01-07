@@ -24,6 +24,7 @@ def get_logger(name_or_func, level=LOG_LEVEL, types='stream', **kwargs):
         >>> get_logger(name_or_func='preprocess', log_file='pre.log', types='file|stream')
         <Logger preprocess (CRITICAL)>
     """
+    if 'log' in kwargs: level = kwargs['log']
     if isinstance(level, str): level = getattr(logging, level.upper())
     log_name = utils.func_scope(name_or_func) if callable(name_or_func) else name_or_func
     logger = logging.getLogger(name=log_name)

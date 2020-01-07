@@ -4,11 +4,11 @@ import os
 import re
 
 from xbbg import const
-from xbbg.core import utils, assist
 from xbbg.io import files, logs
+from xbbg.core import utils, assist
 
 
-def hist_file(ticker: str, dt, typ='TRADE') -> str:
+def bar_file(ticker: str, dt, typ='TRADE') -> str:
     """
     Data file location for Bloomberg historical data
 
@@ -22,10 +22,10 @@ def hist_file(ticker: str, dt, typ='TRADE') -> str:
 
     Examples:
         >>> os.environ['BBG_ROOT'] = ''
-        >>> hist_file(ticker='ES1 Index', dt='2018-08-01') == ''
+        >>> bar_file(ticker='ES1 Index', dt='2018-08-01') == ''
         True
         >>> os.environ['BBG_ROOT'] = '/data/bbg'
-        >>> hist_file(ticker='ES1 Index', dt='2018-08-01')
+        >>> bar_file(ticker='ES1 Index', dt='2018-08-01')
         '/data/bbg/Index/ES1 Index/TRADE/2018-08-01.parq'
     """
     data_path = os.environ.get(assist.BBG_ROOT, '').replace('\\', '/')
@@ -51,7 +51,7 @@ def ref_file(
         **kwargs: other overrides passed to ref function
 
     Returns:
-        file location
+        str: file location
 
     Examples:
         >>> import shutil
@@ -113,7 +113,8 @@ def ref_file(
     cache_days = kwargs.pop('cache_days', 10)
     root = f'{data_path}/{ticker.split()[-1]}/{proper_ticker}/{fld}'
 
-    if len(kwargs) > 0: info = utils.to_str(kwargs)[1:-1].replace('|', '_')
+    ref_kw = {k: v for k, v in kwargs.items() if k not in assist.PRSV_COLS}
+    if len(ref_kw) > 0: info = utils.to_str(ref_kw)[1:-1].replace('|', '_')
     else: info = 'ovrd=None'
 
     # Check date info
@@ -159,7 +160,7 @@ def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE'):
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
     logger = logs.get_logger(save_intraday, level='debug')
     info = f'{ticker} / {cur_dt} / {typ}'
-    data_file = hist_file(ticker=ticker, dt=dt, typ=typ)
+    data_file = bar_file(ticker=ticker, dt=dt, typ=typ)
     if not data_file: return
 
     if data.empty:
