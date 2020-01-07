@@ -29,5 +29,5 @@ jobs:
 
   - script: |
       pip install pytest pytest-cov coverage codecov
-      pytest xbbg --doctest-module --cov -v
+      pytest xbbg --doctest-modules --cov -v
     displayName: Run Doctests and Coverages
