@@ -180,7 +180,7 @@ Intraday bars within market session:
 
 .. code-block:: python
 
-    In[9]: blp.intraday(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
+    In[9]: blp.bdib(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
     Out[9]:
                               7974 JT Equity
                                         open      high       low     close volume num_trds

@@ -196,7 +196,7 @@ To add new mappings, define `BBG_ROOT` in sys path and add `assets.yml` and
 - Intraday bars within market session:
 
 ```python
-In[9]: blp.intraday(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
+In[9]: blp.bdib(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
 ```
 
 ```pydocstring
