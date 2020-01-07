@@ -30,7 +30,7 @@ Comdty:
 Curncy:
   - tickers: [
       JPY, AUD, HKD, CNHHKD, CNH, EUR, GBP, GBPAUD, SEK,
-      GBPEUR, AUDGBP, GBPHKD, KWN, IRN, NTN, CNH1M, ZAR
+      GBPEUR, AUDGBP, GBPHKD, KWN, IRN, NTN, CNH1M, ZAR, CHF
     ]
     exch: CurrencyGeneric
   - tickers: [KRW]
