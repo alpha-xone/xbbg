@@ -28,8 +28,6 @@ Requirements
 
 - Bloomberg Open API (need to install manually as shown below)
 
-- pdblp_ - pandas wrapper for Bloomberg Open API
-
 - numpy, pandas, ruamel.yaml and pyarrow
 
 .. _pdblp: https://github.com/matthewgilbert/pdblp
@@ -45,6 +43,8 @@ Installation
 
 What's New
 ==========
+
+*0.2.0* - Rewritten library to add subscription, BEQS, simplify interface and remove dependency of `pdblp`
 
 *0.1.22* - Remove PyYAML dependency due to security vulnerability
 
@@ -67,7 +67,6 @@ Basics
     In[2]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Name'])
     Out[2]:
                    security_name        gics_sector_name
-    ticker
     NVDA US Equity   NVIDIA Corp  Information Technology
 
 ``BDP`` with overrides:
@@ -77,7 +76,6 @@ Basics
     In[3]: blp.bdp('AAPL US Equity', 'Eqy_Weighted_Avg_Px', VWAP_Dt='20181224')
     Out[3]:
                     eqy_weighted_avg_px
-    ticker
     AAPL US Equity               148.75
 
 ``BDH`` example:
@@ -89,8 +87,8 @@ Basics
       ...:     start_date='2018-10-10', end_date='2018-10-20',
       ...: )
     Out[4]:
-    ticker     SPX Index
-    field           High      Low Last_Price
+               SPX Index
+                    High      Low Last_Price
     2018-10-10  2,874.02 2,784.86   2,785.68
     2018-10-11  2,795.14 2,710.51   2,728.37
     2018-10-12  2,775.77 2,729.44   2,767.13
@@ -110,8 +108,8 @@ Basics
       ...:     Per='W', Fill='P', Days='A',
       ...: )
     Out[4]:
-    ticker     SHCOMP Index
-    field              High      Low Last_Price
+               SHCOMP Index
+                       High      Low Last_Price
     2018-09-28     2,827.34 2,771.16   2,821.35
     2018-10-05     2,827.34 2,771.16   2,821.35
     2018-10-12     2,771.94 2,536.66   2,606.91
@@ -126,8 +124,8 @@ Basics
       ...:     CshAdjNormal=False, CshAdjAbnormal=False, CapChg=False
       ...: )
     Out[5]:
-    ticker     AAPL US Equity
-    field             Px_Last
+               AAPL US Equity
+                      Px_Last
     2014-06-05         647.35
     2014-06-06         645.57
     2014-06-09          93.70
@@ -142,8 +140,8 @@ Basics
       ...:     CshAdjNormal=True, CshAdjAbnormal=True, CapChg=True
       ...: )
     Out[6]:
-    ticker     AAPL US Equity
-    field             Px_Last
+               AAPL US Equity
+                      Px_Last
     2014-06-05          85.45
     2014-06-06          85.22
     2014-06-09          86.58
@@ -156,7 +154,6 @@ Basics
     In[7]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_End_Dt='20180531')
     Out[7]:
                    declared_date     ex_date record_date payable_date  dividend_amount dividend_frequency dividend_type
-    ticker
     AAPL US Equity    2018-05-01  2018-05-11  2018-05-14   2018-05-17             0.73            Quarter  Regular Cash
     AAPL US Equity    2018-02-01  2018-02-09  2018-02-12   2018-02-15             0.63            Quarter  Regular Cash
 
@@ -166,8 +163,8 @@ Intraday bars ``BDIB`` example:
 
     In[8]: blp.bdib(ticker='BHP AU Equity', dt='2018-10-17').tail()
     Out[8]:
-    ticker                    BHP AU Equity
-    field                              open  high   low close   volume num_trds
+                              BHP AU Equity
+                                       open  high   low close   volume num_trds
     2018-10-17 15:56:00+11:00         33.62 33.65 33.62 33.64    16660      126
     2018-10-17 15:57:00+11:00         33.65 33.65 33.63 33.64    13875      156
     2018-10-17 15:58:00+11:00         33.64 33.65 33.62 33.63    16244      159
@@ -185,8 +182,8 @@ Intraday bars within market session:
 
     In[9]: blp.intraday(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
     Out[9]:
-    ticker                    7974 JT Equity
-    field                               open      high       low     close volume num_trds
+                              7974 JT Equity
+                                        open      high       low     close volume num_trds
     2018-10-17 09:27:00+09:00      39,970.00 40,020.00 39,970.00 39,990.00  10800       44
     2018-10-17 09:28:00+09:00      39,990.00 40,020.00 39,980.00 39,980.00   6300       33
     2018-10-17 09:29:00+09:00      39,970.00 40,000.00 39,960.00 39,970.00   3300       21
@@ -215,7 +212,6 @@ Dividends:
     In[11]: blp.dividend(['C US Equity', 'MS US Equity'], start_date='2018-01-01', end_date='2018-05-01')
     Out[11]:
                     dec_date     ex_date    rec_date    pay_date  dvd_amt dvd_freq      dvd_type
-    ticker
     C US Equity   2018-01-18  2018-02-02  2018-02-05  2018-02-23     0.32  Quarter  Regular Cash
     MS US Equity  2018-04-18  2018-04-27  2018-04-30  2018-05-15     0.25  Quarter  Regular Cash
     MS US Equity  2018-01-18  2018-01-30  2018-01-31  2018-02-15     0.25  Quarter  Regular Cash
@@ -230,8 +226,8 @@ Dividends:
 
     In[12]: blp.bdh('AAPL US Equity', 'Px_Last', '20140606', '20140609', adjust='-')
     Out[12]:
-    ticker     AAPL US Equity
-    field             Px_Last
+               AAPL US Equity
+                      Px_Last
     2014-06-06         645.57
     2014-06-09          93.70
 
@@ -241,42 +237,10 @@ Dividends:
 
     In[13]: blp.bdh('AAPL US Equity', 'Px_Last', '20140606', '20140609', adjust='all')
     Out[13]:
-    ticker     AAPL US Equity
-    field             Px_Last
+               AAPL US Equity
+                      Px_Last
     2014-06-06          85.22
     2014-06-09          86.58
-
-Optimizations
--------------
-
-This library uses a global Bloomberg connection on the backend -
-more specically, ``_xcon_`` in ``globals()`` variable.
-Since initiation of connections takes time, if multiple queries are expected,
-manually create a new connection (which will be shared by all following queries)
-is helpful before calling any queries.
-
--  In command line, below command is helpful:
-
-.. code:: python
-
-    from xbbg import blp
-
-    blp.create_connection()
-
--  For functions, wrapper function is recommended (connections will be destroyed afterwards):
-
-.. code:: python
-
-    from xbbg import blp
-
-    @blp.with_bloomberg
-    def query_bbg():
-        """
-        All queries share the same connection
-        """
-        blp.bdp(...)
-        blp.bdh(...)
-        blp.bdib(...)
 
 Data Storage
 ------------
