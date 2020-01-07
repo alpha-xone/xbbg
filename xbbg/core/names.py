@@ -1,4 +1,6 @@
-import blpapi
+import pytest
+try: import blpapi
+except ImportError: blpapi = pytest.importorskip('blpapi')
 
 
 RESPONSE_ERROR = blpapi.Name("responseError")

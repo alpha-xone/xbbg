@@ -1,6 +1,8 @@
 import pandas as pd
 
-import blpapi
+import pytest
+try: import blpapi
+except ImportError: blpapi = pytest.importorskip('blpapi')
 
 from xbbg import const
 from xbbg.core.timezone import DEFAULT_TZ

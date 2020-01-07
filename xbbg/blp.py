@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 
-import blpapi
 import datetime
 
 from contextlib import contextmanager
@@ -24,6 +23,9 @@ def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
         pd.DataFrame
     """
     logger = logs.get_logger(bdp, **kwargs)
+
+    if isinstance(tickers, str): tickers = [tickers]
+    if isinstance(flds, str): flds = [flds]
 
     service = conn.bbg_service(service='//blp/refdata', **kwargs)
     request = service.createRequest('ReferenceDataRequest')
@@ -163,15 +165,52 @@ def bdib(
     Returns:
         pd.DataFrame
     """
-    logger = logs.get_logger(bdib, **kwargs)
+    from xbbg.core import missing
 
-    ss_rng = process.time_range(dt=dt, ticker=ticker, session=session)
-    data_file = storage.bar_file(ticker=ticker, dt=dt, typ=typ)
-    if files.exists(data_file):
-        return pd.read_parquet(data_file).loc[ss_rng[0]:ss_rng[1]]
+    logger = logs.get_logger(bdib, **kwargs)
 
     exch = const.exch_info(ticker=ticker)
     if exch.empty: raise KeyError(f'Cannot find exchange info for {ticker}')
+
+    ss_rng = process.time_range(dt=dt, ticker=ticker, session=session, tz=exch.tz)
+    data_file = storage.bar_file(ticker=ticker, dt=dt, typ=typ)
+    if files.exists(data_file):
+        logger.debug(f'Loading Bloomberg intraday data from: {data_file}')
+        return (
+            pd.read_parquet(data_file)
+            .pipe(pipeline.add_ticker, ticker=ticker)
+            .loc[ss_rng[0]:ss_rng[1]]
+        )
+
+    t_1 = pd.Timestamp('today').date() - pd.Timedelta('1D')
+    whole_day = pd.Timestamp(dt).date() < t_1
+    batch = kwargs.pop('batch', False)
+    if (not whole_day) and batch:
+        logger.warning(f'Querying date {t_1} is too close, ignoring download ...')
+        return pd.DataFrame()
+
+    cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
+    info_log = f'{ticker} / {cur_dt} / {typ}'
+
+    q_tckr = ticker
+    if exch.get('is_fut', False):
+        if 'freq' not in exch:
+            logger.error(f'[freq] missing in info for {info_log} ...')
+
+        is_sprd = exch.get('has_sprd', False) and (len(ticker[:-1]) != exch['tickers'][0])
+        if not is_sprd:
+            q_tckr = fut_ticker(gen_ticker=ticker, dt=dt, freq=exch['freq'])
+            if q_tckr == '':
+                logger.error(f'cannot find futures ticker for {ticker} ...')
+                return pd.DataFrame()
+
+    info_log = f'{q_tckr} / {cur_dt} / {typ}'
+    miss_kw = dict(ticker=ticker, dt=dt, typ=typ, func='bdib')
+    cur_miss = missing.current_missing(**miss_kw)
+    if cur_miss >= 2:
+        if batch: return pd.DataFrame()
+        logger.info(f'{cur_miss} trials with no data {info_log}')
+        return pd.DataFrame()
 
     service = conn.bbg_service(service='//blp/refdata', **kwargs)
     request = service.createRequest('IntradayBarRequest')
@@ -188,14 +227,18 @@ def bdib(
     conn.bbg_session(**kwargs).sendRequest(request)
 
     res = pd.DataFrame(process.receive_events(func=process.process_bar, ticker=ticker))
-    if res.empty: return pd.DataFrame()
+    if res.empty:
+        logger.warning(f'No data for {info_log} ...')
+        missing.update_missing(**miss_kw)
+        return pd.DataFrame()
+
     data = (
         pd.DataFrame(pd.concat(res.iloc[0].values, axis=1))
         .transpose()
         .tz_localize('UTC')
         .tz_convert(exch.tz)
     )
-    storage.save_intraday(data=data, ticker=ticker, dt=dt, typ=typ)
+    storage.save_intraday(data=data[ticker], ticker=ticker, dt=dt, typ=typ)
     return data.loc[ss_rng[0]:ss_rng[1]]
 
 
@@ -429,7 +472,7 @@ def live(
         Returns:
             dict
         """
-        conv = [blpapi.name.Name]
+        conv = [conn.blpapi.name.Name]
         if json: conv += [pd.Timestamp, datetime.time, datetime.date]
         if element.isNull(): return None
         value = element.getValue()
@@ -463,3 +506,96 @@ def live(
                         cnt += 1
             except ValueError as e: logger.debug(e)
             except KeyboardInterrupt: break
+
+
+def active_futures(ticker: str, dt, **kwargs) -> str:
+    """
+    Active futures contract
+    Args:
+        ticker: futures ticker, i.e., ESA Index, Z A Index, CLA Comdty, etc.
+        dt: date
+    Returns:
+        str: ticker name
+    """
+    t_info = ticker.split()
+    prefix, asset = ' '.join(t_info[:-1]), t_info[-1]
+    info = const.market_info(f'{prefix[:-1]}1 {asset}')
+
+    f1, f2 = f'{prefix[:-1]}1 {asset}', f'{prefix[:-1]}2 {asset}'
+    fut_2 = fut_ticker(gen_ticker=f2, dt=dt, freq=info['freq'], **kwargs)
+    fut_1 = fut_ticker(gen_ticker=f1, dt=dt, freq=info['freq'], **kwargs)
+
+    fut_tk = bdp(tickers=[fut_1, fut_2], flds='Last_Tradeable_Dt')
+
+    if pd.Timestamp(dt).month < pd.Timestamp(fut_tk.last_tradeable_dt[0]).month: return fut_1
+
+    dts = pd.bdate_range(end=dt, periods=10)
+    volume = bdh(
+        fut_tk.index, flds='volume', start_date=dts[0], end_date=dts[-1], keep_one=True
+    )
+    if volume.empty: return fut_1
+    return volume.iloc[-1].idxmax()
+
+
+def fut_ticker(gen_ticker: str, dt, freq: str, **kwargs) -> str:
+    """
+    Get proper ticker from generic ticker
+    Args:
+        gen_ticker: generic ticker
+        dt: date
+        freq: futures contract frequency
+    Returns:
+        str: exact futures ticker
+    """
+    logger = logs.get_logger(fut_ticker, **kwargs)
+    dt = pd.Timestamp(dt)
+    t_info = gen_ticker.split()
+    pre_dt = pd.bdate_range(end='today', periods=1)[-1]
+    same_month = (pre_dt.month == dt.month) and (pre_dt.year == dt.year)
+
+    asset = t_info[-1]
+    if asset in ['Index', 'Curncy', 'Comdty']:
+        ticker = ' '.join(t_info[:-1])
+        prefix, idx, postfix = ticker[:-1], int(ticker[-1]) - 1, asset
+
+    elif asset == 'Equity':
+        ticker = t_info[0]
+        prefix, idx, postfix = ticker[:-1], int(ticker[-1]) - 1, ' '.join(t_info[1:])
+
+    else:
+        logger.error(f'unkonwn asset type for ticker: {gen_ticker}')
+        return ''
+
+    month_ext = 4 if asset == 'Comdty' else 2
+    months = pd.date_range(start=dt, periods=max(idx + month_ext, 3), freq=freq)
+    logger.debug(f'pulling expiry dates for months: {months}')
+
+    def to_fut(month):
+        return prefix + const.Futures[month.strftime('%b')] + \
+            month.strftime('%y')[-1 if same_month else -2:] + ' ' + postfix
+
+    fut = [to_fut(m) for m in months]
+    logger.debug(f'trying futures: {fut}')
+    # noinspection PyBroadException
+    try:
+        fut_matu = bdp(tickers=fut, flds='last_tradeable_dt')
+    except Exception as e1:
+        logger.error(f'error downloading futures contracts (1st trial) {e1}:\n{fut}')
+        # noinspection PyBroadException
+        try:
+            fut = fut[:-1]
+            logger.debug(f'trying futures (2nd trial): {fut}')
+            fut_matu = bdp(tickers=fut, flds='last_tradeable_dt')
+        except Exception as e2:
+            logger.error(f'error downloading futures contracts (2nd trial) {e2}:\n{fut}')
+            return ''
+
+    if 'last_tradeable_dt' not in fut_matu:
+        logger.warning(f'no futures found for {fut}')
+        return ''
+
+    fut_matu.sort_values(by='last_tradeable_dt', ascending=True, inplace=True)
+    sub_fut = fut_matu[pd.DatetimeIndex(fut_matu.last_tradeable_dt) > dt]
+    logger.debug(f'futures full chain:\n{fut_matu.to_string()}')
+    logger.debug(f'getting index {idx} from:\n{sub_fut.to_string()}')
+    return sub_fut.index.values[idx]

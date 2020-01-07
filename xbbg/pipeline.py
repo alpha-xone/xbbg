@@ -108,3 +108,20 @@ def format_raw(data: pd.DataFrame) -> pd.DataFrame:
     if not cols.empty:
         res.loc[:, cols] = data.loc[:, cols].apply(pd.to_datetime, errors='ignore')
     return data
+
+
+def add_ticker(data: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    """
+    Add ticker as first layer of multi-index
+
+    Args:
+        data: raw data
+        ticker: ticker
+
+    Returns:
+        pd.DataFrame
+    """
+    data.columns = pd.MultiIndex.from_product([
+        [ticker], data.head().rename({'numEvents': 'num_trds'}).columns
+    ])
+    return data
