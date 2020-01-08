@@ -14,6 +14,7 @@ Quality        |codacy|
 \              |codebeat|
 License        |license|
 \              |lic_check|
+Release        |release|
 ============== ======================
 
 Features
@@ -297,4 +298,6 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 .. |lic_check| image:: https://app.fossa.com/api/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg.svg?type=shield
     :alt: FOSSA Status
     :target: https://app.fossa.com/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg
+.. |release| image:: https://zenodo.org/badge/157477269.svg
+   :target: https://zenodo.org/badge/latestdoi/157477269
 .. _Bloomberg API Library: https://www.bloomberg.com/professional/support/api-library/
