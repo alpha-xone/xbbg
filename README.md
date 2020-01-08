@@ -1,17 +1,18 @@
 # xbbg
 
-|                |                                                                                                                                                      |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Latest Release | [![PyPI version](https://img.shields.io/pypi/v/xbbg.svg)](https://badge.fury.io/py/xbbg)                                                             |
-|                | [![PyPI version](https://img.shields.io/pypi/pyversions/xbbg.svg)](https://badge.fury.io/py/xbbg)                                                    |
-| Docs           | [![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/en/latest)                        |
-| Build          | [![Travis CI](https://img.shields.io/travis/alpha-xone/xbbg/master.svg?logo=travis&label=Travis%20CI)](https://travis-ci.com/alpha-xone/xbbg)        |
-|                | [![Azure](https://dev.azure.com/alpha-xone/xbbg/_apis/build/status/alpha-xone.xbbg)](https://dev.azure.com/alpha-xone/xbbg/_build)                   |
-| Coverage       | [![codecov](https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg)](https://codecov.io/gh/alpha-xone/xbbg)                             |
-| Quality        | [![Codacy Badge](https://api.codacy.com/project/badge/Grade/2ec89be198cf4689a6a6c6407b0bc965)](https://www.codacy.com/app/alpha-xone/xbbg)           |
-|                | [![CodeFactor](https://www.codefactor.io/repository/github/alpha-xone/xbbg/badge)](https://www.codefactor.io/repository/github/alpha-xone/xbbg)      |
-|                | [![codebeat badge](https://codebeat.co/badges/eef1f14d-72eb-445a-af53-12d3565385ec)](https://codebeat.co/projects/github-com-alpha-xone-xbbg-master) |
-| License        | [![GitHub license](https://img.shields.io/github/license/alpha-xone/xbbg.svg)](https://github.com/alpha-xone/xbbg/blob/master/LICENSE)               |
+|                |                                                                                                                                                                                  |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Latest Release | [![PyPI version](https://img.shields.io/pypi/v/xbbg.svg)](https://badge.fury.io/py/xbbg)                                                                                         |
+|                | [![PyPI version](https://img.shields.io/pypi/pyversions/xbbg.svg)](https://badge.fury.io/py/xbbg)                                                                                |
+| Docs           | [![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/en/latest)                                                    |
+| Build          | [![Travis CI](https://img.shields.io/travis/alpha-xone/xbbg/master.svg?logo=travis&label=Travis%20CI)](https://travis-ci.com/alpha-xone/xbbg)                                    |
+|                | [![Azure](https://dev.azure.com/alpha-xone/xbbg/_apis/build/status/alpha-xone.xbbg)](https://dev.azure.com/alpha-xone/xbbg/_build)                                               |
+| Coverage       | [![codecov](https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg)](https://codecov.io/gh/alpha-xone/xbbg)                                                         |
+| Quality        | [![Codacy Badge](https://api.codacy.com/project/badge/Grade/2ec89be198cf4689a6a6c6407b0bc965)](https://www.codacy.com/app/alpha-xone/xbbg)                                       |
+|                | [![CodeFactor](https://www.codefactor.io/repository/github/alpha-xone/xbbg/badge)](https://www.codefactor.io/repository/github/alpha-xone/xbbg)                                  |
+|                | [![codebeat badge](https://codebeat.co/badges/eef1f14d-72eb-445a-af53-12d3565385ec)](https://codebeat.co/projects/github-com-alpha-xone-xbbg-master)                             |
+| License        | [![GitHub license](https://img.shields.io/github/license/alpha-xone/xbbg.svg)](https://github.com/alpha-xone/xbbg/blob/master/LICENSE)                                           |
+|                | [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg)  |
 
 Bloomberg data toolkit for humans
 

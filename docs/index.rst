@@ -11,6 +11,7 @@ Quality        |codacy|
 \              |codeFactor|
 \              |codebeat|
 License        |license|
+\              |lic_check|
 ============== ======================
 
 Bloomberg data toolkit for humans
@@ -283,4 +284,7 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 .. |license| image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
     :alt: GitHub license
     :target: https://github.com/alpha-xone/xbbg/blob/master/LICENSE
+.. |lic_check| image:: https://app.fossa.com/api/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg.svg?type=shield
+    :alt: FOSSA Status
+    :target: https://app.fossa.com/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg
 .. _Bloomberg API Library: https://www.bloomberg.com/professional/support/api-library/
