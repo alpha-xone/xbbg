@@ -1,6 +1,8 @@
 xbbg
 ====
 
+Bloomberg data toolkit for humans
+
 ============== ======================
 Latest Release |pypi|
 \              |version|
@@ -14,7 +16,14 @@ License        |license|
 \              |lic_check|
 ============== ======================
 
-Bloomberg data toolkit for humans
+Features
+========
+
+Below are main features. Jupyter notebook examples can be found here_.
+
+- Excel compatible inputs
+- Straightforward intraday bar requests
+- Subscriptions
 
 Requirements
 ============
@@ -33,6 +42,7 @@ Requirements
 
 .. _pdblp: https://github.com/matthewgilbert/pdblp
 .. _download: https://bloomberg.bintray.com/BLPAPI-Experimental-Generic/blpapi_cpp_3.12.2.1-linux.tar.gz
+.. _here: https://colab.research.google.com/drive/1YVVS5AiJAQGGEECmOFAb7DNQZMOHdXLR
 
 Installation
 ============

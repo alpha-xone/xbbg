@@ -1,5 +1,7 @@
 # xbbg
 
+Bloomberg data toolkit for humans
+
 |                |                                                                                                                                                                                  |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Latest Release | [![PyPI version](https://img.shields.io/pypi/v/xbbg.svg)](https://badge.fury.io/py/xbbg)                                                                                         |
@@ -14,7 +16,13 @@
 | License        | [![GitHub license](https://img.shields.io/github/license/alpha-xone/xbbg.svg)](https://github.com/alpha-xone/xbbg/blob/master/LICENSE)                                           |
 |                | [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg)  |
 
-Bloomberg data toolkit for humans
+## Features
+
+Below are main features. Jupyter notebook examples can be found [here](https://colab.research.google.com/drive/1YVVS5AiJAQGGEECmOFAb7DNQZMOHdXLR).
+
+- Excel compatible inputs
+- Straightforward intraday bar requests
+- Subscriptions
 
 ## Requirements
 
