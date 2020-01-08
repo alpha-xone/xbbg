@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 
 import datetime
-
 from contextlib import contextmanager
 
 from xbbg import const, pipeline
@@ -385,7 +384,7 @@ def beqs(
     Args:
         screen: screen name
         asof: as of date
-        typ: GLOBAL (Bloomberg) or PRIVATE (Custom, default)
+        typ: GLOBAL/B (Bloomberg) or PRIVATE/C (Custom, default)
         group: group name if screen is organized into groups
 
     Returns:
@@ -397,7 +396,7 @@ def beqs(
     request = service.createRequest('BeqsRequest')
 
     request.set('screenName', screen)
-    request.set('screenType', typ)
+    request.set('screenType', 'GLOBAL' if typ[0].upper() in ['G', 'B'] else 'PRIVATE')
     request.set('Group', group)
 
     if asof:
