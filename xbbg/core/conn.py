@@ -94,6 +94,28 @@ def event_types() -> dict:
     }
 
 
+def send_request(request: blpapi.request.Request, **kwargs):
+    """
+    Send request to Bloomberg session
+
+    Args:
+        request: Bloomberg request
+    """
+    logger = logs.get_logger(send_request, **kwargs)
+    try:
+        bbg_session(**kwargs).sendRequest(request=request)
+    except blpapi.InvalidStateException as e:
+        logger.exception(e)
+
+        # Delete existing connection and send again
+        port = kwargs.get('port', _PORT_)
+        con_sym = f'{_CON_SYM_}//{port}'
+        if con_sym in globals(): del globals()[con_sym]
+
+        # No error handler for 2nd trial
+        bbg_session(**kwargs).sendRequest(request=request)
+
+
 # noinspection PyBroadException
 def _init_service_(service: str, **kwargs) -> blpapi.service.Service:
     """

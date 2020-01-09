@@ -31,7 +31,7 @@ def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
 
     process.init_request(request=request, tickers=tickers, flds=flds, **kwargs)
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
-    conn.bbg_session(**kwargs).sendRequest(request)
+    conn.send_request(request=request, **kwargs)
 
     res = dict()
     for r in process.receive_events(func=process.process_ref): res.update(r)
@@ -75,7 +75,7 @@ def bds(tickers, flds, **kwargs) -> pd.DataFrame:
 
         process.init_request(request=request, tickers=tickers, flds=flds, **kwargs)
         logger.debug(f'Sending request to Bloomberg ...\n{request}')
-        conn.bbg_session(**kwargs).sendRequest(request)
+        conn.send_request(request=request, **kwargs)
 
         res = dict()
         for r in process.receive_events(func=process.process_ref): res.update(r)
@@ -137,7 +137,7 @@ def bdh(
         start_date=s_dt, end_date=e_dt, adjust=adjust, **kwargs
     )
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
-    conn.bbg_session(**kwargs).sendRequest(request)
+    conn.send_request(request=request, **kwargs)
 
     res = pd.DataFrame(process.receive_events(process.process_hist))
     if res.empty: return pd.DataFrame()
@@ -223,7 +223,7 @@ def bdib(
     request.set('endDateTime', time_rng[1])
 
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
-    conn.bbg_session(**kwargs).sendRequest(request)
+    conn.send_request(request=request, **kwargs)
 
     res = pd.DataFrame(process.receive_events(func=process.process_bar, ticker=ticker))
     if res.empty:
@@ -406,9 +406,13 @@ def beqs(
         ovrd.setElement('value', utils.fmt_dt(asof, '%Y%m%d'))
 
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
-    conn.bbg_session(**kwargs).sendRequest(request)
+    conn.send_request(request=request, **kwargs)
     res = pd.DataFrame(process.receive_events(func=process.process_ref))
-    if res.empty: return pd.DataFrame()
+    if res.empty:
+        if kwargs.get('trial', 0): return pd.DataFrame()
+        else: return beqs(
+            screen=screen, asof=asof, typ=typ, group=group, trial=0, **kwargs
+        )
     return (
         pd.DataFrame(res.iloc[0].tolist())
         .pipe(pipeline.format_raw)
