@@ -411,7 +411,7 @@ def beqs(
     if res.empty:
         if kwargs.get('trial', 0): return pd.DataFrame()
         else: return beqs(
-            screen=screen, asof=asof, typ=typ, group=group, trial=0, **kwargs
+            screen=screen, asof=asof, typ=typ, group=group, trial=1, **kwargs
         )
     return (
         pd.DataFrame(res.iloc[0].tolist())
