@@ -43,6 +43,7 @@ def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
         .transpose()
         .reindex(columns=flds)
         .dropna(how='all', axis=1)
+        .dropna(how='all')
         .pipe(pipeline.format_raw)
         .pipe(pipeline.standard_cols, col_maps=col_maps)
     )
@@ -142,8 +143,8 @@ def bdh(
     res = pd.DataFrame(process.receive_events(process.process_hist))
     if res.empty: return pd.DataFrame()
     return pd.DataFrame(pd.concat([
-        r.apply(pd.Series) for _, r in res.iterrows()
-    ], axis=1))
+        r.dropna().apply(pd.Series) for _, r in res.iterrows()
+    ], axis=1, sort=True))
 
 
 def bdib(
