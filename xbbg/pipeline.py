@@ -122,6 +122,6 @@ def add_ticker(data: pd.DataFrame, ticker: str) -> pd.DataFrame:
         pd.DataFrame
     """
     data.columns = pd.MultiIndex.from_product([
-        [ticker], data.head().rename({'numEvents': 'num_trds'}).columns
+        [ticker], data.head().rename(columns={'numEvents': 'num_trds'}).columns
     ])
     return data
