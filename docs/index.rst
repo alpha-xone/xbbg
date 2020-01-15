@@ -6,6 +6,7 @@ Bloomberg data toolkit for humans
 ============== ======================
 Latest Release |pypi|
 \              |version|
+\              |download|
 Docs           |docs|
 Build          |travis|
 Coverage       |codecov|
@@ -15,6 +16,7 @@ Quality        |codacy|
 License        |license|
 \              |lic_check|
 Release        |release|
+Chat           |chat|
 ============== ======================
 
 Features
@@ -300,4 +302,8 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
     :target: https://app.fossa.com/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg
 .. |release| image:: https://zenodo.org/badge/157477269.svg
    :target: https://zenodo.org/badge/latestdoi/157477269
+.. |chat| image:: https://badges.gitter.im/xbbg/community.svg
+   :target: https://gitter.im/xbbg/community
+.. |download| image:: https://img.shields.io/pypi/dm/xbbg
+   :target: https://pypistats.org/packages/xbbg
 .. _Bloomberg API Library: https://www.bloomberg.com/professional/support/api-library/
