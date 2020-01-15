@@ -144,7 +144,7 @@ def bdh(
     if res.empty: return pd.DataFrame()
     return pd.DataFrame(pd.concat([
         r.dropna().apply(pd.Series) for _, r in res.iterrows()
-    ], axis=1, sort=True))
+    ], axis=1, sort=True)).rename(index=pd.Timestamp)
 
 
 def bdib(
@@ -238,7 +238,8 @@ def bdib(
         .tz_localize('UTC')
         .tz_convert(exch.tz)
     )
-    storage.save_intraday(data=data[ticker], ticker=ticker, dt=dt, typ=typ)
+    if kwargs.get('cache', False):
+        storage.save_intraday(data=data[ticker], ticker=ticker, dt=dt, typ=typ)
     return data.loc[ss_rng[0]:ss_rng[1]]
 
 
