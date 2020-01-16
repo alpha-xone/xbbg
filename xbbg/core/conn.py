@@ -41,27 +41,13 @@ def bbg_session(**kwargs) -> blpapi.session.Session:
     if con_sym in globals():
         if not isinstance(globals()[con_sym], blpapi.session.Session):
             del globals()[con_sym]
+        elif globals()[con_sym].__dict__.get('_Session__handle', None) is None:
+            del globals()[con_sym]
 
     if con_sym not in globals():
-        globals()[con_sym] = connect_bbg(port=port, **kwargs)
+        globals()[con_sym] = connect_bbg(**kwargs)
 
     return globals()[con_sym]
-
-
-def _service_symbol_(service: str, **kwargs) -> str:
-    """
-    Service symbol for global storage
-
-    Args:
-        service: service name
-        **kwargs:
-            port: port number
-
-    Returns:
-        str: name of service symbol
-    """
-    port = kwargs.get('port', _PORT_)
-    return f'{_CON_SYM_}/{port}{service}'
 
 
 def bbg_service(service: str, **kwargs) -> blpapi.service.Service:
@@ -76,12 +62,24 @@ def bbg_service(service: str, **kwargs) -> blpapi.service.Service:
     Returns:
         Bloomberg service
     """
-    serv_sym = _service_symbol_(service=service, **kwargs)
+    logger = logs.get_logger(bbg_service, **kwargs)
+
+    port = kwargs.get('port', _PORT_)
+    serv_sym = f'{_CON_SYM_}/{port}{service}'
+    log_info = f'Initiating service {service} ...'
     if serv_sym in globals():
-        if isinstance(globals()[serv_sym], blpapi.service.Service):
-            return globals()[serv_sym]
-        else: del globals()[serv_sym]
-    return _init_service_(service=service, **kwargs)
+        if not isinstance(globals()[serv_sym], blpapi.service.Service):
+            del globals()[serv_sym]
+        elif globals()[serv_sym].__dict__.get('_Service__handle', None) is None:
+            log_info = f'Restarting service {service} ...'
+            del globals()[serv_sym]
+
+    if serv_sym not in globals():
+        logger.debug(log_info)
+        bbg_session(**kwargs).openService(service)
+        globals()[serv_sym] = bbg_session(**kwargs).getService(service)
+
+    return globals()[serv_sym]
 
 
 def event_types() -> dict:
@@ -114,29 +112,3 @@ def send_request(request: blpapi.request.Request, **kwargs):
 
         # No error handler for 2nd trial
         bbg_session(**kwargs).sendRequest(request=request)
-
-
-# noinspection PyBroadException
-def _init_service_(service: str, **kwargs) -> blpapi.service.Service:
-    """
-    Initiate service
-    """
-    logger = logs.get_logger(_init_service_, **kwargs)
-    try:
-        _get_service_(service=service, **kwargs)
-    except Exception:
-        logger.debug(f'Initiating {service} ...')
-        bbg_session(**kwargs).openService(service)
-        try:
-            return _get_service_(service=service, **kwargs)
-        except Exception:
-            raise ConnectionError(f'Cannot initiate {service}')
-
-
-def _get_service_(service: str, **kwargs) -> blpapi.service.Service:
-    """
-    Get service after initiation
-    """
-    serv_sym = _service_symbol_(service=service, **kwargs)
-    globals()[serv_sym] = bbg_session(**kwargs).getService(service)
-    return globals()[serv_sym]
