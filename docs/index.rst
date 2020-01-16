@@ -35,7 +35,7 @@ Requirements
 
     - `Bloomberg API Library`_
 
-    - Downlaod C++ Experimental Release
+    - Downlaod C++ Experimental Release (for latest python API version ``3.14.0``, this can only be downloaded thru ``WAPI<GO>`` in terminal).
 
     - Copy ``blpapi3_32.dll`` and ``blpapi3_64.dll`` under ``bin`` folder to Bloomberg installation folder ``blp/DAPI``
 
