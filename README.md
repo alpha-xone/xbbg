@@ -7,7 +7,7 @@ Bloomberg data toolkit for humans
 | Latest Release | [![PyPI version](https://img.shields.io/pypi/v/xbbg.svg)](https://badge.fury.io/py/xbbg)                                                                                         |
 |                | [![PyPI version](https://img.shields.io/pypi/pyversions/xbbg.svg)](https://badge.fury.io/py/xbbg)                                                                                |
 |                | [![PyPI - Downloads](https://img.shields.io/pypi/dm/xbbg)](https://pypistats.org/packages/xbbg)                                                                                  |
-| Docs           | [![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/en/latest)                                                    |
+| Docs           | [![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/)                                                             |
 | Build          | [![Travis CI](https://img.shields.io/travis/alpha-xone/xbbg/master.svg?logo=travis&label=Travis%20CI)](https://travis-ci.com/alpha-xone/xbbg)                                    |
 |                | [![Azure](https://dev.azure.com/alpha-xone/xbbg/_apis/build/status/alpha-xone.xbbg)](https://dev.azure.com/alpha-xone/xbbg/_build)                                               |
 | Coverage       | [![codecov](https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg)](https://codecov.io/gh/alpha-xone/xbbg)                                                         |

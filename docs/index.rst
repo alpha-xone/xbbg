@@ -286,7 +286,7 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
     :target: https://codecov.io/gh/alpha-xone/xbbg
     :alt: Codecov
 .. |docs| image:: https://readthedocs.org/projects/xbbg/badge/?version=latest
-    :target: https://xbbg.readthedocs.io/en/latest
+    :target: https://xbbg.readthedocs.io/
 .. |codefactor| image:: https://www.codefactor.io/repository/github/alpha-xone/xbbg/badge
    :target: https://www.codefactor.io/repository/github/alpha-xone/xbbg
    :alt: CodeFactor
