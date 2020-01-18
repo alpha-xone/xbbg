@@ -2,7 +2,7 @@ import os
 
 from xbbg.io import files
 from xbbg.core import utils
-from xbbg.core.assist import BBG_ROOT
+from xbbg.core.overrides import BBG_ROOT
 
 
 def missing_info(**kwargs) -> str:

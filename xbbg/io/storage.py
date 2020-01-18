@@ -5,7 +5,7 @@ import re
 
 from xbbg import const
 from xbbg.io import files, logs
-from xbbg.core import utils, assist
+from xbbg.core import utils, overrides
 
 
 def bar_file(ticker: str, dt, typ='TRADE') -> str:
@@ -28,7 +28,7 @@ def bar_file(ticker: str, dt, typ='TRADE') -> str:
         >>> bar_file(ticker='ES1 Index', dt='2018-08-01')
         '/data/bbg/Index/ES1 Index/TRADE/2018-08-01.parq'
     """
-    data_path = os.environ.get(assist.BBG_ROOT, '').replace('\\', '/')
+    data_path = os.environ.get(overrides.BBG_ROOT, '').replace('\\', '/')
     if not data_path: return ''
     asset = ticker.split()[-1]
     proper_ticker = ticker.replace('/', '_')
@@ -106,14 +106,14 @@ def ref_file(
         >>> exist_file == updated_file
         True
     """
-    data_path = os.environ.get(assist.BBG_ROOT, '').replace('\\', '/')
+    data_path = os.environ.get(overrides.BBG_ROOT, '').replace('\\', '/')
     if (not data_path) or (not cache): return ''
 
     proper_ticker = ticker.replace('/', '_')
     cache_days = kwargs.pop('cache_days', 10)
     root = f'{data_path}/{ticker.split()[-1]}/{proper_ticker}/{fld}'
 
-    ref_kw = {k: v for k, v in kwargs.items() if k not in assist.PRSV_COLS}
+    ref_kw = {k: v for k, v in kwargs.items() if k not in overrides.PRSV_COLS}
     if len(ref_kw) > 0: info = utils.to_str(ref_kw)[1:-1].replace('|', '_')
     else: info = 'ovrd=None'
 

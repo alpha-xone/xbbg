@@ -6,7 +6,7 @@ except ImportError: blpapi = pytest.importorskip('blpapi')
 
 from xbbg import const
 from xbbg.core.timezone import DEFAULT_TZ
-from xbbg.core import intervals, assist, conn, names
+from xbbg.core import intervals, overrides, conn, names
 
 
 def init_request(request: blpapi.request.Request, tickers, flds, **kwargs):
@@ -41,13 +41,13 @@ def init_request(request: blpapi.request.Request, tickers, flds, **kwargs):
     if 'start_date' in kwargs: request.set('startDate', kwargs.pop('start_date'))
     if 'end_date' in kwargs: request.set('endDate', kwargs.pop('end_date'))
 
-    elems = assist.proc_elms(**kwargs)
+    elems = overrides.proc_elms(**kwargs)
     for elem_name, elem_val in elems: request.set(elem_name, elem_val)
 
-    ovrds = assist.proc_ovrds(**kwargs)
-    overrides = request.getElement('overrides')
+    ovrds = overrides.proc_ovrds(**kwargs)
+    bbg_ovrds = request.getElement('overrides')
     for ovrd_fld, ovrd_val in ovrds:
-        ovrd = overrides.appendElement()
+        ovrd = bbg_ovrds.appendElement()
         ovrd.setElement('fieldId', ovrd_fld)
         ovrd.setElement('value', ovrd_val)
 
