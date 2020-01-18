@@ -160,10 +160,10 @@ def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
         >>> pd.set_option('precision', 2)
         >>> amzn = pd.read_pickle('xbbg/tests/data/sample_earning_amzn.pkl')
         >>> amzn.query('level == 1').pipe(since_year, year=2017)
-                         segment_name  level    fy2018     fy2017  fy2018_pct  fy2017_pct
-        AMZN US Equity  North America      1  141366.0  106110.00       60.70       59.66
-        AMZN US Equity  International      1   65866.0   54297.00       28.28       30.53
-        AMZN US Equity            AWS      1   25655.0   17459.00       11.02        9.82
+                         segment_name  level    fy2018    fy2017  fy2018_pct  fy2017_pct
+        AMZN US Equity  North America      1  141366.0  106110.0       60.70       59.66
+        AMZN US Equity  International      1   65866.0   54297.0       28.28       30.53
+        AMZN US Equity            AWS      1   25655.0   17459.0       11.02        9.82
         >>> amzn.query('level == 1').pipe(since_year, year=2018)
                          segment_name  level    fy2018  fy2018_pct
         AMZN US Equity  North America      1  141366.0       60.70
