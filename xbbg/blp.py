@@ -68,11 +68,11 @@ def bds(tickers, flds, **kwargs) -> pd.DataFrame:
 
     if isinstance(tickers, str):
         data_file = storage.ref_file(
-            ticker=tickers, fld=flds, has_date=True, ext='parq', **kwargs
+            ticker=tickers, fld=flds, has_date=True, ext='pkl', **kwargs
         )
         if files.exists(data_file):
             logger.debug(f'Loading Bloomberg data from: {data_file}')
-            return pd.DataFrame(pd.read_parquet(data_file))
+            return pd.DataFrame(pd.read_pickle(data_file))
 
         process.init_request(request=request, tickers=tickers, flds=flds, **kwargs)
         logger.debug(f'Sending request to Bloomberg ...\n{request}')
@@ -92,7 +92,7 @@ def bds(tickers, flds, **kwargs) -> pd.DataFrame:
         if data_file:
             logger.debug(f'Saving Bloomberg data to: {data_file}')
             files.create_folder(data_file, is_file=True)
-            data.to_parquet(data_file)
+            data.to_pickle(data_file)
         return data
     else:
         return pd.DataFrame(pd.concat([

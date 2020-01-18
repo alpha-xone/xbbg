@@ -80,7 +80,9 @@ def daily_stats(data: (pd.Series, pd.DataFrame), **kwargs) -> pd.DataFrame:
     return data.groupby(data.index.floor('d')).describe(**kwargs)
 
 
-def dropna(data: (pd.Series, pd.DataFrame), cols: (int, list) = 0) -> (pd.Series, pd.DataFrame):
+def dropna(
+        data: (pd.Series, pd.DataFrame), cols: (int, list) = 0
+) -> (pd.Series, pd.DataFrame):
     """
     Drop NAs by columns
     """
@@ -120,6 +122,19 @@ def add_ticker(data: pd.DataFrame, ticker: str) -> pd.DataFrame:
 
     Returns:
         pd.DataFrame
+
+    Examples:
+        >>> (
+        ...     pd.read_parquet('xbbg/tests/data/sample_bdib.parq')
+        ...     .pipe(add_ticker, ticker='SPY US Equity')
+        ...     .pipe(get_series, col='close')
+        ... )
+                                   SPY US Equity
+        2018-12-28 09:30:00-05:00         249.67
+        2018-12-28 09:31:00-05:00         249.54
+        2018-12-28 09:32:00-05:00         249.22
+        2018-12-28 09:33:00-05:00         249.01
+        2018-12-28 09:34:00-05:00         248.86
     """
     data.columns = pd.MultiIndex.from_product([
         [ticker], data.head().rename(columns={'numEvents': 'num_trds'}).columns
@@ -138,7 +153,20 @@ def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
 
     Returns:
         pd.DataFrame
+
+    Examples:
+        >>> amzn = pd.read_pickle('xbbg/tests/data/sample_earning_amzn.pkl')
+        >>> amzn.query('level == 1').pipe(since_year, year=2017)
+                         segment_name  level     fy2018     fy2017  fy2018_pct  fy2017_pct
+        AMZN US Equity  North America      1 141,366.00 106,110.00       60.70       59.66
+        AMZN US Equity  International      1  65,866.00  54,297.00       28.28       30.53
+        AMZN US Equity            AWS      1  25,655.00  17,459.00       11.02        9.82
+        >>> amzn.query('level == 1').pipe(since_year, year=2018)
+                         segment_name  level     fy2018  fy2018_pct
+        AMZN US Equity  North America      1 141,366.00       60.70
+        AMZN US Equity  International      1  65,866.00       28.28
+        AMZN US Equity            AWS      1  25,655.00       11.02
     """
     return data.loc[:, ~data.columns.str.contains(
-        '|'.join(map(str, range(year, year - 20, -1)))
+        '|'.join(map(str, range(year - 1, year - 21, -1)))
     )]
