@@ -125,3 +125,20 @@ def add_ticker(data: pd.DataFrame, ticker: str) -> pd.DataFrame:
         [ticker], data.head().rename(columns={'numEvents': 'num_trds'}).columns
     ])
     return data
+
+
+def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
+    """
+    Remove columns prior to give year.
+    To make this work, column names must contian year explicitly.
+
+    Args:
+        data: raw data
+        year: starting year
+
+    Returns:
+        pd.DataFrame
+    """
+    return data.loc[:, ~data.columns.str.contains(
+        '|'.join(map(str, range(year, year - 20, -1)))
+    )]

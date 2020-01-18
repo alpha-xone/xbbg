@@ -39,9 +39,7 @@ def bbg_session(**kwargs) -> blpapi.session.Session:
     con_sym = f'{_CON_SYM_}//{port}'
 
     if con_sym in globals():
-        if not isinstance(globals()[con_sym], blpapi.session.Session):
-            del globals()[con_sym]
-        elif globals()[con_sym].__dict__.get('_Session__handle', None) is None:
+        if getattr(globals()[con_sym], '_Session__handle', None) is None:
             del globals()[con_sym]
 
     if con_sym not in globals():
@@ -66,11 +64,10 @@ def bbg_service(service: str, **kwargs) -> blpapi.service.Service:
 
     port = kwargs.get('port', _PORT_)
     serv_sym = f'{_CON_SYM_}/{port}{service}'
+
     log_info = f'Initiating service {service} ...'
     if serv_sym in globals():
-        if not isinstance(globals()[serv_sym], blpapi.service.Service):
-            del globals()[serv_sym]
-        elif globals()[serv_sym].__dict__.get('_Service__handle', None) is None:
+        if getattr(globals()[serv_sym], '_Service__handle', None) is None:
             log_info = f'Restarting service {service} ...'
             del globals()[serv_sym]
 
