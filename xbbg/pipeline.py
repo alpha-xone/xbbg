@@ -155,7 +155,7 @@ def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
         pd.DataFrame
 
     Examples:
-        >>> max_cols = pd.get_option('display.max_columns')
+        >>> pd.set_option('max_colwidth', 50)
         >>> pd.set_option('display.max_columns', 10)
         >>> amzn = pd.read_pickle('xbbg/tests/data/sample_earning_amzn.pkl')
         >>> amzn.query('level == 1').pipe(since_year, year=2017)
@@ -168,7 +168,6 @@ def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
         AMZN US Equity  North America      1 141,366.00       60.70
         AMZN US Equity  International      1  65,866.00       28.28
         AMZN US Equity            AWS      1  25,655.00       11.02
-        >>> pd.set_option('display.max_columns', max_cols)
     """
     return data.loc[:, ~data.columns.str.contains(
         '|'.join(map(str, range(year - 1, year - 21, -1)))
