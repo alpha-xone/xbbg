@@ -155,7 +155,7 @@ def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
         pd.DataFrame
 
     Examples:
-        >>> pd.set_option('max_colwidth', 120)
+        >>> pd.set_option('display.width', 120)
         >>> pd.set_option('display.max_columns', 10)
         >>> pd.set_option('precision', 2)
         >>> amzn = pd.read_pickle('xbbg/tests/data/sample_earning_amzn.pkl')
