@@ -130,7 +130,6 @@ def daily_stats(data: (pd.Series, pd.DataFrame), **kwargs) -> pd.DataFrame:
 
     Examples:
         >>> pd.set_option('precision', 2)
-        >>> pd.set_option('display.max_columns', 10)
         >>> (
         ...     pd.concat([
         ...         pd.read_pickle('xbbg/tests/data/sample_rms_ib0.pkl'),
@@ -138,11 +137,11 @@ def daily_stats(data: (pd.Series, pd.DataFrame), **kwargs) -> pd.DataFrame:
         ...     ], sort=False)
         ...     .pipe(get_series, col='close')
         ...     .pipe(daily_stats)
-        ... ).iloc[:, :6]
+        ... ).iloc[:, :5]
                                   RMS FP Equity
-                                          count   mean  std    min    10%    25%
-        2020-01-16 00:00:00+00:00        434.00 711.16 1.11 708.60 709.60 710.20
-        2020-01-17 00:00:00+00:00        437.00 721.53 1.66 717.00 719.00 720.80
+                                          count    mean   std    min    10%
+        2020-01-16 00:00:00+00:00        434.00  711.16  1.11  708.6  709.6
+        2020-01-17 00:00:00+00:00        437.00  721.53  1.66  717.0  719.0
     """
     if data.empty: return pd.DataFrame()
     if 'percentiles' not in kwargs: kwargs['percentiles'] = [.1, .25, .5, .75, .9]
