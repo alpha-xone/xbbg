@@ -36,6 +36,27 @@ def standard_cols(data: pd.DataFrame, col_maps: dict = None) -> pd.DataFrame:
 
     Returns:
         pd.DataFrame
+
+    Examples:
+        >>> dvd = pd.read_pickle('xbbg/tests/data/sample_dvd_mc_raw.pkl').iloc[:, :4]
+        >>> dvd
+                     Declared Date     Ex-Date Record Date Payable Date
+        MC FP Equity    2019-07-24  2019-12-06  2019-12-09   2019-12-10
+        MC FP Equity    2019-01-29  2019-04-25  2019-04-26   2019-04-29
+        MC FP Equity    2018-07-24  2018-12-04  2018-12-05   2018-12-06
+        MC FP Equity    2018-01-25  2018-04-17  2018-04-18   2018-04-19
+        >>> dvd.pipe(standard_cols)
+                     declared_date     ex_date record_date payable_date
+        MC FP Equity    2019-07-24  2019-12-06  2019-12-09   2019-12-10
+        MC FP Equity    2019-01-29  2019-04-25  2019-04-26   2019-04-29
+        MC FP Equity    2018-07-24  2018-12-04  2018-12-05   2018-12-06
+        MC FP Equity    2018-01-25  2018-04-17  2018-04-18   2018-04-19
+        >>> dvd.pipe(standard_cols, col_maps={'Declared Date': 'dec_date'})
+                        dec_date     ex_date record_date payable_date
+        MC FP Equity  2019-07-24  2019-12-06  2019-12-09   2019-12-10
+        MC FP Equity  2019-01-29  2019-04-25  2019-04-26   2019-04-29
+        MC FP Equity  2018-07-24  2018-12-04  2018-12-05   2018-12-06
+        MC FP Equity  2018-01-25  2018-04-17  2018-04-18   2018-04-19
     """
     if col_maps is None: col_maps = dict()
     return data.rename(
@@ -60,6 +81,30 @@ def apply_fx(
     Returns:
         Price * FX ** Power
         where FX uses latest available price
+
+    Examples:
+        >>> pd.set_option('precision', 2)
+        >>> rms = (
+        >>>     pd.read_pickle('xbbg/tests/data/sample_rms_ib.pkl')
+        >>>     .pipe(get_series, col='close')
+        >>>     .pipe(to_numeric)
+        >>>     .pipe(clean_cols)
+        >>> ).tail()
+        >>> eur = pd.read_pickle('xbbg/tests/data/sample_eur_ib.pkl')
+        >>> rms
+                                   RMS FP Equity
+        2020-01-17 16:26:00+00:00         725.40
+        2020-01-17 16:27:00+00:00         725.20
+        2020-01-17 16:28:00+00:00         725.40
+        2020-01-17 16:29:00+00:00         725.00
+        2020-01-17 16:35:00+00:00         725.60
+        >>> rms.iloc[:, 0].pipe(apply_fx, fx=eur)
+                                   RMS FP Equity
+        2020-01-17 16:26:00+00:00         653.98
+        2020-01-17 16:27:00+00:00         653.80
+        2020-01-17 16:28:00+00:00         653.98
+        2020-01-17 16:29:00+00:00         653.57
+        2020-01-17 16:35:00+00:00         654.05
     """
     if isinstance(data, pd.Series): data = pd.DataFrame(data)
 
@@ -101,6 +146,27 @@ def to_numeric(data: pd.DataFrame) -> pd.DataFrame:
 def format_raw(data: pd.DataFrame) -> pd.DataFrame:
     """
     Convert data to datetime if possible
+
+    Examples:
+        >>> dvd = pd.read_pickle('xbbg/tests/data/sample_dvd_mc_raw.pkl')
+        >>> dvd.dtypes
+        Declared Date          object
+        Ex-Date                object
+        Record Date            object
+        Payable Date           object
+        Dividend Amount       float64
+        Dividend Frequency     object
+        Dividend Type          object
+        dtype: object
+        >>> dvd.pipe(format_raw)
+        Declared Date         datetime64[ns]
+        Ex-Date               datetime64[ns]
+        Record Date           datetime64[ns]
+        Payable Date          datetime64[ns]
+        Dividend Amount              float64
+        Dividend Frequency            object
+        Dividend Type                 object
+        dtype: object
     """
     res = data.apply(pd.to_numeric, errors='ignore')
     dtypes = data.dtypes
@@ -109,7 +175,7 @@ def format_raw(data: pd.DataFrame) -> pd.DataFrame:
     ].index
     if not cols.empty:
         res.loc[:, cols] = data.loc[:, cols].apply(pd.to_datetime, errors='ignore')
-    return data
+    return res
 
 
 def add_ticker(data: pd.DataFrame, ticker: str) -> pd.DataFrame:
