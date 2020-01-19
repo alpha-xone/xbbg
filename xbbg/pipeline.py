@@ -138,9 +138,9 @@ def daily_stats(data: (pd.Series, pd.DataFrame), **kwargs) -> pd.DataFrame:
         ...     .pipe(get_series, col='close')
         ...     .pipe(daily_stats)
         ... )['RMS FP Equity'].iloc[:, :5]
-                                          count    mean   std    min    10%
-        2020-01-16 00:00:00+00:00        434.00  711.16  1.11  708.6  709.6
-        2020-01-17 00:00:00+00:00        437.00  721.53  1.66  717.0  719.0
+                                count    mean   std    min    10%
+        2020-01-16 00:00:00+00:00  434.00  711.16  1.11  708.6  709.6
+        2020-01-17 00:00:00+00:00  437.00  721.53  1.66  717.0  719.0
     """
     if data.empty: return pd.DataFrame()
     if 'percentiles' not in kwargs: kwargs['percentiles'] = [.1, .25, .5, .75, .9]
