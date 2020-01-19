@@ -85,7 +85,7 @@ def apply_fx(
     Examples:
         >>> pd.set_option('precision', 2)
         >>> rms = (
-        ...     pd.read_pickle('xbbg/tests/data/sample_rms_ib.pkl')
+        ...     pd.read_pickle('xbbg/tests/data/sample_rms_ib1.pkl')
         ...     .pipe(get_series, col='close')
         ...     .pipe(to_numeric)
         ...     .pipe(clean_cols)
@@ -106,6 +106,13 @@ def apply_fx(
         2020-01-17 16:28:00+00:00         653.98
         2020-01-17 16:29:00+00:00         653.57
         2020-01-17 16:35:00+00:00         654.05
+        >>> rms.pipe(apply_fx, fx=1.1090)
+                                   RMS FP Equity
+        2020-01-17 16:26:00+00:00         654.10
+        2020-01-17 16:27:00+00:00         653.92
+        2020-01-17 16:28:00+00:00         654.10
+        2020-01-17 16:29:00+00:00         653.74
+        2020-01-17 16:35:00+00:00         654.28
     """
     if isinstance(data, pd.Series): data = pd.DataFrame(data)
 
@@ -120,6 +127,22 @@ def apply_fx(
 def daily_stats(data: (pd.Series, pd.DataFrame), **kwargs) -> pd.DataFrame:
     """
     Daily stats for given data
+
+    Examples:
+        >>> pd.set_option('precision', 2)
+        >>> pd.set_option('display.max_columns', 10)
+        >>> (
+        ...     pd.concat([
+        ...         pd.read_pickle('xbbg/tests/data/sample_rms_ib0.pkl'),
+        ...         pd.read_pickle('xbbg/tests/data/sample_rms_ib1.pkl'),
+        ...     ], sort=False)
+        ...     .pipe(get_series, col='close')
+        ...     .pipe(daily_stats)
+        ... ).iloc[:, :6]
+                                  RMS FP Equity
+                                          count   mean  std    min    10%    25%
+        2020-01-16 00:00:00+00:00        434.00 711.16 1.11 708.60 709.60 710.20
+        2020-01-17 00:00:00+00:00        437.00 721.53 1.66 717.00 719.00 720.80
     """
     if data.empty: return pd.DataFrame()
     if 'percentiles' not in kwargs: kwargs['percentiles'] = [.1, .25, .5, .75, .9]
