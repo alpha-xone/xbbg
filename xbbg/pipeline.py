@@ -85,11 +85,12 @@ def apply_fx(
     Examples:
         >>> pd.set_option('precision', 2)
         >>> rms = (
-        >>>     pd.read_pickle('xbbg/tests/data/sample_rms_ib.pkl')
-        >>>     .pipe(get_series, col='close')
-        >>>     .pipe(to_numeric)
-        >>>     .pipe(clean_cols)
-        >>> ).tail()
+        ...     pd.read_pickle('xbbg/tests/data/sample_rms_ib.pkl')
+        ...     .pipe(get_series, col='close')
+        ...     .pipe(to_numeric)
+        ...     .pipe(clean_cols)
+        ...     .pipe(dropna)
+        ... ).tail()
         >>> eur = pd.read_pickle('xbbg/tests/data/sample_eur_ib.pkl')
         >>> rms
                                    RMS FP Equity
