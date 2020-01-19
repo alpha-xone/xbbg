@@ -94,11 +94,11 @@ def apply_fx(
         >>> eur = pd.read_pickle('xbbg/tests/data/sample_eur_ib.pkl')
         >>> rms
                                    RMS FP Equity
-        2020-01-17 16:26:00+00:00         725.40
-        2020-01-17 16:27:00+00:00         725.20
-        2020-01-17 16:28:00+00:00         725.40
-        2020-01-17 16:29:00+00:00         725.00
-        2020-01-17 16:35:00+00:00         725.60
+        2020-01-17 16:26:00+00:00          725.4
+        2020-01-17 16:27:00+00:00          725.2
+        2020-01-17 16:28:00+00:00          725.4
+        2020-01-17 16:29:00+00:00          725.0
+        2020-01-17 16:35:00+00:00          725.6
         >>> rms.iloc[:, 0].pipe(apply_fx, fx=eur)
                                    RMS FP Equity
         2020-01-17 16:26:00+00:00         653.98
@@ -159,7 +159,7 @@ def format_raw(data: pd.DataFrame) -> pd.DataFrame:
         Dividend Frequency     object
         Dividend Type          object
         dtype: object
-        >>> dvd.pipe(format_raw)
+        >>> dvd.pipe(format_raw).dtypes
         Declared Date         datetime64[ns]
         Ex-Date               datetime64[ns]
         Record Date           datetime64[ns]
