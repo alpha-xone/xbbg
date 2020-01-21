@@ -41,13 +41,12 @@ def init_request(request: blpapi.request.Request, tickers, flds, **kwargs):
     if 'start_date' in kwargs: request.set('startDate', kwargs.pop('start_date'))
     if 'end_date' in kwargs: request.set('endDate', kwargs.pop('end_date'))
 
-    elems = overrides.proc_elms(**kwargs)
-    for elem_name, elem_val in elems: request.set(elem_name, elem_val)
+    for elem_name, elem_val in overrides.proc_elms(**kwargs):
+        request.set(elem_name, elem_val)
 
-    ovrds = overrides.proc_ovrds(**kwargs)
-    bbg_ovrds = request.getElement('overrides')
-    for ovrd_fld, ovrd_val in ovrds:
-        ovrd = bbg_ovrds.appendElement()
+    ovrds = request.getElement('overrides')
+    for ovrd_fld, ovrd_val in overrides.proc_ovrds(**kwargs):
+        ovrd = ovrds.appendElement()
         ovrd.setElement('fieldId', ovrd_fld)
         ovrd.setElement('value', ovrd_val)
 
