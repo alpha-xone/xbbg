@@ -58,6 +58,8 @@ Installation
 What's New
 ==========
 
+*0.6.0* - Speed improvements and tick data availablity
+
 *0.5.0* - Rewritten library to add subscription, BEQS, simplify interface and remove dependency of `pdblp`
 
 *0.1.22* - Remove PyYAML dependency due to security vulnerability
