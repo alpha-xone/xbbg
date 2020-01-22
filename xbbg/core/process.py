@@ -4,9 +4,19 @@ import pytest
 try: import blpapi
 except ImportError: blpapi = pytest.importorskip('blpapi')
 
+from collections import OrderedDict
+
 from xbbg import const
 from xbbg.core.timezone import DEFAULT_TZ
-from xbbg.core import intervals, overrides, conn, names
+from xbbg.core import intervals, overrides, conn
+
+RESPONSE_ERROR = blpapi.Name("responseError")
+SESSION_TERMINATED = blpapi.Name("SessionTerminated")
+CATEGORY = blpapi.Name("category")
+MESSAGE = blpapi.Name("message")
+BAR_DATA = blpapi.Name('barData')
+BAR_TICK = blpapi.Name('barTickData')
+TICK_DATA = blpapi.Name('tickData')
 
 
 def init_request(request: blpapi.request.Request, tickers, flds, **kwargs):
@@ -78,6 +88,13 @@ def time_range(dt, ticker, session='allday', tz='UTC') -> intervals.Session:
 def receive_events(func, **kwargs):
     """
     Receive events received from Bloomberg
+
+    Args:
+        func: must be generator function
+        **kwargs: arguments for input function
+
+    Yields:
+        Elements of Bloomberg responses
     """
     timeout_counts = 0
     responses = [blpapi.Event.PARTIAL_RESPONSE, blpapi.Event.RESPONSE]
@@ -85,7 +102,8 @@ def receive_events(func, **kwargs):
         ev = conn.bbg_session(**kwargs).nextEvent(500)
         if ev.eventType() in responses:
             for msg in ev:
-                yield func(msg=msg, **kwargs)
+                for r in func(msg=msg, **kwargs):
+                    yield r
             if ev.eventType() == blpapi.Event.RESPONSE:
                 break
         elif ev.eventType() == blpapi.Event.TIMEOUT:
@@ -95,7 +113,7 @@ def receive_events(func, **kwargs):
         else:
             for _ in ev:
                 if getattr(ev, 'messageType', lambda: None)() \
-                    == names.SESSION_TERMINATED: break
+                    == SESSION_TERMINATED: break
 
 
 def process_ref(msg: blpapi.message.Message) -> dict:
@@ -114,23 +132,25 @@ def process_ref(msg: blpapi.message.Message) -> dict:
     elif msg.hasElement('data') and \
             msg.getElement('data').hasElement('securityData'):
         data = msg.getElement('data').getElement('securityData')
-    if data is None: return {}
+    if data is None: yield {}
 
-    return {
-        sec.getElement('security').getValue(): {
-            str(fld.name()): [
-                {
-                    str(elem.name()): None if elem.isNull() else elem.getValue()
-                    for elem in item.elements()
-                }
-                for item in fld.values()
-            ] if fld.isArray() else (
-                None if fld.isNull() else fld.getValue()
-            )
-            for fld in sec.getElement('fieldData').elements()
-        }
-        for sec in data.values()
-    }
+    for sec in data.values():
+        ticker = sec.getElement('security').getValue()
+        for fld in sec.getElement('fieldData').elements():
+            info = [('ticker', ticker), ('field', str(fld.name()))]
+            if fld.isArray():
+                for item in fld.values():
+                    yield OrderedDict(info + [
+                        (
+                            str(elem.name()),
+                            None if elem.isNull() else elem.getValue()
+                        )
+                        for elem in item.elements()
+                    ])
+            else:
+                yield OrderedDict(info + [
+                    ('value', None if fld.isNull() else fld.getValue()),
+                ])
 
 
 def process_hist(msg: blpapi.message.Message) -> dict:
@@ -144,48 +164,45 @@ def process_hist(msg: blpapi.message.Message) -> dict:
         dict
     """
     if not msg.hasElement('securityData'): return {}
-    return {
-        elem_dt.getElement('date').getValue(): {
-            (
-                msg.getElement('securityData').getElement('security').getValue(),
-                str(elem.name())
-            ): elem.getValue()
-            for elem in elem_dt.elements() if str(elem.name()) != 'date'
-        }
-        for elem_dt in msg.getElement('securityData').getElement('fieldData').values()
-        if elem_dt.hasElement('date')
-    }
+    ticker = msg.getElement('securityData').getElement('security').getValue()
+    for val in msg.getElement('securityData').getElement('fieldData').values():
+        if val.hasElement('date'):
+            yield OrderedDict([('ticker', ticker)] + [
+                (str(elem.name()), elem.getValue()) for elem in val.elements()
+            ])
 
 
-def process_bar(msg: blpapi.message.Message, ticker: str) -> pd.Series:
+def process_bar(msg: blpapi.message.Message, typ='bar') -> OrderedDict:
     """
     Process Bloomberg intraday bar messages
 
     Args:
         msg: Bloomberg intraday bar messages from events
-        ticker: ticker
+        typ: `bar` or `tick`
 
     Yields:
-        pd.Series
+        OrderedDict
     """
     check_error(msg=msg)
-    data_rows = msg.getElement(names.BAR_DATA).getElement(names.TICK_DATA)
-    for bar in data_rows.values():
-        yield pd.Series({
-            (ticker, fld):
-            getattr(bar, res[0])(res[1])
-            for fld, res in names.BAR_ITEMS.items()
-        }, name=getattr(bar, names.BAR_TITLE[0])(names.BAR_TITLE[1]))
+    if typ[0].lower() == 't':
+        lvls = [TICK_DATA, TICK_DATA]
+    else:
+        lvls = [BAR_DATA, BAR_TICK]
+
+    for bar in msg.getElement(lvls[0]).getElement(lvls[1]).values():
+        yield OrderedDict([
+            (str(elem.name()), elem.getValue()) for elem in bar.elements()
+        ])
 
 
 def check_error(msg):
     """
     Check error in message
     """
-    if msg.hasElement(names.RESPONSE_ERROR):
-        error = msg.getElement(names.RESPONSE_ERROR)
+    if msg.hasElement(RESPONSE_ERROR):
+        error = msg.getElement(RESPONSE_ERROR)
         raise ValueError(
             f'[Intraday Bar Error] '
-            f'{error.getElementAsString(names.CATEGORY)}: '
-            f'{error.getElementAsString(names.MESSAGE)}'
+            f'{error.getElementAsString(CATEGORY)}: '
+            f'{error.getElementAsString(MESSAGE)}'
         )

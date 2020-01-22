@@ -33,18 +33,20 @@ def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
 
-    res = dict()
-    for r in process.receive_events(func=process.process_ref): res.update(r)
-    if not res: return pd.DataFrame()
+    res = pd.DataFrame(process.receive_events(func=process.process_ref))
+    if kwargs.get('raw', False): return res
+    if res.empty or any(fld not in res for fld in ['ticker', 'field']):
+        return pd.DataFrame()
 
     col_maps = kwargs.get('col_maps', None)
+    cols = res.field.unique()
     return (
-        pd.DataFrame(res)
-        .transpose()
-        .reindex(columns=flds)
-        .dropna(how='all', axis=1)
-        .dropna(how='all')
-        .pipe(pipeline.format_raw)
+        res
+        .set_index(['ticker', 'field'])
+        .unstack(level=1)
+        .rename_axis(index=None, columns=[None, None])
+        .droplevel(axis=1, level=0)
+        .loc[:, cols]
         .pipe(pipeline.standard_cols, col_maps=col_maps)
     )
 
@@ -78,22 +80,24 @@ def bds(tickers, flds, **kwargs) -> pd.DataFrame:
         logger.debug(f'Sending request to Bloomberg ...\n{request}')
         conn.send_request(request=request, **kwargs)
 
-        res = dict()
-        for r in process.receive_events(func=process.process_ref): res.update(r)
-        final = res.get(tickers, {}).get(flds, {})
-        col_maps = kwargs.get('col_maps', None)
-        if not final: return pd.DataFrame()
+        res = pd.DataFrame(process.receive_events(func=process.process_ref))
+        if kwargs.get('raw', False): return res
+        if res.empty or any(fld not in res for fld in ['ticker', 'field']):
+            return pd.DataFrame()
+
         data = (
-            pd.DataFrame(final)
-            .rename(index=lambda _: tickers)
-            .pipe(pipeline.format_raw)
-            .pipe(pipeline.standard_cols, col_maps=col_maps)
+            res
+            .set_index(['ticker', 'field'])
+            .droplevel(axis=0, level=1)
+            .rename_axis(index=None)
+            .pipe(pipeline.standard_cols, col_maps=kwargs.get('col_maps', None))
         )
         if data_file:
             logger.debug(f'Saving Bloomberg data to: {data_file}')
             files.create_folder(data_file, is_file=True)
             data.to_pickle(data_file)
         return data
+
     else:
         return pd.DataFrame(pd.concat([
             bds(tickers=ticker, flds=flds, **kwargs) for ticker in tickers
@@ -141,10 +145,17 @@ def bdh(
     conn.send_request(request=request, **kwargs)
 
     res = pd.DataFrame(process.receive_events(process.process_hist))
-    if res.empty: return pd.DataFrame()
-    return pd.DataFrame(pd.concat([
-        r.dropna().apply(pd.Series) for _, r in res.iterrows()
-    ], axis=1, sort=True)).rename(index=pd.Timestamp)
+    if kwargs.get('raw', False): return res
+    if res.empty or any(fld not in res for fld in ['ticker', 'date']):
+        return pd.DataFrame()
+
+    return (
+        res
+        .set_index(['ticker', 'date'])
+        .unstack(level=0)
+        .rename_axis(index=None, columns=[None, None])
+        .swaplevel(0, 1, axis=1)
+    )
 
 
 def bdib(
@@ -174,7 +185,7 @@ def bdib(
 
     ss_rng = process.time_range(dt=dt, ticker=ticker, session=session, tz=exch.tz)
     data_file = storage.bar_file(ticker=ticker, dt=dt, typ=typ)
-    if files.exists(data_file):
+    if files.exists(data_file) and kwargs.get('cache', True):
         logger.debug(f'Loading Bloomberg intraday data from: {data_file}')
         return (
             pd.read_parquet(data_file)
@@ -226,20 +237,24 @@ def bdib(
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
 
-    res = pd.DataFrame(process.receive_events(func=process.process_bar, ticker=ticker))
-    if res.empty:
+    res = pd.DataFrame(process.receive_events(func=process.process_bar))
+    if res.empty or ('time' not in res):
         logger.warning(f'No data for {info_log} ...')
         missing.update_missing(**miss_kw)
         return pd.DataFrame()
 
     data = (
-        pd.DataFrame(pd.concat(res.iloc[0].values, axis=1))
-        .transpose()
+        res
+        .set_index('time')
+        .rename_axis(index=None)
+        .rename(columns={'numEvents': 'num_trds'})
         .tz_localize('UTC')
         .tz_convert(exch.tz)
+        .pipe(pipeline.add_ticker, ticker=ticker)
     )
-    if kwargs.get('cache', False):
+    if kwargs.get('cache', True):
         storage.save_intraday(data=data[ticker], ticker=ticker, dt=dt, typ=typ)
+
     return data.loc[ss_rng[0]:ss_rng[1]]
 
 
@@ -264,8 +279,9 @@ def earning(
     Returns:
         pd.DataFrame
     """
+    kwargs.pop('raw', None)
     ovrd = 'G' if by[0].upper() == 'G' else 'P'
-    new_kw = dict(raw=True, Product_Geo_Override=ovrd)
+    new_kw = dict(Product_Geo_Override=ovrd)
     header = bds(tickers=ticker, flds='PG_Bulk_Header', **new_kw, **kwargs)
     if ccy: kwargs['Eqy_Fund_Crncy'] = ccy
     if level: kwargs['PG_Hierarchy_Level'] = level
@@ -331,6 +347,7 @@ def dividend(
     Returns:
         pd.DataFrame
     """
+    kwargs.pop('raw', None)
     if isinstance(tickers, str): tickers = [tickers]
     tickers = [t for t in tickers if ('Equity' in t) and ('=' not in t)]
 
@@ -415,9 +432,17 @@ def beqs(
         else: return beqs(
             screen=screen, asof=asof, typ=typ, group=group, trial=1, **kwargs
         )
+
+    if kwargs.get('raw', False): return res
+    cols = res.field.unique()
     return (
-        pd.DataFrame(res.iloc[0].tolist())
-        .pipe(pipeline.format_raw)
+        res
+        .set_index(['ticker', 'field'])
+        .unstack(level=1)
+        .rename_axis(index=None, columns=[None, None])
+        .droplevel(axis=1, level=0)
+        .loc[:, cols]
+        .pipe(pipeline.standard_cols)
     )
 
 
