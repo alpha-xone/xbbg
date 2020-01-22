@@ -33,7 +33,7 @@ def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
 
-    res = pd.DataFrame(process.receive_events(func=process.process_ref))
+    res = pd.DataFrame(process.rec_events(func=process.process_ref))
     if kwargs.get('raw', False): return res
     if res.empty or any(fld not in res for fld in ['ticker', 'field']):
         return pd.DataFrame()
@@ -80,7 +80,7 @@ def bds(tickers, flds, **kwargs) -> pd.DataFrame:
         logger.debug(f'Sending request to Bloomberg ...\n{request}')
         conn.send_request(request=request, **kwargs)
 
-        res = pd.DataFrame(process.receive_events(func=process.process_ref))
+        res = pd.DataFrame(process.rec_events(func=process.process_ref))
         if kwargs.get('raw', False): return res
         if res.empty or any(fld not in res for fld in ['ticker', 'field']):
             return pd.DataFrame()
@@ -144,7 +144,7 @@ def bdh(
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
 
-    res = pd.DataFrame(process.receive_events(process.process_hist))
+    res = pd.DataFrame(process.rec_events(process.process_hist))
     if kwargs.get('raw', False): return res
     if res.empty or any(fld not in res for fld in ['ticker', 'date']):
         return pd.DataFrame()
@@ -185,7 +185,8 @@ def bdib(
 
     ss_rng = process.time_range(dt=dt, ticker=ticker, session=session, tz=exch.tz)
     data_file = storage.bar_file(ticker=ticker, dt=dt, typ=typ)
-    if files.exists(data_file) and kwargs.get('cache', True):
+    if files.exists(data_file) and kwargs.get('cache', True) \
+            and (not kwargs.get('reload', False)):
         logger.debug(f'Loading Bloomberg intraday data from: {data_file}')
         return (
             pd.read_parquet(data_file)
@@ -237,7 +238,7 @@ def bdib(
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
 
-    res = pd.DataFrame(process.receive_events(func=process.process_bar))
+    res = pd.DataFrame(process.rec_events(func=process.process_bar))
     if res.empty or ('time' not in res):
         logger.warning(f'No data for {info_log} ...')
         missing.update_missing(**miss_kw)
@@ -256,6 +257,69 @@ def bdib(
         storage.save_intraday(data=data[ticker], ticker=ticker, dt=dt, typ=typ)
 
     return data.loc[ss_rng[0]:ss_rng[1]]
+
+
+def bdt(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
+    """
+    Bloomberg tick data
+
+    Args:
+        ticker: ticker name
+        dt: date to download
+        session: [allday, day, am, pm, pre, post]
+        types: str or list, one or combinations of [
+            TRADE, AT_TRADE, BID, ASK, MID_PRICE,
+            BID_BEST, ASK_BEST, BEST_BID, BEST_ASK,
+        ]
+
+    Returns:
+        pd.DataFrame
+    """
+    logger = logs.get_logger(bdt, **kwargs)
+
+    exch = const.exch_info(ticker=ticker)
+    time_rng = process.time_range(dt=dt, ticker=ticker, session=session)
+
+    service = conn.bbg_service(service='//blp/refdata', **kwargs)
+    request = service.createRequest('IntradayTickRequest')
+
+    if types is None: types = ['TRADE']
+    if isinstance(types, str): types = [types]
+    request.set('security', ticker)
+    for typ in types: request.append('eventTypes', typ)
+    request.set('startDateTime', time_rng[0])
+    request.set('endDateTime', time_rng[1])
+    request.set('includeConditionCodes', True)
+    request.set('includeExchangeCodes', True)
+    request.set('includeNonPlottableEvents', True)
+    request.set('includeBrokerCodes', True)
+    request.set('includeRpsCodes', True)
+    request.set('includeTradeTime', True)
+    request.set('includeActionCodes', True)
+    request.set('includeIndicatorCodes', True)
+
+    logger.debug(f'Sending request to Bloomberg ...\n{request}')
+    conn.send_request(request=request)
+
+    res = pd.DataFrame(process.rec_events(func=process.process_bar, typ='t'))
+    if kwargs.get('raw', False): return res
+    if res.empty or ('time' not in res): return pd.DataFrame()
+
+    return (
+        res
+        .set_index('time')
+        .rename_axis(index=None)
+        .tz_localize('UTC')
+        .tz_convert(exch.tz)
+        .pipe(pipeline.add_ticker, ticker=ticker)
+        .rename(columns={
+            'size': 'volume',
+            'type': 'typ',
+            'conditionCodes': 'cond',
+            'exchangeCode': 'exch',
+            'tradeTime': 'trd_time',
+        })
+    )
 
 
 def earning(
@@ -426,7 +490,7 @@ def beqs(
 
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
-    res = pd.DataFrame(process.receive_events(func=process.process_ref))
+    res = pd.DataFrame(process.rec_events(func=process.process_ref))
     if res.empty:
         if kwargs.get('trial', 0): return pd.DataFrame()
         else: return beqs(

@@ -85,7 +85,7 @@ def time_range(dt, ticker, session='allday', tz='UTC') -> intervals.Session:
     return intervals.Session(time_idx[0].strftime(time_fmt), time_idx[1].strftime(time_fmt))
 
 
-def receive_events(func, **kwargs):
+def rec_events(func, **kwargs):
     """
     Receive events received from Bloomberg
 
