@@ -189,10 +189,12 @@ def process_bar(msg: blpapi.message.Message, typ='bar') -> OrderedDict:
     else:
         lvls = [BAR_DATA, BAR_TICK]
 
-    for bar in msg.getElement(lvls[0]).getElement(lvls[1]).values():
-        yield OrderedDict([
-            (str(elem.name()), elem.getValue()) for elem in bar.elements()
-        ])
+    if msg.hasElement(lvls[0]):
+        for bar in msg.getElement(lvls[0]).getElement(lvls[1]).values():
+            yield OrderedDict([
+                (str(elem.name()), elem.getValue())
+                for elem in bar.elements()
+            ])
 
 
 def check_error(msg):

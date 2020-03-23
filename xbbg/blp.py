@@ -187,12 +187,14 @@ def bdib(
     data_file = storage.bar_file(ticker=ticker, dt=dt, typ=typ)
     if files.exists(data_file) and kwargs.get('cache', True) \
             and (not kwargs.get('reload', False)):
-        logger.debug(f'Loading Bloomberg intraday data from: {data_file}')
-        return (
+        res = (
             pd.read_parquet(data_file)
             .pipe(pipeline.add_ticker, ticker=ticker)
             .loc[ss_rng[0]:ss_rng[1]]
         )
+        if not res.empty:
+            logger.debug(f'Loading Bloomberg intraday data from: {data_file}')
+            return res
 
     t_1 = pd.Timestamp('today').date() - pd.Timedelta('1D')
     whole_day = pd.Timestamp(dt).date() < t_1
@@ -227,6 +229,7 @@ def bdib(
     service = conn.bbg_service(service='//blp/refdata', **kwargs)
     request = service.createRequest('IntradayBarRequest')
 
+    while conn.bbg_session(**kwargs).tryNextEvent(): pass
     request.set('security', ticker)
     request.set('eventType', typ)
     request.set('interval', kwargs.get('interval', 1))
@@ -259,7 +262,7 @@ def bdib(
     return data.loc[ss_rng[0]:ss_rng[1]]
 
 
-def bdt(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
+def bdtick(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
     """
     Bloomberg tick data
 
@@ -275,7 +278,7 @@ def bdt(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
     Returns:
         pd.DataFrame
     """
-    logger = logs.get_logger(bdt, **kwargs)
+    logger = logs.get_logger(bdtick, **kwargs)
 
     exch = const.exch_info(ticker=ticker)
     time_rng = process.time_range(dt=dt, ticker=ticker, session=session)
@@ -283,6 +286,7 @@ def bdt(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
     service = conn.bbg_service(service='//blp/refdata', **kwargs)
     request = service.createRequest('IntradayTickRequest')
 
+    while conn.bbg_session(**kwargs).tryNextEvent(): pass
     if types is None: types = ['TRADE']
     if isinstance(types, str): types = [types]
     request.set('security', ticker)

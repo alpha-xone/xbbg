@@ -261,3 +261,23 @@ def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
     return data.loc[:, ~data.columns.str.contains(
         '|'.join(map(str, range(year - 20, year)))
     )]
+
+
+def perf(data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Performance rebased to 100
+    """
+    return pd.DataFrame(
+        pd.concat([
+            (
+                srs
+                .dropna()
+                .pct_change()
+                .fillna(0)
+                .add(1)
+                .cumprod()
+                .mul(100)
+            )
+            for _, srs in data.items()
+        ], axis=1)
+    )
