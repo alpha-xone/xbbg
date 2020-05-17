@@ -10,7 +10,7 @@ Session = namedtuple('Session', ['start_time', 'end_time'])
 SessNA = Session(None, None)
 
 
-def get_interval(ticker, session) -> Session:
+def get_interval(ticker, session, **kwargs) -> Session:
     """
     Get interval from defined session
 
@@ -51,7 +51,7 @@ def get_interval(ticker, session) -> Session:
     """
     if '_' not in session:
         session = f'{session}_normal_0_0'
-    interval = Intervals(ticker=ticker)
+    interval = Intervals(ticker=ticker, **kwargs)
     ss_info = session.split('_')
     return getattr(interval, f'market_{ss_info.pop(1)}')(*ss_info)
 
@@ -74,13 +74,13 @@ def shift_time(start_time, mins) -> str:
 
 class Intervals(object):
 
-    def __init__(self, ticker):
+    def __init__(self, ticker, **kwargs):
         """
         Args:
             ticker: ticker
         """
         self.ticker = ticker
-        self.exch = const.exch_info(ticker=ticker)
+        self.exch = const.exch_info(ticker=ticker, **kwargs)
 
     def market_open(self, session, mins) -> Session:
         """

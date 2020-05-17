@@ -170,6 +170,8 @@ def bdib(
         session: [allday, day, am, pm, pre, post]
         typ: [TRADE, BID, ASK, BID_BEST, ASK_BEST, BEST_BID, BEST_ASK]
         **kwargs:
+            ref: reference ticker or exchange
+                 used as supplement if exchange info is not defined for `ticker`
             batch: whether is batch process to download data
             log: level of logs
 
@@ -180,10 +182,12 @@ def bdib(
 
     logger = logs.get_logger(bdib, **kwargs)
 
-    exch = const.exch_info(ticker=ticker)
-    if exch.empty: raise KeyError(f'Cannot find exchange info for {ticker}')
+    ex_info = const.exch_info(ticker=ticker, **kwargs)
+    if ex_info.empty: raise KeyError(f'Cannot find exchange info for {ticker}')
 
-    ss_rng = process.time_range(dt=dt, ticker=ticker, session=session, tz=exch.tz)
+    ss_rng = process.time_range(
+        dt=dt, ticker=ticker, session=session, tz=ex_info.tz, **kwargs
+    )
     data_file = storage.bar_file(ticker=ticker, dt=dt, typ=typ)
     if files.exists(data_file) and kwargs.get('cache', True) \
             and (not kwargs.get('reload', False)):
@@ -207,13 +211,13 @@ def bdib(
     info_log = f'{ticker} / {cur_dt} / {typ}'
 
     q_tckr = ticker
-    if exch.get('is_fut', False):
-        if 'freq' not in exch:
+    if ex_info.get('is_fut', False):
+        if 'freq' not in ex_info:
             logger.error(f'[freq] missing in info for {info_log} ...')
 
-        is_sprd = exch.get('has_sprd', False) and (len(ticker[:-1]) != exch['tickers'][0])
+        is_sprd = ex_info.get('has_sprd', False) and (len(ticker[:-1]) != ex_info['tickers'][0])
         if not is_sprd:
-            q_tckr = fut_ticker(gen_ticker=ticker, dt=dt, freq=exch['freq'])
+            q_tckr = fut_ticker(gen_ticker=ticker, dt=dt, freq=ex_info['freq'])
             if q_tckr == '':
                 logger.error(f'cannot find futures ticker for {ticker} ...')
                 return pd.DataFrame()
@@ -234,7 +238,7 @@ def bdib(
     request.set('eventType', typ)
     request.set('interval', kwargs.get('interval', 1))
 
-    time_rng = process.time_range(dt=dt, ticker=ticker, session='allday')
+    time_rng = process.time_range(dt=dt, ticker=ticker, session='allday', **kwargs)
     request.set('startDateTime', time_rng[0])
     request.set('endDateTime', time_rng[1])
 
@@ -253,7 +257,7 @@ def bdib(
         .rename_axis(index=None)
         .rename(columns={'numEvents': 'num_trds'})
         .tz_localize('UTC')
-        .tz_convert(exch.tz)
+        .tz_convert(ex_info.tz)
         .pipe(pipeline.add_ticker, ticker=ticker)
     )
     if kwargs.get('cache', True):

@@ -13,12 +13,15 @@ CurrencyPair = namedtuple('CurrencyPair', ['ticker', 'factor', 'power'])
 ValidSessions = ['allday', 'day', 'am', 'pm', 'night', 'pre', 'post']
 
 
-def exch_info(ticker: str) -> pd.Series:
+def exch_info(ticker: str, **kwargs) -> pd.Series:
     """
     Exchange info for given ticker
 
     Args:
         ticker: ticker or exchange
+        **kwargs:
+            ref: reference ticker or exchange
+                 used as supplement if exchange info is not defined for `ticker`
 
     Returns:
         pd.Series
@@ -31,7 +34,19 @@ def exch_info(ticker: str) -> pd.Series:
         pre         [04:00, 09:30]
         post        [16:01, 20:00]
         dtype: object
+        >>> exch_info('SPY US Equity', ref='EquityUS')
+        tz        America/New_York
+        allday      [04:00, 20:00]
+        day         [09:30, 16:00]
+        pre         [04:00, 09:30]
+        post        [16:01, 20:00]
+        dtype: object
         >>> exch_info('ES1 Index')
+        tz        America/New_York
+        allday      [18:00, 17:00]
+        day         [08:00, 17:00]
+        dtype: object
+        >>> exch_info('ESM0 Index', ref='ES1 Index')
         tz        America/New_York
         allday      [18:00, 17:00]
         day         [08:00, 17:00]
@@ -52,11 +67,17 @@ def exch_info(ticker: str) -> pd.Series:
         dtype: object
     """
     logger = logs.get_logger(exch_info, level='debug')
-    if ' ' not in ticker.strip():
-        ticker = f'XYZ {ticker.strip()} Equity'
-    info = param.load_info(cat='exch').get(
-        market_info(ticker=ticker).get('exch', ''), dict()
-    )
+
+    if 'ref' in kwargs: ticker = kwargs['ref']
+    all_exch = param.load_info(cat='exch')
+    if ticker in all_exch:
+        info = all_exch[ticker]
+    else:
+        if ' ' not in ticker.strip():
+            ticker = f'XYZ {ticker.strip()} Equity'
+        info = all_exch.get(
+            market_info(ticker=ticker).get('exch', ticker), dict()
+        )
     if ('allday' in info) and ('day' not in info):
         info['day'] = info['allday']
 
