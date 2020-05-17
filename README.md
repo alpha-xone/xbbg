@@ -16,7 +16,6 @@ Bloomberg data toolkit for humans
 |                | [![codebeat badge](https://codebeat.co/badges/eef1f14d-72eb-445a-af53-12d3565385ec)](https://codebeat.co/projects/github-com-alpha-xone-xbbg-master)                             |
 | License        | [![GitHub license](https://img.shields.io/github/license/alpha-xone/xbbg.svg)](https://github.com/alpha-xone/xbbg/blob/master/LICENSE)                                           |
 |                | [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Falpha-xone%2Fxbbg)  |
-| Release        | [![DOI](https://zenodo.org/badge/157477269.svg)](https://zenodo.org/badge/latestdoi/157477269)                                                                                   |
 | Chat           | [![Gitter](https://badges.gitter.im/xbbg/community.svg)](https://gitter.im/xbbg/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)                               |
 
 ## Features
@@ -51,6 +50,10 @@ pip install xbbg
 
 ## What's New
 
+_0.6.6_ - Add flexibility to use reference exchange as market hour definition
+(so that it's not necessary to add `.yml` for new tickers, provided the exchange was defined
+in `/xbbg/markets/exch.yml`). See example of `bdib` below for more details.
+
 _0.6.0_ - Speed improvements and tick data availablity
 
 _0.5.0_ - Rewritten library to add subscription, BEQS, simplify interface and remove dependency of `pdblp`
@@ -62,7 +65,7 @@ _0.1.17_ - Add `adjust` argument in `bdh` for easier dividend / split adjustment
 ## Tutorial
 
 ```python
-In[1]: from xbbg import blp
+In [1]: from xbbg import blp
 ```
 
 ### Basics
@@ -70,7 +73,7 @@ In[1]: from xbbg import blp
 - ``BDP`` example:
 
 ```python
-In[2]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Name'])
+In [2]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Name'])
 ```
 
 ```pydocstring
@@ -82,7 +85,7 @@ NVDA US Equity   NVIDIA Corp  Information Technology
 - ``BDP`` with overrides:
 
 ```python
-In[3]: blp.bdp('AAPL US Equity', 'Eqy_Weighted_Avg_Px', VWAP_Dt='20181224')
+In [3]: blp.bdp('AAPL US Equity', 'Eqy_Weighted_Avg_Px', VWAP_Dt='20181224')
 ```
 
 ```pydocstring
@@ -94,10 +97,10 @@ AAPL US Equity               148.75
 - ``BDH`` example:
 
 ```python
-In[4]: blp.bdh(
-  ...:     tickers='SPX Index', flds=['high', 'low', 'last_price'],
-  ...:     start_date='2018-10-10', end_date='2018-10-20',
-  ...: )
+In [4]: blp.bdh(
+   ...:     tickers='SPX Index', flds=['high', 'low', 'last_price'],
+   ...:     start_date='2018-10-10', end_date='2018-10-20',
+   ...: )
 ```
 
 ```pydocstring
@@ -117,15 +120,15 @@ Out[4]:
 - ``BDH`` example with Excel compatible inputs:
 
 ```python
-In[4]: blp.bdh(
-  ...:     tickers='SHCOMP Index', flds=['high', 'low', 'last_price'],
-  ...:     start_date='2018-09-26', end_date='2018-10-20',
-  ...:     Per='W', Fill='P', Days='A',
-  ...: )
+In [5]: blp.bdh(
+   ...:     tickers='SHCOMP Index', flds=['high', 'low', 'last_price'],
+   ...:     start_date='2018-09-26', end_date='2018-10-20',
+   ...:     Per='W', Fill='P', Days='A',
+   ...: )
 ```
 
 ```pydocstring
-Out[4]:
+Out[5]:
            SHCOMP Index
                    high      low last_price
 2018-09-28     2,827.34 2,771.16   2,821.35
@@ -137,14 +140,14 @@ Out[4]:
 - ``BDH`` without adjustment for dividends and splits:
 
 ```python
-In[5]: blp.bdh(
-  ...:     'AAPL US Equity', 'px_last', '20140605', '20140610',
-  ...:     CshAdjNormal=False, CshAdjAbnormal=False, CapChg=False
-  ...: )
+In [6]: blp.bdh(
+   ...:     'AAPL US Equity', 'px_last', '20140605', '20140610',
+   ...:     CshAdjNormal=False, CshAdjAbnormal=False, CapChg=False
+   ...: )
 ```
 
 ```pydocstring
-Out[5]: 
+Out[6]: 
            AAPL US Equity
                   px_last
 2014-06-05         647.35
@@ -156,14 +159,14 @@ Out[5]:
 - ``BDH`` adjusted for dividends and splits:
 
 ```python
-In[6]: blp.bdh(
-  ...:     'AAPL US Equity', 'px_last', '20140605', '20140610',
-  ...:     CshAdjNormal=True, CshAdjAbnormal=True, CapChg=True
-  ...: )
+In [7]: blp.bdh(
+   ...:     'AAPL US Equity', 'px_last', '20140605', '20140610',
+   ...:     CshAdjNormal=True, CshAdjAbnormal=True, CapChg=True
+   ...: )
 ```
 
 ```pydocstring
-Out[6]:
+Out[7]:
            AAPL US Equity
                   px_last
 2014-06-05          85.45
@@ -175,11 +178,11 @@ Out[6]:
 - ``BDS`` example:
 
 ```python
-In[7]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_End_Dt='20180531')
+In [8]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_End_Dt='20180531')
 ```
 
 ```pydocstring
-Out[7]:
+Out[8]:
                declared_date     ex_date record_date payable_date  dividend_amount dividend_frequency dividend_type
 AAPL US Equity    2018-05-01  2018-05-11  2018-05-14   2018-05-17             0.73            Quarter  Regular Cash
 AAPL US Equity    2018-02-01  2018-02-09  2018-02-12   2018-02-15             0.63            Quarter  Regular Cash
@@ -188,11 +191,11 @@ AAPL US Equity    2018-02-01  2018-02-09  2018-02-12   2018-02-15             0.
 - Intraday bars ``BDIB`` example:
 
 ```python
-In[8]: blp.bdib(ticker='BHP AU Equity', dt='2018-10-17').tail()
+In [9]: blp.bdib(ticker='BHP AU Equity', dt='2018-10-17').tail()
 ```
 
 ```pydocstring
-Out[8]:
+Out[9]:
                           BHP AU Equity
                                    open  high   low close   volume num_trds
 2018-10-17 15:56:00+11:00         33.62 33.65 33.62 33.64    16660      126
@@ -207,14 +210,32 @@ Above example works because 1) `AU` in equity ticker is mapped to `EquityAustral
 To add new mappings, define `BBG_ROOT` in sys path and add `assets.yml` and 
 `exch.yml` under `BBG_ROOT/markets`.
 
-- Intraday bars within market session:
+*New in 0.6.6* - if exchange is defined in `/xbbg/markets/exch.yml`, can use `ref` to look for
+relevant exchange market hours. Both `ref='ES1 Index'` and `ref='CME'` work for this example:
 
 ```python
-In[9]: blp.bdib(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
+In [10]: blp.bdib(ticker='ESM0 Index', dt='2020-03-20', ref='ES1 Index').tail()
 ```
 
 ```pydocstring
-Out[9]:
+out[10]:
+                          ESM0 Index
+                                open     high      low    close volume num_trds        value
+2020-03-20 16:55:00-04:00   2,260.75 2,262.25 2,260.50 2,262.00    412      157   931,767.00
+2020-03-20 16:56:00-04:00   2,262.25 2,267.00 2,261.50 2,266.75    812      209 1,838,823.50
+2020-03-20 16:57:00-04:00   2,266.75 2,270.00 2,264.50 2,269.00   1136      340 2,576,590.25
+2020-03-20 16:58:00-04:00   2,269.25 2,269.50 2,261.25 2,265.75   1077      408 2,439,276.00
+2020-03-20 16:59:00-04:00   2,265.25 2,272.00 2,265.00 2,266.50   1271      378 2,882,978.25
+```
+
+- Intraday bars within market session:
+
+```python
+In [11]: blp.bdib(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
+```
+
+```pydocstring
+Out[11]:
                           7974 JT Equity
                                     open      high       low     close volume num_trds
 2018-10-17 09:27:00+09:00      39,970.00 40,020.00 39,970.00 39,990.00  10800       44
@@ -227,11 +248,11 @@ Out[9]:
 - Corporate earnings:
 
 ```python
-In[10]: blp.earning('AMD US Equity', by='Geo', Eqy_Fund_Year=2017, Number_Of_Periods=1)
+In [12]: blp.earning('AMD US Equity', by='Geo', Eqy_Fund_Year=2017, Number_Of_Periods=1)
 ```
 
 ```pydocstring
-Out[10]:
+Out[12]:
                  level    fy2017  fy2017_pct
 Asia-Pacific      1.00  3,540.00       66.43
     China         2.00  1,747.00       49.35
@@ -245,11 +266,11 @@ Other Countries   1.00    162.00        3.04
 - Dividends:
 
 ```python
-In[11]: blp.dividend(['C US Equity', 'MS US Equity'], start_date='2018-01-01', end_date='2018-05-01')
+In [13]: blp.dividend(['C US Equity', 'MS US Equity'], start_date='2018-01-01', end_date='2018-05-01')
 ```
 
 ```pydocstring
-Out[11]:
+Out[13]:
                 dec_date     ex_date    rec_date    pay_date  dvd_amt dvd_freq      dvd_type
 C US Equity   2018-01-18  2018-02-02  2018-02-05  2018-02-23     0.32  Quarter  Regular Cash
 MS US Equity  2018-04-18  2018-04-27  2018-04-30  2018-05-15     0.25  Quarter  Regular Cash
@@ -263,11 +284,11 @@ MS US Equity  2018-01-18  2018-01-30  2018-01-31  2018-02-15     0.25  Quarter  
 - ``BDH`` without adjustment for dividends and splits:
 
 ```python
-In[12]: blp.bdh('AAPL US Equity', 'px_last', '20140606', '20140609', adjust='-')
+In [14]: blp.bdh('AAPL US Equity', 'px_last', '20140606', '20140609', adjust='-')
 ```
 
 ```pydocstring
-Out[12]:
+Out[14]:
            AAPL US Equity
                   px_last
 2014-06-06         645.57
@@ -277,11 +298,11 @@ Out[12]:
 - ``BDH`` adjusted for dividends and splits:
 
 ```python
-In[13]: blp.bdh('AAPL US Equity', 'px_last', '20140606', '20140609', adjust='all')
+In [15]: blp.bdh('AAPL US Equity', 'px_last', '20140606', '20140609', adjust='all')
 ```
 
 ```pydocstring
-Out[13]:
+Out[15]:
            AAPL US Equity
                   px_last
 2014-06-06          85.22
