@@ -58,7 +58,7 @@ if __name__ == '__main__':
     setup(
         name='xbbg',
         version=parse_version('xbbg'),
-        description='Bloomberg data toolkit for humans',
+        description='Intuitive Bloomberg data API',
         long_description=parse_description(),
         long_description_content_type='text/markdown',
         url='https://github.com/alpha-xone/xbbg',
