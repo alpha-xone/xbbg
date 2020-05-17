@@ -261,7 +261,7 @@ def bdib(
         .pipe(pipeline.add_ticker, ticker=ticker)
     )
     if kwargs.get('cache', True):
-        storage.save_intraday(data=data[ticker], ticker=ticker, dt=dt, typ=typ)
+        storage.save_intraday(data=data[ticker], ticker=ticker, dt=dt, typ=typ, **kwargs)
 
     return data.loc[ss_rng[0]:ss_rng[1]]
 
@@ -284,7 +284,7 @@ def bdtick(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
     """
     logger = logs.get_logger(bdtick, **kwargs)
 
-    exch = const.exch_info(ticker=ticker)
+    exch = const.exch_info(ticker=ticker, **kwargs)
     time_rng = process.time_range(dt=dt, ticker=ticker, session=session)
 
     service = conn.bbg_service(service='//blp/refdata', **kwargs)

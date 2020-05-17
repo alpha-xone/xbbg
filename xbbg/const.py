@@ -68,7 +68,7 @@ def exch_info(ticker: str, **kwargs) -> pd.Series:
     """
     logger = logs.get_logger(exch_info, level='debug')
 
-    if 'ref' in kwargs: ticker = kwargs['ref']
+    if kwargs.get('ref', None): ticker = kwargs['ref']
     all_exch = param.load_info(cat='exch')
     if ticker in all_exch:
         info = all_exch[ticker]
@@ -240,7 +240,7 @@ def ccy_pair(local, base='USD') -> CurrencyPair:
     return CurrencyPair(**info)
 
 
-def market_timing(ticker, dt, timing='EOD', tz='local') -> str:
+def market_timing(ticker, dt, timing='EOD', tz='local', **kwargs) -> str:
     """
     Market close time for ticker
 
@@ -270,7 +270,7 @@ def market_timing(ticker, dt, timing='EOD', tz='local') -> str:
         ''
     """
     logger = logs.get_logger(market_timing)
-    exch = pd.Series(exch_info(ticker=ticker))
+    exch = pd.Series(exch_info(ticker=ticker, **kwargs))
     if any(req not in exch.index for req in ['tz', 'allday', 'day']):
         logger.error(f'required exchange info cannot be found in {ticker} ...')
         return ''

@@ -135,7 +135,7 @@ def ref_file(
     else: return f'{root}/{info}.{ext}'
 
 
-def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE'):
+def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE', **kwargs):
     """
     Check whether data is done for the day and save
 
@@ -167,11 +167,11 @@ def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE'):
         logger.warning(f'data is empty for {info} ...')
         return
 
-    exch = const.exch_info(ticker=ticker)
+    exch = const.exch_info(ticker=ticker, **kwargs)
     if exch.empty: return
 
     end_time = pd.Timestamp(
-        const.market_timing(ticker=ticker, dt=dt, timing='FINISHED')
+        const.market_timing(ticker=ticker, dt=dt, timing='FINISHED', **kwargs)
     ).tz_localize(exch.tz)
     now = pd.Timestamp('now', tz=exch.tz) - pd.Timedelta('1H')
 
