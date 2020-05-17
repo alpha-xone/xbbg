@@ -8,7 +8,7 @@ Latest Release |pypi|
 \              |version|
 \              |download|
 Docs           |docs|
-Build          |travis|
+Build          |actions|
 Coverage       |codecov|
 Quality        |codacy|
 \              |codeFactor|
@@ -296,8 +296,8 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
     :target: https://badge.fury.io/py/xbbg
 .. |version| image:: https://img.shields.io/pypi/pyversions/xbbg.svg
     :target: https://badge.fury.io/py/xbbg
-.. |travis| image:: https://img.shields.io/travis/alpha-xone/xbbg/master.svg?logo=travis&label=Travis%20CI
-    :target: https://travis-ci.com/alpha-xone/xbbg
+.. |actions| image:: https://github.com/alpha-xone/xbbg/workflows/Auto%20CI/badge.svg
+    :target: https://github.com/alpha-xone/xbbg/actions
     :alt: Travis CI
 .. |azure| image:: https://dev.azure.com/alpha-xone/xbbg/_apis/build/status/alpha-xone.xbbg
     :target: https://dev.azure.com/alpha-xone/xbbg/_build
