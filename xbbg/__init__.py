@@ -1,3 +1,3 @@
-"""Bloomberg data toolkit for humans"""
+"""Intuitive Bloomberg data API"""
 
-__version__ = '0.6.6'
+__version__ = '0.6.7'
