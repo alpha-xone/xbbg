@@ -8,16 +8,13 @@ jobs:
   deploy:
 
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: [3.6, 3.7]
 
     steps:
     - uses: actions/checkout@v2
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
-        python-version: ${{ matrix.python }}
+        python-version: '3.x'
     - name: Install dependencies
       run: |
         pip install pip==20.0.2
