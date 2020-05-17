@@ -361,7 +361,7 @@ def earning(
 
     if data.empty or header.empty: return pd.DataFrame()
     if data.shape[1] != header.shape[1]:
-        raise ValueError(f'Inconsistent shape of data and header')
+        raise ValueError('Inconsistent shape of data and header')
     data.columns = (
         header.iloc[0]
         .str.lower()
@@ -370,7 +370,7 @@ def earning(
         .tolist()
     )
 
-    if 'level' not in data: raise KeyError(f'Cannot find [level] in data')
+    if 'level' not in data: raise KeyError('Cannot find [level] in data')
     for yr in data.columns[data.columns.str.startswith('fy')]:
         pct = f'{yr}_pct'
         data.loc[:, pct] = np.nan
