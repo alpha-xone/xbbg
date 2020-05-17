@@ -1,7 +1,7 @@
 xbbg
 ====
 
-Bloomberg data toolkit for humans
+Intuitive Bloomberg data API
 
 ============== ======================
 Latest Release |pypi|
@@ -201,9 +201,6 @@ relevant exchange market hours. Both ``ref='ES1 Index'`` and ``ref='CME'`` work 
 .. code-block:: python
 
     In [10]: blp.bdib(ticker='ESM0 Index', dt='2020-03-20', ref='ES1 Index').tail()
-
-.. code-block:: python
-
     out[10]:
                               ESM0 Index
                                     open     high      low    close volume num_trds        value
