@@ -50,7 +50,7 @@ pip install xbbg
 ## What's New
 
 _0.6.6_ - Add flexibility to use reference exchange as market hour definition
-(so that it's not necessary to add `.yml` for new tickers, provided the exchange was defined
+(so that it's not necessary to add `.yml` for new tickers, provided that the exchange was defined
 in `/xbbg/markets/exch.yml`). See example of `bdib` below for more details.
 
 _0.6.0_ - Speed improvements and tick data availablity
