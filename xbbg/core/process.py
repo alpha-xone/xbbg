@@ -117,7 +117,7 @@ def rec_events(func, **kwargs):
                     == SESSION_TERMINATED: break
 
 
-def process_ref(msg: blpapi.message.Message) -> dict:
+def process_ref(msg: blpapi.message.Message, **kwargs) -> dict:
     """
     Process reference messages from Bloomberg
 
@@ -127,6 +127,7 @@ def process_ref(msg: blpapi.message.Message) -> dict:
     Returns:
         dict
     """
+    kwargs.pop('@_<', None)
     data = None
     if msg.hasElement('securityData'):
         data = msg.getElement('securityData')
@@ -154,7 +155,7 @@ def process_ref(msg: blpapi.message.Message) -> dict:
                 ])
 
 
-def process_hist(msg: blpapi.message.Message) -> dict:
+def process_hist(msg: blpapi.message.Message, **kwargs) -> dict:
     """
     Process historical data messages from Bloomberg
 
@@ -164,6 +165,7 @@ def process_hist(msg: blpapi.message.Message) -> dict:
     Returns:
         dict
     """
+    kwargs.pop('>_<', None)
     if not msg.hasElement('securityData'): return {}
     ticker = msg.getElement('securityData').getElement('security').getValue()
     for val in msg.getElement('securityData').getElement('fieldData').values():
@@ -173,7 +175,7 @@ def process_hist(msg: blpapi.message.Message) -> dict:
             ])
 
 
-def process_bar(msg: blpapi.message.Message, typ='bar') -> OrderedDict:
+def process_bar(msg: blpapi.message.Message, typ='bar', **kwargs) -> OrderedDict:
     """
     Process Bloomberg intraday bar messages
 
@@ -184,6 +186,7 @@ def process_bar(msg: blpapi.message.Message, typ='bar') -> OrderedDict:
     Yields:
         OrderedDict
     """
+    kwargs.pop('#_#', None)
     check_error(msg=msg)
     if typ[0].lower() == 't':
         lvls = [TICK_DATA, TICK_DATA]
