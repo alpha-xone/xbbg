@@ -33,7 +33,7 @@ def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
 
-    res = pd.DataFrame(process.rec_events(func=process.process_ref))
+    res = pd.DataFrame(process.rec_events(func=process.process_ref, **kwargs))
     if kwargs.get('raw', False): return res
     if res.empty or any(fld not in res for fld in ['ticker', 'field']):
         return pd.DataFrame()
@@ -80,7 +80,7 @@ def bds(tickers, flds, **kwargs) -> pd.DataFrame:
         logger.debug(f'Sending request to Bloomberg ...\n{request}')
         conn.send_request(request=request, **kwargs)
 
-        res = pd.DataFrame(process.rec_events(func=process.process_ref))
+        res = pd.DataFrame(process.rec_events(func=process.process_ref, **kwargs))
         if kwargs.get('raw', False): return res
         if res.empty or any(fld not in res for fld in ['ticker', 'field']):
             return pd.DataFrame()
@@ -144,7 +144,7 @@ def bdh(
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
 
-    res = pd.DataFrame(process.rec_events(process.process_hist))
+    res = pd.DataFrame(process.rec_events(process.process_hist, **kwargs))
     if kwargs.get('raw', False): return res
     if res.empty or any(fld not in res for fld in ['ticker', 'date']):
         return pd.DataFrame()
@@ -155,6 +155,8 @@ def bdh(
         .unstack(level=0)
         .rename_axis(index=None, columns=[None, None])
         .swaplevel(0, 1, axis=1)
+        .reindex(columns=tickers, level=0)
+        .reindex(columns=flds, level=1)
     )
 
 
@@ -245,7 +247,7 @@ def bdib(
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
 
-    res = pd.DataFrame(process.rec_events(func=process.process_bar))
+    res = pd.DataFrame(process.rec_events(func=process.process_bar, **kwargs))
     if res.empty or ('time' not in res):
         logger.warning(f'No data for {info_log} ...')
         missing.update_missing(**miss_kw)
@@ -309,7 +311,7 @@ def bdtick(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request)
 
-    res = pd.DataFrame(process.rec_events(func=process.process_bar, typ='t'))
+    res = pd.DataFrame(process.rec_events(func=process.process_bar, typ='t', **kwargs))
     if kwargs.get('raw', False): return res
     if res.empty or ('time' not in res): return pd.DataFrame()
 
@@ -354,6 +356,12 @@ def earning(
     kwargs.pop('raw', None)
     ovrd = 'G' if by[0].upper() == 'G' else 'P'
     new_kw = dict(Product_Geo_Override=ovrd)
+
+    year = kwargs.pop('year', None)
+    periods = kwargs.pop('periods', None)
+    if year: kwargs['Eqy_Fund_Year'] = year
+    if periods: kwargs['Number_Of_Periods'] = periods
+
     header = bds(tickers=ticker, flds='PG_Bulk_Header', **new_kw, **kwargs)
     if ccy: kwargs['Eqy_Fund_Crncy'] = ccy
     if level: kwargs['PG_Hierarchy_Level'] = level
@@ -498,7 +506,7 @@ def beqs(
 
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
-    res = pd.DataFrame(process.rec_events(func=process.process_ref))
+    res = pd.DataFrame(process.rec_events(func=process.process_ref, **kwargs))
     if res.empty:
         if kwargs.get('trial', 0): return pd.DataFrame()
         else: return beqs(

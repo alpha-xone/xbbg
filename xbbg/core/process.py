@@ -98,8 +98,9 @@ def rec_events(func, **kwargs):
     """
     timeout_counts = 0
     responses = [blpapi.Event.PARTIAL_RESPONSE, blpapi.Event.RESPONSE]
+    timeout = kwargs.pop('timeout', 500)
     while True:
-        ev = conn.bbg_session(**kwargs).nextEvent(500)
+        ev = conn.bbg_session(**kwargs).nextEvent(timeout=timeout)
         if ev.eventType() in responses:
             for msg in ev:
                 for r in func(msg=msg, **kwargs):
@@ -108,7 +109,7 @@ def rec_events(func, **kwargs):
                 break
         elif ev.eventType() == blpapi.Event.TIMEOUT:
             timeout_counts += 1
-            if timeout_counts > 10:
+            if timeout_counts > 20:
                 break
         else:
             for _ in ev:
