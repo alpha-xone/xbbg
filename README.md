@@ -49,6 +49,10 @@ pip install xbbg
 
 ## What's New
 
+_0.7.0_ - `bdh` preserves columns orders (both tickers and flds).
+`timeout` argument is available for all queries - `bdtick` usually takes longer to respond -
+can use `timeout=1000` for example if keep getting empty DataFrame.
+
 _0.6.6_ - Add flexibility to use reference exchange as market hour definition
 (so that it's not necessary to add `.yml` for new tickers, provided that the exchange was defined
 in `/xbbg/markets/exch.yml`). See example of `bdib` below for more details.
