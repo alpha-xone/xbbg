@@ -1,8 +1,3 @@
 """Intuitive Bloomberg data API"""
 
-from xbbg.blp import __version__
-
-
-__all__ = [
-    '__version__',
-]
+__version__ = '0.7.0b2'

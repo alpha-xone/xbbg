@@ -4,11 +4,11 @@ import numpy as np
 import datetime
 from contextlib import contextmanager
 
-from xbbg import const, pipeline
+from xbbg import __version__, const, pipeline
 from xbbg.io import logs, files, storage
 from xbbg.core import utils, conn, process
 
-__version__ = '0.7.0b2'
+__all__ = ['__version__']
 
 
 def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
