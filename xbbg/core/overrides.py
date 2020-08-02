@@ -105,7 +105,7 @@ def proc_elms(**kwargs) -> list:
     for k, v in kwargs.items():
         if (k in included) and (k not in PRSV_COLS):
             yield ELEM_KEYS.get(k, k), \
-                  ELEM_VALS.get(ELEM_KEYS.get(k, k), dict()).get(v, v)
+                ELEM_VALS.get(ELEM_KEYS.get(k, k), dict()).get(v, v)
 
 
 def info_qry(tickers, flds) -> str:

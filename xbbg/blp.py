@@ -612,8 +612,9 @@ def live(
                         }}
                         yield {
                             key: value for key, value in values.items()
-                            if value not in [np.nan, pd.NaT, None]
-                            or (isinstance(value, str) and value.strip())
+                            if value not in [np.nan, pd.NaT, None] or (
+                                isinstance(value, str) and value.strip()
+                            )
                         }
                         cnt += 1
             except ValueError as e: logger.debug(e)

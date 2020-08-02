@@ -1,0 +1,3 @@
+[flake8]
+ignore = E701,E501
+exclude = xbbg/feeds/*
