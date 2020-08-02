@@ -8,6 +8,8 @@ from xbbg import const, pipeline
 from xbbg.io import logs, files, storage
 from xbbg.core import utils, conn, process
 
+__version__ = '0.7.0b2'
+
 
 def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
     """
@@ -155,8 +157,8 @@ def bdh(
         .unstack(level=0)
         .rename_axis(index=None, columns=[None, None])
         .swaplevel(0, 1, axis=1)
-        .reindex(columns=tickers, level=0)
-        .reindex(columns=flds, level=1)
+        .reindex(columns=utils.flatten(tickers), level=0)
+        .reindex(columns=utils.flatten(flds), level=1)
     )
 
 
