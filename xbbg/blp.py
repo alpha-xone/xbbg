@@ -289,7 +289,9 @@ def bdtick(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
     logger = logs.get_logger(bdtick, **kwargs)
 
     exch = const.exch_info(ticker=ticker, **kwargs)
-    time_rng = process.time_range(dt=dt, ticker=ticker, session=session)
+    time_rng = process.time_range(
+        dt=dt, ticker=ticker, session=session, tz=exch.tz, **kwargs
+    )
 
     service = conn.bbg_service(service='//blp/refdata', **kwargs)
     request = service.createRequest('IntradayTickRequest')
