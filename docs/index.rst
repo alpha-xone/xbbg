@@ -3,19 +3,9 @@ xbbg
 
 Intuitive Bloomberg data API
 
-============== ======================
-Latest Release |pypi|
-\              |version|
-\              |download|
-Docs           |docs|
-Build          |actions|
-Coverage       |codecov|
-Quality        |codacy|
-\              |codeFactor|
-\              |codebeat|
-License        |license|
-Chat           |chat|
-============== ======================
+|pypi| |version| |download| |chat|
+
+|coffee|
 
 Features
 ========
@@ -295,6 +285,16 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
     The most fundamental requirement regarding your use of Data is that it cannot
     leave the local PC you use to access the BLOOMBERG PROFESSIONAL service.
 
+============== ======================
+Docs           |docs|
+Build          |actions|
+Coverage       |codecov|
+Quality        |codacy|
+\              |codeFactor|
+\              |codebeat|
+License        |license|
+============== ======================
+
 .. |pypi| image:: https://img.shields.io/pypi/v/xbbg.svg
     :target: https://badge.fury.io/py/xbbg
 .. |version| image:: https://img.shields.io/pypi/pyversions/xbbg.svg
@@ -324,4 +324,6 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
    :target: https://gitter.im/xbbg/community
 .. |download| image:: https://img.shields.io/pypi/dm/xbbg
    :target: https://pypistats.org/packages/xbbg
+.. |coffee| image:: https://www.buymeacoffee.com/assets/img/custom_images/purple_img.png
+   :target: https://www.buymeacoffee.com/Lntx29Oof
 .. _Bloomberg API Library: https://www.bloomberg.com/professional/support/api-library/
