@@ -75,7 +75,8 @@ if __name__ == '__main__':
             'yaml': ['xbbg/markets/*.yml']
         },
         install_requires=[
-            str(ir.req) for ir in parse_requirements(
+            str(getattr(ir, 'req' if hasattr(ir, 'req') else 'requirement'))
+            for ir in parse_requirements(
                 f'{PACKAGE_ROOT}/requirements.txt', session='hack'
             )
         ],
