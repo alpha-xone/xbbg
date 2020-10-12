@@ -100,10 +100,9 @@ def bds(tickers, flds, **kwargs) -> pd.DataFrame:
             data.to_pickle(data_file)
         return data
 
-    else:
-        return pd.DataFrame(pd.concat([
-            bds(tickers=ticker, flds=flds, **kwargs) for ticker in tickers
-        ], sort=False))
+    return pd.DataFrame(pd.concat([
+        bds(tickers=ticker, flds=flds, **kwargs) for ticker in tickers
+    ], sort=False))
 
 
 def bdh(
