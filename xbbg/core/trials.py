@@ -120,7 +120,6 @@ def update_trials(**kwargs):
         kwargs['cnt'] = num_trials(**kwargs) + 1
 
     with db.SQLite(f'{data_path}/Logs/xbbg.db') as con:
-        print('update_trials', con)
         con.execute(TRIALS_TABLE)
         con.execute(db.replace_into(
             table='trials',
