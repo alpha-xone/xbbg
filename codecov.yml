@@ -3,7 +3,7 @@ ignore:
   - xbbg/core/conn.py
   - xbbg/core/process.py
   - xbbg/core/names.py
-  - xbbg/core/missing.py
+  - xbbg/core/trials.py
   - xbbg/io/files.py
   - xbbg/io/cached.py
   - "xbbg/markets/*"

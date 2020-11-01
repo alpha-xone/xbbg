@@ -53,13 +53,14 @@ def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
     )
 
 
-def bds(tickers, flds, **kwargs) -> pd.DataFrame:
+def bds(tickers, flds, use_port=False, **kwargs) -> pd.DataFrame:
     """
     Bloomberg block data
 
     Args:
         tickers: ticker(s)
         flds: field
+        use_port: use `PortfolioDataRequest`
         **kwargs: other overrides for query
 
     Returns:
@@ -68,7 +69,9 @@ def bds(tickers, flds, **kwargs) -> pd.DataFrame:
     logger = logs.get_logger(bds, **kwargs)
 
     service = conn.bbg_service(service='//blp/refdata', **kwargs)
-    request = service.createRequest('ReferenceDataRequest')
+    request = service.createRequest(
+        'PortfolioDataRequest' if use_port else 'ReferenceDataRequest'
+    )
 
     if isinstance(tickers, str):
         data_file = storage.ref_file(
@@ -181,7 +184,7 @@ def bdib(
     Returns:
         pd.DataFrame
     """
-    from xbbg.core import missing
+    from xbbg.core import trials
 
     logger = logs.get_logger(bdib, **kwargs)
 
@@ -226,11 +229,11 @@ def bdib(
                 return pd.DataFrame()
 
     info_log = f'{q_tckr} / {cur_dt} / {typ}'
-    miss_kw = dict(ticker=ticker, dt=dt, typ=typ, func='bdib')
-    cur_miss = missing.current_missing(**miss_kw)
-    if cur_miss >= 2:
+    trial_kw = dict(ticker=ticker, dt=dt, typ=typ, func='bdib')
+    num_trials = trials.num_trials(**trial_kw)
+    if num_trials >= 2:
         if batch: return pd.DataFrame()
-        logger.info(f'{cur_miss} trials with no data {info_log}')
+        logger.info(f'{num_trials} trials with no data {info_log}')
         return pd.DataFrame()
 
     service = conn.bbg_service(service='//blp/refdata', **kwargs)
@@ -251,7 +254,7 @@ def bdib(
     res = pd.DataFrame(process.rec_events(func=process.process_bar, **kwargs))
     if res.empty or ('time' not in res):
         logger.warning(f'No data for {info_log} ...')
-        missing.update_missing(**miss_kw)
+        trials.update_trials(cnt=num_trials + 1, **trial_kw)
         return pd.DataFrame()
 
     data = (
