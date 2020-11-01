@@ -83,7 +83,7 @@ def exch_info(ticker: str, **kwargs) -> pd.Series:
 
     if any(req not in info for req in ['tz', 'allday', 'day']):
         logger.error(f'required exchange info cannot be found in {ticker} ...')
-        return pd.Series()
+        return pd.Series(dtype=object)
 
     for ss in ValidSessions:
         if ss not in info: continue
@@ -103,17 +103,17 @@ def market_info(ticker: str) -> dict:
         dict
 
     Examples:
-        >>> info = market_info('SHCOMP Index')
-        >>> info['exch']
+        >>> info_ = market_info('SHCOMP Index')
+        >>> info_['exch']
         'EquityChina'
-        >>> info = market_info('ICICIC=1 IS Equity')
-        >>> info['freq'], info['is_fut']
+        >>> info_ = market_info('ICICIC=1 IS Equity')
+        >>> info_['freq'], info_['is_fut']
         ('M', True)
-        >>> info = market_info('INT1 Curncy')
-        >>> info['freq'], info['is_fut']
+        >>> info_ = market_info('INT1 Curncy')
+        >>> info_['freq'], info_['is_fut']
         ('M', True)
-        >>> info = market_info('CL1 Comdty')
-        >>> info['freq'], info['is_fut']
+        >>> info_ = market_info('CL1 Comdty')
+        >>> info_['freq'], info_['is_fut']
         ('M', True)
         >>> # Wrong tickers
         >>> market_info('C XX Equity')

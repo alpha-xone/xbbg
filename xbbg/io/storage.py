@@ -64,15 +64,15 @@ def ref_file(
         '/data/bbg/Equity/BLT LN Equity/Crncy/ovrd=None.parq'
         >>> ref_file('BLT LN Equity', fld='Crncy')
         ''
-        >>> cur_dt = utils.cur_time(tz=utils.DEFAULT_TZ)
+        >>> cur_dt_ = utils.cur_time(tz=utils.DEFAULT_TZ)
         >>> ref_file(
         ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True, cache=True,
-        ... ).replace(cur_dt, '[cur_date]')
+        ... ).replace(cur_dt_, '[cur_date]')
         '/data/bbg/Equity/BLT LN Equity/DVD_Hist_All/asof=[cur_date], ovrd=None.parq'
         >>> ref_file(
         ...     'BLT LN Equity', fld='DVD_Hist_All', has_date=True,
         ...     cache=True, DVD_Start_Dt='20180101',
-        ... ).replace(cur_dt, '[cur_date]')[:-5]
+        ... ).replace(cur_dt_, '[cur_date]')[:-5]
         '/data/bbg/Equity/BLT LN Equity/DVD_Hist_All/asof=[cur_date], DVD_Start_Dt=20180101'
         >>> sample = 'asof=2018-11-02, DVD_Start_Dt=20180101, DVD_End_Dt=20180501.pkl'
         >>> root_path = 'xbbg/tests/data'
@@ -86,11 +86,11 @@ def ref_file(
         ...     'AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101',
         ...     has_date=True, cache=True, ext='pkl'
         ... )
-        >>> new_file.split('/')[-1] == f'asof={cur_dt}, DVD_Start_Dt=20180101.pkl'
+        >>> new_file.split('/')[-1] == f'asof={cur_dt_}, DVD_Start_Dt=20180101.pkl'
         True
         >>> old_file = 'asof=2018-11-02, DVD_Start_Dt=20180101, DVD_End_Dt=20180501.pkl'
         >>> old_full = '/'.join(new_file.split('/')[:-1] + [old_file])
-        >>> updated_file = old_full.replace('2018-11-02', cur_dt)
+        >>> updated_file = old_full.replace('2018-11-02', cur_dt_)
         >>> updated_file in shutil.copy(old_full, updated_file)
         True
         >>> exist_file = ref_file(
@@ -148,14 +148,14 @@ def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE', **kwargs):
     Examples:
         >>> os.environ['BBG_ROOT'] = 'xbbg/tests/data'
         >>> sample = pd.read_parquet('xbbg/tests/data/aapl.parq')
-        >>> save_intraday(sample, 'AAPL US Equity', '2018-11-02')
+        >>> # save_intraday(sample, 'AAPL US Equity', '2018-11-02')
         >>> # Invalid exchange
         >>> save_intraday(sample, 'AAPL XX Equity', '2018-11-02')
         >>> # Invalid empty data
         >>> save_intraday(pd.DataFrame(), 'AAPL US Equity', '2018-11-02')
         >>> # Invalid date - too close
-        >>> cur_dt = utils.cur_time()
-        >>> save_intraday(sample, 'AAPL US Equity', cur_dt)
+        >>> cur_dt_ = utils.cur_time()
+        >>> save_intraday(sample, 'AAPL US Equity', cur_dt_)
     """
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
     logger = logs.get_logger(save_intraday, level='debug')
