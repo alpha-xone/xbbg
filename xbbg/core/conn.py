@@ -1,6 +1,17 @@
-import pytest
-try: import blpapi
-except ImportError: blpapi = pytest.importorskip('blpapi')
+import sys
+import os
+
+try:
+    ver = sys.version_info
+    if f'{ver.major}.{ver.minor}' == '3.8':
+        dll_path = os.environ.get('BBG_DLL', 'C:/blp/DAPI')
+        with os.add_dll_directory(dll_path):
+            import blpapi
+    else:
+        import blpapi
+except (ImportError, AttributeError):
+    import pytest
+    blpapi = pytest.importorskip('blpapi')
 
 from xbbg.io import logs
 
