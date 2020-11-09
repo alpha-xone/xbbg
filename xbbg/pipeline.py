@@ -18,14 +18,6 @@ def get_series(data: (pd.Series, pd.DataFrame), col='close') -> pd.DataFrame:
     return data.xs(col, axis=1, level=1)
 
 
-def clean_cols(data: pd.DataFrame) -> pd.DataFrame:
-    """
-    Clean column name
-    """
-    data.columns.name = None
-    return data
-
-
 def standard_cols(data: pd.DataFrame, col_maps: dict = None) -> pd.DataFrame:
     """
     Rename data columns to snake case
@@ -87,8 +79,8 @@ def apply_fx(
         >>> rms = (
         ...     pd.read_pickle('xbbg/tests/data/sample_rms_ib1.pkl')
         ...     .pipe(get_series, col='close')
-        ...     .pipe(to_numeric)
-        ...     .pipe(clean_cols)
+        ...     .apply(pd.to_numeric, errors='ignore')
+        ...     .rename_axis(columns=None)
         ...     .pipe(dropna)
         ... ).tail()
         >>> eur = pd.read_pickle('xbbg/tests/data/sample_eur_ib.pkl')
@@ -156,13 +148,6 @@ def dropna(
     if isinstance(data, pd.Series): return data.dropna()
     if isinstance(cols, int): cols = [cols]
     return data.dropna(how='all', subset=data.columns[cols])
-
-
-def to_numeric(data: pd.DataFrame) -> pd.DataFrame:
-    """
-    Convert data to numeric if possible
-    """
-    return data.apply(pd.to_numeric, errors='ignore')
 
 
 def format_raw(data: pd.DataFrame) -> pd.DataFrame:
