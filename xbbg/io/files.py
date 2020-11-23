@@ -189,7 +189,7 @@ def latest_file(path_name, keyword='', ext='', **kwargs) -> str:
     return files[-1]
 
 
-def file_modified_time(file_name) -> pd.Timestamp:
+def file_modified_time(file_name):
     """
     File modified time in python
 

@@ -21,11 +21,9 @@ def load_info(cat):
         dict
 
     Examples:
-        >>> import pandas as pd
-        >>>
         >>> assets = load_info(cat='assets')
-        >>> all(cat in assets for cat in ['Equity', 'Index', 'Curncy', 'Corp'])
-        True
+        >>> for cat_ in ['Equity', 'Index', 'Curncy', 'Corp']:
+        ...     if cat_ not in assets: print(f'Missing cateogry: {cat_}')
         >>> os.environ['BBG_PATH'] = ''
         >>> exch = load_info(cat='exch')
         >>> pd.Series(exch['EquityUS']).allday
