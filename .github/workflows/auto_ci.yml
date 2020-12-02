@@ -30,7 +30,7 @@ jobs:
     - name: Lint with flake8
       run: |
         # stop the build if there are Python syntax errors or undefined names
-        flake8 xbbg
+        flake8 --extend-ignore=E701,E501 xbbg
     - name: Test with pytest
       run: |
         pytest --doctest-modules --cov -v xbbg

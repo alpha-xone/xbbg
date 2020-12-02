@@ -54,8 +54,8 @@ def _to_gen_(iterable):
     from collections.abc import Iterable
 
     for elm in iterable:
-        if isinstance(elm, Iterable) and not isinstance(elm, (str, bytes)):
-            yield from flatten(elm)
+        if isinstance(elm, Iterable) and not isinstance(elm, str):
+            yield from _to_gen_(elm)
         else: yield elm
 
 
