@@ -19,6 +19,7 @@ __all__ = [
     'dividend',
     'beqs',
     'live',
+    'subscribe',
 ]
 
 
@@ -572,22 +573,40 @@ def subscribe(tickers, flds=None, identity=None, **kwargs):
         conn.bbg_session(**kwargs).unsubscribe(sub_list)
 
 
-def live(
-        tickers, flds='Last_Price', max_cnt=None, json=False, **kwargs
-) -> dict:
+async def live(
+        tickers, flds='Last_Price', info=None, max_cnt=None,
+        json=False, interval=500, **kwargs
+):
     """
     Subscribe and getting data feeds from
 
     Args:
         tickers: list of tickers
         flds: fields to subscribe
+        info: list of keys of interests (ticker will be included)
         max_cnt: max number of data points to receive
         json: if data is required to convert to json
+        interval: update interval, default 500ms
 
     Yields:
         dict: Bloomberg market data
+
+    Examples:
+        >>> info_ = [
+        ...     'last_price', 'last_trade', 'bid', 'ask',
+        ...     'high', 'low',
+        ...     'volume', 'turnover_today_realtime',
+        ...     'time',
+        ... ]
+        >>> async for _ in live('SPY US Equity', max_cnt=10, info=info_):
+        ...     pass
     """
+    from collections.abc import Iterable
+
     logger = logs.get_logger(live, **kwargs)
+
+    conv = [conn.blpapi.name.Name]
+    if json: conv += [pd.Timestamp, datetime.time, datetime.date]
 
     def get_value(element):
         """
@@ -599,8 +618,6 @@ def live(
         Returns:
             dict
         """
-        conv = [conn.blpapi.name.Name]
-        if json: conv += [pd.Timestamp, datetime.time, datetime.date]
         if element.isNull(): return None
         value = element.getValue()
         if isinstance(value, np.bool_): return bool(value)
@@ -609,11 +626,16 @@ def live(
 
     if isinstance(flds, str): flds = [flds]
     s_flds = [fld.upper() for fld in flds]
+    if isinstance(info, str): info = [info]
+    if isinstance(info, Iterable): info = [key.upper() for key in info]
+
+    sess = conn.bbg_session(**kwargs)
+    while sess.tryNextEvent(): pass
     with subscribe(tickers=tickers, flds=s_flds, **kwargs):
         cnt = 0
         while True if max_cnt is None else cnt < max_cnt:
             try:
-                ev = conn.bbg_session(**kwargs).nextEvent(500)
+                ev = sess.nextEvent(interval)
                 if conn.event_types()[ev.eventType()] != 'SUBSCRIPTION_DATA':
                     continue
                 for msg in ev:
@@ -624,6 +646,7 @@ def live(
                         values = {**{'TICKER': ticker}, **{
                             str(elem.name()): get_value(elem)
                             for elem in msg.asElement().elements()
+                            if (True if not info else str(elem.name()) in info)
                         }}
                         yield {
                             key: value for key, value in values.items()
