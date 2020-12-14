@@ -218,7 +218,7 @@ def add_ticker(data: pd.DataFrame, ticker: str) -> pd.DataFrame:
 def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
     """
     Remove columns prior to give year.
-    To make this work, column names must contian year explicitly.
+    To make this work, column names must contain the year explicitly.
 
     Args:
         data: raw data
