@@ -1,8 +1,9 @@
 -i https://pypi.org/simple
 --extra-index-url https://bloomberg.bintray.com/pip/simple
-numpy>=1.15.0
-pandas>=1.0.0
-pyarrow>=0.15.0
-pytz>=2018.7
-ruamel.yaml>=0.15.0
+numpy >= 1.15.0
+pandas >= 1.0.0
+pyarrow >= 1.0.1
+pytz >= 2020.4
+ruamel.yaml >= 0.16.10
+parse >= 1.18.0
 pytest
