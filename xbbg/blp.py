@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 
+from itertools import product
 from contextlib import contextmanager
 
 from xbbg import __version__, const, pipeline
@@ -574,7 +575,7 @@ def subscribe(tickers, flds=None, identity=None, **kwargs):
 
 
 async def live(
-        tickers, flds='Last_Price', info=None, max_cnt=None, interval=500, **kwargs
+        tickers, flds='Last_Price', info=None, max_cnt=0, interval=500, **kwargs
 ):
     """
     Subscribe and getting data feeds from
@@ -591,10 +592,12 @@ async def live(
 
     Examples:
         >>> info_ = [
-        ...     'last_price', 'last_trade', 'bid', 'ask',
-        ...     'high', 'low',
+        ...     'last_price', 'last_trade', 'rt_px_chg_pct_1d',
+        ...     'time', 'trade_update_stamp_rt',
+        ...     'bid_update_stamp_rt', 'ask_update_stamp_rt',
+        ...     'bid', 'ask', 'high', 'low',
         ...     'volume', 'turnover_today_realtime',
-        ...     'time',
+        ...     'eqy_turnover_realtime', 'is_delayed_stream',
         ... ]
         >>> async for _ in live('SPY US Equity', max_cnt=10, info=info_):
         ...     pass
@@ -629,24 +632,28 @@ async def live(
     while sess.tryNextEvent(): pass
     with subscribe(tickers=tickers, flds=s_flds, **kwargs):
         cnt = 0
-        while True if max_cnt is None else cnt < max_cnt:
+        while True and cnt <= max_cnt:
             try:
                 ev = sess.nextEvent(interval)
                 if conn.event_types()[ev.eventType()] != 'SUBSCRIPTION_DATA':
                     continue
-                for msg in ev:
-                    for fld in s_flds:
-                        if not msg.hasElement(fld): continue
-                        if msg.getElement(fld).isNull(): continue
-                        yield {
-                            **{'TICKER': msg.correlationIds()[0].value()},
-                            **{
-                                str(elem.name()): get_value(elem)
-                                for elem in msg.asElement().elements()
-                                if (True if not info else str(elem.name()) in info)
-                            },
-                        }
-                        cnt += 1
+
+                for msg, fld in product(ev, s_flds):
+                    if not msg.hasElement(fld): continue
+                    if msg.getElement(fld).isNull(): continue
+                    yield {
+                        **{
+                            'TICKER': msg.correlationIds()[0].value(),
+                            'FIELD': fld,
+                        },
+                        **{
+                            str(elem.name()): get_value(elem)
+                            for elem in msg.asElement().elements()
+                            if (True if not info else str(elem.name()) in info)
+                        },
+                    }
+                    if max_cnt: cnt += 1
+
             except ValueError as e: logger.debug(e)
             except KeyboardInterrupt: break
 
