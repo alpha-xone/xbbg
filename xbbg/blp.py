@@ -604,7 +604,7 @@ async def live(
     logger = logs.get_logger(live, **kwargs)
     conv = [conn.blpapi.name.Name]
 
-    def get_value(element):
+    def get_value(element: conn.blpapi.Element):
         """
         Get value from element
 
@@ -612,7 +612,7 @@ async def live(
             element: Bloomberg element
 
         Returns:
-            dict
+            value
         """
         if element.isNull(): return None
         value = element.getValue()
@@ -654,9 +654,11 @@ async def live(
 def active_futures(ticker: str, dt, **kwargs) -> str:
     """
     Active futures contract
+
     Args:
         ticker: futures ticker, i.e., ESA Index, Z A Index, CLA Comdty, etc.
         dt: date
+
     Returns:
         str: ticker name
     """
@@ -683,10 +685,12 @@ def active_futures(ticker: str, dt, **kwargs) -> str:
 def fut_ticker(gen_ticker: str, dt, freq: str, **kwargs) -> str:
     """
     Get proper ticker from generic ticker
+
     Args:
         gen_ticker: generic ticker
         dt: date
         freq: futures contract frequency
+
     Returns:
         str: exact futures ticker
     """
