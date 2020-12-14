@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 
-import datetime
 from contextlib import contextmanager
 
 from xbbg import __version__, const, pipeline
@@ -86,8 +85,9 @@ def bds(tickers, flds, use_port=False, **kwargs) -> pd.DataFrame:
     )
 
     if isinstance(tickers, str):
+        if 'has_date' not in kwargs: kwargs['has_date'] = True
         data_file = storage.ref_file(
-            ticker=tickers, fld=flds, has_date=True, ext='pkl', **kwargs
+            ticker=tickers, fld=flds, ext='pkl', **kwargs
         )
         if files.exists(data_file):
             logger.debug(f'Loading Bloomberg data from: {data_file}')
@@ -574,8 +574,7 @@ def subscribe(tickers, flds=None, identity=None, **kwargs):
 
 
 async def live(
-        tickers, flds='Last_Price', info=None, max_cnt=None,
-        json=False, interval=500, **kwargs
+        tickers, flds='Last_Price', info=None, max_cnt=None, interval=500, **kwargs
 ):
     """
     Subscribe and getting data feeds from
@@ -585,7 +584,6 @@ async def live(
         flds: fields to subscribe
         info: list of keys of interests (ticker will be included)
         max_cnt: max number of data points to receive
-        json: if data is required to convert to json
         interval: update interval, default 500ms
 
     Yields:
@@ -604,9 +602,7 @@ async def live(
     from collections.abc import Iterable
 
     logger = logs.get_logger(live, **kwargs)
-
     conv = [conn.blpapi.name.Name]
-    if json: conv += [pd.Timestamp, datetime.time, datetime.date]
 
     def get_value(element):
         """
@@ -642,17 +638,13 @@ async def live(
                     for fld in s_flds:
                         if not msg.hasElement(fld): continue
                         if msg.getElement(fld).isNull(): continue
-                        ticker = msg.correlationIds()[0].value()
-                        values = {**{'TICKER': ticker}, **{
-                            str(elem.name()): get_value(elem)
-                            for elem in msg.asElement().elements()
-                            if (True if not info else str(elem.name()) in info)
-                        }}
                         yield {
-                            key: value for key, value in values.items()
-                            if value not in [np.nan, pd.NaT, None] or (
-                                isinstance(value, str) and value.strip()
-                            )
+                            **{'TICKER': msg.correlationIds()[0].value()},
+                            **{
+                                str(elem.name()): get_value(elem)
+                                for elem in msg.asElement().elements()
+                                if (True if not info else str(elem.name()) in info)
+                            },
                         }
                         cnt += 1
             except ValueError as e: logger.debug(e)
