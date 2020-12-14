@@ -277,3 +277,8 @@ NYME:
 CMX:
   tz: America/New_York
   allday: [1800, 1700]
+
+CBT:
+  tz: America/New_York
+  allday: [1800, 1700]
+  day: [800, 1700]
