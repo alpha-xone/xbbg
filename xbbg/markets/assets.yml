@@ -26,6 +26,10 @@ Comdty:
     exch: CMX
     freq: Q
     is_fut: True
+  - tickers: [SM, W, C]
+    exch: CBT
+    freq: Q
+    is_fut: True
 
 Curncy:
   - tickers: [
