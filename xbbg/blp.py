@@ -599,8 +599,7 @@ async def live(
         ...     'volume', 'turnover_today_realtime',
         ...     'eqy_turnover_realtime', 'is_delayed_stream',
         ... ]
-        >>> async for _ in live('SPY US Equity', max_cnt=10, info=info_):
-        ...     pass
+        >>> # async for _ in live('SPY US Equity', info=info_): pass
     """
     from collections.abc import Iterable
 
@@ -679,14 +678,13 @@ def active_futures(ticker: str, dt, **kwargs) -> str:
 
     fut_tk = bdp(tickers=[fut_1, fut_2], flds='Last_Tradeable_Dt')
 
-    if pd.Timestamp(dt).month < pd.Timestamp(fut_tk.last_tradeable_dt[0]).month: return fut_1
+    if pd.Timestamp(dt).month < pd.Timestamp(fut_tk.last_tradeable_dt[0]).month:
+        return fut_1
 
     dts = pd.bdate_range(end=dt, periods=10)
-    volume = bdh(
-        fut_tk.index, flds='volume', start_date=dts[0], end_date=dts[-1], keep_one=True
-    )
+    volume = bdh(fut_tk.index, flds='volume', start_date=dts[0], end_date=dts[-1])
     if volume.empty: return fut_1
-    return volume.iloc[-1].idxmax()
+    return volume.iloc[-1].idxmax()[0]
 
 
 def fut_ticker(gen_ticker: str, dt, freq: str, **kwargs) -> str:

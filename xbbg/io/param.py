@@ -1,99 +1,96 @@
 import pandas as pd
 
 import os
-import sys
 
 from ruamel.yaml import YAML
-
 from xbbg.io import files
 
 PKG_PATH = files.abspath(__file__, 1)
 
 
-def load_info(cat):
+def config_files(cat: str) -> list:
     """
-    Load parameters for assets
+    Category files
 
     Args:
         cat: category
 
     Returns:
-        dict
-
-    Examples:
-        >>> assets = load_info(cat='assets')
-        >>> for cat_ in ['Equity', 'Index', 'Curncy', 'Corp']:
-        ...     if cat_ not in assets: print(f'Missing cateogry: {cat_}')
-        >>> os.environ['BBG_PATH'] = ''
-        >>> exch = load_info(cat='exch')
-        >>> pd.Series(exch['EquityUS']).allday
-        [400, 2000]
-        >>> test_root = f'{PKG_PATH}/tests'
-        >>> os.environ['BBG_PATH'] = test_root
-        >>> ovrd_exch = load_info(cat='exch')
-        >>> # Somehow os.environ is not set properly in doctest environment
-        >>> ovrd_exch.update(_load_yaml_(f'{test_root}/markets/exch.yml'))
-        >>> pd.Series(ovrd_exch['EquityUS']).allday
-        [300, 2100]
+        list of files that exist
     """
-    yaml_file = f'{PKG_PATH}/markets/{cat}.yml'
-    root = os.environ.get('BBG_ROOT', '').replace('\\', '/')
-    yaml_ovrd = f'{root}/markets/{cat}.yml' if root else ''
-    if not files.exists(yaml_ovrd): yaml_ovrd = ''
-
-    pkl_file = f'{PKG_PATH}/markets/cached/{cat}.pkl'
-    ytime = files.file_modified_time(yaml_file)
-    if yaml_ovrd: ytime = max(ytime, files.file_modified_time(yaml_ovrd))
-    if files.exists(pkl_file) and files.file_modified_time(pkl_file) > ytime:
-        return pd.read_pickle(pkl_file).to_dict()
-
-    res = _load_yaml_(yaml_file)
-    if yaml_ovrd:
-        for cat, ovrd in _load_yaml_(yaml_ovrd).items():
-            if isinstance(ovrd, dict):
-                if cat in res: res[cat].update(ovrd)
-                else: res[cat] = ovrd
-            if isinstance(ovrd, list) and isinstance(res[cat], list):
-                res[cat] += ovrd
-
-    if not hasattr(sys, 'pytest_call'):
-        files.create_folder(pkl_file, is_file=True)
-        pd.Series(res).to_pickle(pkl_file)
-
-    return res
+    return [
+        f'{r}/markets/{cat}.yml'
+        for r in [
+            PKG_PATH,
+            os.environ.get('BBG_ROOT', '').replace('\\', '/'),
+        ]
+        if files.exists(f'{r}/markets/{cat}.yml')
+    ]
 
 
-def _load_yaml_(file_name):
+def load_config(cat: str) -> pd.DataFrame:
     """
-    Load assets infomation from file
+    Load market info that can apply pd.Series directly
 
     Args:
-        file_name: file name
+        cat: category name
 
     Returns:
-        dict
+        pd.DataFrame
     """
-    if not os.path.exists(file_name): return dict()
+    return (
+        pd.concat([
+            load_yaml(cf).apply(pd.Series)
+            for cf in config_files(cat)
+        ], sort=False)
+    )
 
-    with open(file_name, 'r', encoding='utf-8') as fp:
-        return YAML().load(stream=fp)
+
+def load_yaml(yaml_file: str) -> pd.Series:
+    """
+    Load yaml from cache
+
+    Args:
+        yaml_file: YAML file name
+
+    Returns:
+        pd.Series
+    """
+    cache_file = (
+        yaml_file
+        .replace('/markets/', '/markets/cached/')
+        .replace('.yml', '.pkl')
+    )
+    cur_mod = files.file_modified_time(yaml_file)
+    if files.exists(cache_file) and files.file_modified_time(cache_file) > cur_mod:
+        return pd.read_pickle(cache_file)
+
+    with open(yaml_file, 'r') as fp:
+        data = pd.Series(YAML().load(fp))
+        files.create_folder(cache_file, is_file=True)
+        data.to_pickle(cache_file)
+        return data
 
 
-def to_hour(num) -> str:
+def to_hours(num_ts: (str, list, int, float)) -> (str, list):
     """
     Convert YAML input to hours
 
     Args:
-        num: number in YMAL file, e.g., 900, 1700, etc.
+        num_ts: list of number in YMAL file, e.g., 900, 1700, etc.
 
     Returns:
         str
 
     Examples:
-        >>> to_hour(900)
-        '09:00'
-        >>> to_hour(1700)
-        '17:00'
+        >>> to_hours([900, 1700])
+        ['09:00', '17:00']
+        >>> to_hours(901)
+        '09:01'
+        >>> to_hours('XYZ')
+        'XYZ'
     """
-    to_str = str(int(num))
-    return pd.Timestamp(f'{to_str[:-2]}:{to_str[-2:]}').strftime('%H:%M')
+    if isinstance(num_ts, str): return num_ts
+    if isinstance(num_ts, (int, float)):
+        return f'{int(num_ts / 100):02d}:{int(num_ts % 100):02d}'
+    return [to_hours(num) for num in num_ts]

@@ -87,6 +87,9 @@ Equity:
     exch: EquityStockholm
   - exch_codes: [US]
     exch: EquityUS
+  - exch_codes: [IS, IB, IN]
+    exch: EquityFuturesIndia
+    is_fut: True
 
 Index:
   - tickers: [XP]
@@ -133,10 +136,6 @@ Index:
     exch: IndexUS
   - tickers: [XU]
     exch: FuturesSingapore
-    freq: M
-    is_fut: True
-  - tickers: [TTMT, HDFCB, WPRO, INFO, ICICI, DRRD, VEDL]
-    exch: EquityFuturesIndia
     freq: M
     is_fut: True
   - tickers: [NZ]

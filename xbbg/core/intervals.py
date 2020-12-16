@@ -159,12 +159,12 @@ class Intervals(object):
 
         if not start_time: s_time = ss[0]
         else:
-            s_time = param.to_hour(start_time)
+            s_time = param.to_hours(int(start_time))
             if same_day: s_time = max(s_time, ss[0])
 
         if not end_time: e_time = ss[-1]
         else:
-            e_time = param.to_hour(end_time)
+            e_time = param.to_hours(int(end_time))
             if same_day: e_time = min(e_time, ss[-1])
 
         if same_day and (s_time > e_time): return SessNA

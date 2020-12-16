@@ -1,9 +1,8 @@
 import pandas as pd
 
 from collections import namedtuple
-
-from xbbg.io import logs, param
 from xbbg.core import timezone
+from xbbg.io import files, logs, param
 
 Futures = dict(
     Jan='F', Feb='G', Mar='H', Apr='J', May='K', Jun='M',
@@ -11,6 +10,15 @@ Futures = dict(
 )
 CurrencyPair = namedtuple('CurrencyPair', ['ticker', 'factor', 'power'])
 ValidSessions = ['allday', 'day', 'am', 'pm', 'night', 'pre', 'post']
+
+PKG_PATH = files.abspath(__file__, 1)
+
+ASSET_INFO = {
+    'Index': ['tickers'],
+    'Comdty': ['tickers', 'key_month'],
+    'Curncy': ['tickers'],
+    'Equity': ['exch_codes'],
+}
 
 
 def exch_info(ticker: str, **kwargs) -> pd.Series:
@@ -22,6 +30,8 @@ def exch_info(ticker: str, **kwargs) -> pd.Series:
         **kwargs:
             ref: reference ticker or exchange
                  used as supplement if exchange info is not defined for `ticker`
+            original: original ticker (for logging)
+            config: info from exch.yml
 
     Returns:
         pd.Series
@@ -31,70 +41,84 @@ def exch_info(ticker: str, **kwargs) -> pd.Series:
         tz        America/New_York
         allday      [04:00, 20:00]
         day         [09:30, 16:00]
-        pre         [04:00, 09:30]
         post        [16:01, 20:00]
-        dtype: object
+        pre         [04:00, 09:30]
+        Name: EquityUS, dtype: object
         >>> exch_info('SPY US Equity', ref='EquityUS')
         tz        America/New_York
         allday      [04:00, 20:00]
         day         [09:30, 16:00]
-        pre         [04:00, 09:30]
         post        [16:01, 20:00]
-        dtype: object
+        pre         [04:00, 09:30]
+        Name: EquityUS, dtype: object
         >>> exch_info('ES1 Index')
         tz        America/New_York
         allday      [18:00, 17:00]
         day         [08:00, 17:00]
-        dtype: object
+        Name: CME, dtype: object
         >>> exch_info('ESM0 Index', ref='ES1 Index')
         tz        America/New_York
         allday      [18:00, 17:00]
         day         [08:00, 17:00]
-        dtype: object
+        Name: CME, dtype: object
         >>> exch_info('Z 1 Index')
         tz         Europe/London
         allday    [01:00, 21:00]
         day       [01:00, 21:00]
-        dtype: object
+        Name: FuturesFinancialsICE, dtype: object
         >>> exch_info('TESTTICKER Corp').empty
         True
         >>> exch_info('US')
         tz        America/New_York
         allday      [04:00, 20:00]
         day         [09:30, 16:00]
-        pre         [04:00, 09:30]
         post        [16:01, 20:00]
-        dtype: object
+        pre         [04:00, 09:30]
+        Name: EquityUS, dtype: object
     """
     logger = logs.get_logger(exch_info, level='debug')
 
-    if kwargs.get('ref', None): ticker = kwargs['ref']
-    all_exch = param.load_info(cat='exch')
-    if ticker in all_exch:
-        info = all_exch[ticker]
-    else:
-        if ' ' not in ticker.strip():
-            ticker = f'XYZ {ticker.strip()} Equity'
-        info = all_exch.get(
-            market_info(ticker=ticker).get('exch', ticker), dict()
-        )
-    if ('allday' in info) and ('day' not in info):
-        info['day'] = info['allday']
+    if kwargs.get('ref', ''):
+        return exch_info(ticker=kwargs['ref'])
 
-    if any(req not in info for req in ['tz', 'allday', 'day']):
-        logger.error(f'required exchange info cannot be found in {ticker} ...')
+    exch = kwargs.get('config', param.load_config(cat='exch'))
+    original = kwargs.get('original', '')
+
+    # Case 1: Use exchange directly
+    if ticker in exch.index:
+        info = exch.loc[ticker].dropna()
+
+        # Check required info
+        if info.reindex(['allday', 'tz']).dropna().size < 2:
+            logger.error(
+                f'required info (allday + tz) cannot be found in '
+                f'{original if original else ticker} ...'
+            )
+            return pd.Series(dtype=object)
+
+        # Fill day session info if not provided
+        if 'day' not in info:
+            info['day'] = info['allday']
+
+        return info.dropna().apply(param.to_hours)
+
+    if original:
+        logger.error(f'exchange info cannot be found in {original} ...')
         return pd.Series(dtype=object)
 
-    for ss in ValidSessions:
-        if ss not in info: continue
-        info[ss] = [param.to_hour(num=s) for s in info[ss]]
+    # Case 2: Use ticker to find exchange
+    exch_name = market_info(ticker=ticker).get('exch', '')
+    if not exch_name: return pd.Series(dtype=object)
+    return exch_info(
+        ticker=exch_name,
+        original=ticker,
+        config=exch,
+    )
 
-    return pd.Series(info)
 
-
-def market_info(ticker: str) -> dict:
+def market_info(ticker: str) -> pd.Series:
     """
-    Get info for given market
+    Get info for given ticker
 
     Args:
         ticker: Bloomberg full ticker
@@ -103,89 +127,101 @@ def market_info(ticker: str) -> dict:
         dict
 
     Examples:
-        >>> info_ = market_info('SHCOMP Index')
-        >>> info_['exch']
+        >>> market_info('SHCOMP Index').exch
         'EquityChina'
-        >>> info_ = market_info('ICICIC=1 IS Equity')
-        >>> info_['freq'], info_['is_fut']
-        ('M', True)
-        >>> info_ = market_info('INT1 Curncy')
-        >>> info_['freq'], info_['is_fut']
-        ('M', True)
-        >>> info_ = market_info('CL1 Comdty')
-        >>> info_['freq'], info_['is_fut']
-        ('M', True)
-        >>> # Wrong tickers
-        >>> market_info('C XX Equity')
-        {}
-        >>> market_info('XXX Comdty')
-        {}
-        >>> market_info('Bond_ISIN Corp')
-        {}
-        >>> market_info('XYZ Index')
-        {}
-        >>> market_info('XYZ Curncy')
-        {}
+        >>> market_info('SPY US Equity').exch
+        'EquityUS'
+        >>> market_info('ICICIC=1 IS Equity').exch
+        'EquityFuturesIndia'
+        >>> market_info('INT1 Curncy').exch
+        'CurrencyIndia'
+        >>> market_info('CL1 Comdty').exch
+        'NYME'
+        >>> incorrect_tickers = [
+        ...     'C XX Equity', 'XXX Comdty', 'Bond_ISIN Corp',
+        ...     'XYZ Index', 'XYZ Curncy',
+        ... ]
+        >>> pd.concat([market_info(_) for _ in incorrect_tickers])
+        Series([], dtype: object)
     """
     t_info = ticker.split()
-    assets = param.load_info('assets')
+    exch_only = len(ticker) == 2
+    if (not exch_only) and (t_info[-1] not in ['Equity', 'Comdty', 'Curncy', 'Index']):
+        return pd.Series(dtype=object)
 
-    # ========================== #
-    #           Equity           #
-    # ========================== #
+    a_info = asset_config(asset='Equity' if exch_only else t_info[-1])
 
-    if (t_info[-1] == 'Equity') and ('=' not in t_info[0]):
-        exch = t_info[-2]
-        for info in assets.get('Equity', [dict()]):
-            if 'exch_codes' not in info: continue
-            if exch in info['exch_codes']: return info
-        return dict()
+    # =========================================== #
+    #           Equity / Equity Futures           #
+    # =========================================== #
 
-    # ============================ #
-    #           Currency           #
-    # ============================ #
+    if (t_info[-1] == 'Equity') or exch_only:
+        is_fut = '==' if '=' in ticker else '!='
+        exch_sym = ticker if exch_only else t_info[-2]
+        exch = a_info.query(f'exch_codes == "{exch_sym}" and is_fut {is_fut} True')
+        if not exch.empty:
+            return exch.reset_index(drop=True).iloc[0]
 
-    if t_info[-1] == 'Curncy':
-        for info in assets.get('Curncy', [dict()]):
-            if 'tickers' not in info: continue
-            if (t_info[0].split('+')[0] in info['tickers']) or \
-                    (t_info[0][-1].isdigit() and (t_info[0][:-1] in info['tickers'])):
-                return info
-        return dict()
+    # ================================================ #
+    #           Currency / Commodity / Index           #
+    # ================================================ #
 
-    if t_info[-1] == 'Comdty':
-        for info in assets.get('Comdty', [dict()]):
-            if 'tickers' not in info: continue
-            end_idx = -2 if t_info[-2].upper() in ['ELEC', 'PIT'] else -1
-            if ' '.join(t_info[:-end_idx])[:-1].rstrip() in info['tickers']: return info
-        return dict()
-
-    # =================================== #
-    #           Index / Futures           #
-    # =================================== #
-
-    if (t_info[-1] == 'Index') or (
-        (t_info[-1] == 'Equity') and ('=' in t_info[0])
-    ):
-        if t_info[-1] == 'Equity':
-            tck = t_info[0].split('=')[0]
+    if t_info[-1] in ['Curncy', 'Comdty', 'Index']:
+        if t_info[0][-1].isdigit():
+            symbol = t_info[0][:-1].strip()
         else:
-            tck = ' '.join(t_info[:-1])
-        for info in assets.get('Index', [dict()]):
-            if 'tickers' not in info: continue
-            if (tck[:2] == 'UX') and ('UX' in info['tickers']): return info
-            if tck in info['tickers']:
-                if t_info[-1] == 'Equity': return info
-                if not info.get('is_fut', False): return info
-            if tck[:-1].rstrip() in info['tickers']:
-                if info.get('is_fut', False): return info
-        return dict()
+            symbol = t_info[0].split('+')[0]
+        exch = a_info.query(f'tickers == "{symbol}"')
+        if not exch.empty:
+            return exch.reset_index(drop=True).iloc[0]
 
-    if t_info[-1] == 'Corp':
-        for info in assets.get('Corp', [dict()]):
-            if 'ticker' not in info: continue
+    # ================================ #
+    #           Term Futures           #
+    # ================================ #
 
-    return dict()
+    return pd.Series(dtype=object)
+
+
+def asset_config(asset: str) -> pd.DataFrame:
+    """
+    Load info for given asset
+
+    Args:
+        asset: asset name
+
+    Returns:
+        pd.DataFrame
+    """
+    return (
+        pd.concat([
+            explode(
+                data=pd.DataFrame(param.load_yaml(cf)[asset]),
+                columns=ASSET_INFO[asset],
+            )
+            for cf in param.config_files('assets')
+        ], sort=False)
+        .drop_duplicates(keep='last')
+        .reset_index(drop=True)
+    )
+
+
+def explode(data: pd.DataFrame, columns: list) -> pd.DataFrame:
+    """
+    Explode data by columns
+
+    Args:
+        data: pd.DataFrame
+        columns: columns to explode
+
+    Returns:
+        pd.DataFrame
+    """
+    if len(columns) == 1:
+        return data.explode(column=columns[0])
+    return explode(
+        data=data.explode(column=columns[-1]),
+        columns=columns[:-1],
+    )
 
 
 def ccy_pair(local, base='USD') -> CurrencyPair:
@@ -201,26 +237,26 @@ def ccy_pair(local, base='USD') -> CurrencyPair:
 
     Examples:
         >>> ccy_pair(local='HKD', base='USD')
-        CurrencyPair(ticker='HKD Curncy', factor=1.0, power=1)
+        CurrencyPair(ticker='HKD Curncy', factor=1.0, power=1.0)
         >>> ccy_pair(local='GBp')
-        CurrencyPair(ticker='GBP Curncy', factor=100, power=-1)
+        CurrencyPair(ticker='GBP Curncy', factor=100.0, power=-1.0)
         >>> ccy_pair(local='USD', base='GBp')
-        CurrencyPair(ticker='GBP Curncy', factor=0.01, power=1)
+        CurrencyPair(ticker='GBP Curncy', factor=0.01, power=1.0)
         >>> ccy_pair(local='XYZ', base='USD')
-        CurrencyPair(ticker='', factor=1.0, power=1)
+        CurrencyPair(ticker='', factor=1.0, power=1.0)
         >>> ccy_pair(local='GBP', base='GBp')
-        CurrencyPair(ticker='', factor=0.01, power=1)
+        CurrencyPair(ticker='', factor=0.01, power=1.0)
         >>> ccy_pair(local='GBp', base='GBP')
-        CurrencyPair(ticker='', factor=100.0, power=1)
+        CurrencyPair(ticker='', factor=100.0, power=1.0)
     """
-    ccy_param = param.load_info(cat='ccy')
-    if f'{local}{base}' in ccy_param:
-        info = ccy_param[f'{local}{base}']
+    ccy_param = param.load_config(cat='ccy')
+    if f'{local}{base}' in ccy_param.index:
+        info = ccy_param.loc[f'{local}{base}'].dropna()
 
-    elif f'{base}{local}' in ccy_param:
-        info = ccy_param[f'{base}{local}']
+    elif f'{base}{local}' in ccy_param.index:
+        info = ccy_param.loc[f'{base}{local}'].dropna()
         info['factor'] = 1. / info.get('factor', 1.)
-        info['power'] = -info.get('power', 1)
+        info['power'] = -info.get('power', 1.)
 
     elif base.lower() == local.lower():
         info = dict(ticker='')
@@ -233,10 +269,10 @@ def ccy_pair(local, base='USD') -> CurrencyPair:
     else:
         logger = logs.get_logger(ccy_pair)
         logger.error(f'incorrect currency - local {local} / base {base}')
-        return CurrencyPair(ticker='', factor=1., power=1)
+        return CurrencyPair(ticker='', factor=1., power=1.0)
 
     if 'factor' not in info: info['factor'] = 1.
-    if 'power' not in info: info['power'] = 1
+    if 'power' not in info: info['power'] = 1.
     return CurrencyPair(**info)
 
 
