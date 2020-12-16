@@ -75,6 +75,11 @@ def exch_info(ticker: str, **kwargs) -> pd.Series:
         post        [16:01, 20:00]
         pre         [04:00, 09:30]
         Name: EquityUS, dtype: object
+        >>> exch_info('UXF1UXG1 Index')
+        tz        America/New_York
+        allday      [18:00, 17:00]
+        day         [18:00, 17:00]
+        Name: FuturesCBOE, dtype: object
     """
     logger = logs.get_logger(exch_info, level='debug')
 
