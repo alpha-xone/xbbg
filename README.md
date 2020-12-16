@@ -43,6 +43,8 @@ pip install xbbg
 
 ## What's New
 
+_0.7.2_ - Use `asyc` for live data feeds
+
 _0.7.0_ - `bdh` preserves columns orders (both tickers and flds).
 `timeout` argument is available for all queries - `bdtick` usually takes longer to respond -
 can use `timeout=1000` for example if keep getting empty DataFrame.

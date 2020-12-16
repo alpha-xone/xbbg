@@ -48,6 +48,8 @@ Installation
 What's New
 ==========
 
+*0.7.2* - Use `asyc` for live data feeds
+
 *0.7.0* - ``bdh`` preserves columns orders (both tickers and flds).
 ``timeout`` argument is available for all queries - ``bdtick`` usually takes longer to respond -
 can use ``timeout=1000`` for example if keep getting empty DataFrame.
