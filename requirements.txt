@@ -4,5 +4,5 @@ numpy >= 1.15.0
 pandas >= 1.0.0
 pyarrow >= 1.0.1
 pytz >= 2020.4
-ruamel.yaml >= 0.16.10
+ruamel.yaml >= 0.15.0
 pytest
