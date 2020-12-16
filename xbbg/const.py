@@ -170,16 +170,12 @@ def market_info(ticker: str) -> pd.Series:
     if t_info[-1] in ['Curncy', 'Comdty', 'Index']:
         if t_info[0][-1].isdigit():
             symbol = t_info[0][:-1].strip()
+            # Special contracts
+            if (symbol[:2] == 'UX') and (t_info[-1] == 'Index'):
+                symbol = 'UX'
         else:
             symbol = t_info[0].split('+')[0]
         return take_first(data=a_info, query=f'tickers == "{symbol}"')
-
-    # ================================ #
-    #           Term Futures           #
-    # ================================ #
-
-    if (t_info[-1] == 'Index') and (t_info[0][:2] == 'UX'):
-        return take_first(data=a_info, query='tickers == "UX"')
 
     return pd.Series(dtype=object)
 
