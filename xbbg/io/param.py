@@ -38,12 +38,21 @@ def load_config(cat: str) -> pd.DataFrame:
     Returns:
         pd.DataFrame
     """
-    return (
+    cfg_files = config_files(cat=cat)
+    cache_cfg = f'{PKG_PATH}/markets/cached/{cat}_cfg.pkl'
+    if files.exists(cache_cfg) and \
+            files.modified_time(cache_cfg) > max(map(files.modified_time, cfg_files)):
+        return pd.read_pickle(cache_cfg)
+
+    config = (
         pd.concat([
             load_yaml(cf).apply(pd.Series)
-            for cf in config_files(cat)
+            for cf in cfg_files
         ], sort=False)
     )
+    files.create_folder(cache_cfg, is_file=True)
+    config.to_pickle(cache_cfg)
+    return config
 
 
 def load_yaml(yaml_file: str) -> pd.Series:
@@ -61,8 +70,8 @@ def load_yaml(yaml_file: str) -> pd.Series:
         .replace('/markets/', '/markets/cached/')
         .replace('.yml', '.pkl')
     )
-    cur_mod = files.file_modified_time(yaml_file)
-    if files.exists(cache_file) and files.file_modified_time(cache_file) > cur_mod:
+    cur_mod = files.modified_time(yaml_file)
+    if files.exists(cache_file) and files.modified_time(cache_file) > cur_mod:
         return pd.read_pickle(cache_file)
 
     with open(yaml_file, 'r') as fp:

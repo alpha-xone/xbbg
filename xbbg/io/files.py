@@ -183,13 +183,13 @@ def latest_file(path_name, keyword='', ext='', **kwargs) -> str:
         logger.debug(f'file is not found in folder: {path_name}')
         return ''
 
-    modified_time = [os.path.getmtime(f) for f in files]
-    files = [f for (dt, f) in sorted(zip(modified_time, files))]
+    mod_time = [os.path.getmtime(f) for f in files]
+    files = [f for (dt, f) in sorted(zip(mod_time, files))]
 
     return files[-1]
 
 
-def file_modified_time(file_name):
+def modified_time(file_name):
     """
     File modified time in python
 

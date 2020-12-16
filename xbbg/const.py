@@ -11,7 +11,7 @@ Futures = dict(
 CurrencyPair = namedtuple('CurrencyPair', ['ticker', 'factor', 'power'])
 ValidSessions = ['allday', 'day', 'am', 'pm', 'night', 'pre', 'post']
 
-PKG_PATH = files.abspath(__file__, 1)
+PKG_PATH = files.abspath(__file__, 0)
 
 ASSET_INFO = {
     'Index': ['tickers'],
@@ -158,9 +158,10 @@ def market_info(ticker: str) -> pd.Series:
     if (t_info[-1] == 'Equity') or exch_only:
         is_fut = '==' if '=' in ticker else '!='
         exch_sym = ticker if exch_only else t_info[-2]
-        exch = a_info.query(f'exch_codes == "{exch_sym}" and is_fut {is_fut} True')
-        if not exch.empty:
-            return exch.reset_index(drop=True).iloc[0]
+        return take_first(
+            data=a_info,
+            query=f'exch_codes == "{exch_sym}" and is_fut {is_fut} True',
+        )
 
     # ================================================ #
     #           Currency / Commodity / Index           #
@@ -171,15 +172,33 @@ def market_info(ticker: str) -> pd.Series:
             symbol = t_info[0][:-1].strip()
         else:
             symbol = t_info[0].split('+')[0]
-        exch = a_info.query(f'tickers == "{symbol}"')
-        if not exch.empty:
-            return exch.reset_index(drop=True).iloc[0]
+        return take_first(data=a_info, query=f'tickers == "{symbol}"')
 
     # ================================ #
     #           Term Futures           #
     # ================================ #
 
+    if (t_info[-1] == 'Index') and (t_info[0][:2] == 'UX'):
+        return take_first(data=a_info, query=f'tickers == "UX"')
+
     return pd.Series(dtype=object)
+
+
+def take_first(data: pd.DataFrame, query: str) -> pd.Series:
+    """
+    Query and take the 1st row of result
+
+    Args:
+        data: pd.DataFrame
+        query: query string
+
+    Returns:
+        pd.Series
+    """
+    if data.empty: return pd.Series(dtype=object)
+    res = data.query(query)
+    if res.empty: return pd.Series(dtype=object)
+    return res.reset_index(drop=True).iloc[0]
 
 
 def asset_config(asset: str) -> pd.DataFrame:
@@ -192,17 +211,26 @@ def asset_config(asset: str) -> pd.DataFrame:
     Returns:
         pd.DataFrame
     """
-    return (
+    cfg_files = param.config_files('assets')
+    cache_cfg = f'{PKG_PATH}/markets/cached/asset_cfg.pkl'
+    if files.exists(cache_cfg) and \
+            files.modified_time(cache_cfg) > max(map(files.modified_time, cfg_files)):
+        return pd.read_pickle(cache_cfg)
+
+    config = (
         pd.concat([
             explode(
                 data=pd.DataFrame(param.load_yaml(cf)[asset]),
                 columns=ASSET_INFO[asset],
             )
-            for cf in param.config_files('assets')
+            for cf in cfg_files
         ], sort=False)
         .drop_duplicates(keep='last')
         .reset_index(drop=True)
     )
+    files.create_folder(cache_cfg, is_file=True)
+    config.to_pickle(cache_cfg)
+    return config
 
 
 def explode(data: pd.DataFrame, columns: list) -> pd.DataFrame:
