@@ -40,8 +40,8 @@ def load_config(cat: str) -> pd.DataFrame:
     """
     cfg_files = config_files(cat=cat)
     cache_cfg = f'{PKG_PATH}/markets/cached/{cat}_cfg.pkl'
-    if files.exists(cache_cfg) and \
-            files.modified_time(cache_cfg) > max(map(files.modified_time, cfg_files)):
+    last_mod = max(map(files.modified_time, cfg_files))
+    if files.exists(cache_cfg) and files.modified_time(cache_cfg) > last_mod:
         return pd.read_pickle(cache_cfg)
 
     config = (

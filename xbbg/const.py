@@ -179,7 +179,7 @@ def market_info(ticker: str) -> pd.Series:
     # ================================ #
 
     if (t_info[-1] == 'Index') and (t_info[0][:2] == 'UX'):
-        return take_first(data=a_info, query=f'tickers == "UX"')
+        return take_first(data=a_info, query='tickers == "UX"')
 
     return pd.Series(dtype=object)
 
@@ -212,9 +212,9 @@ def asset_config(asset: str) -> pd.DataFrame:
         pd.DataFrame
     """
     cfg_files = param.config_files('assets')
-    cache_cfg = f'{PKG_PATH}/markets/cached/asset_cfg.pkl'
-    if files.exists(cache_cfg) and \
-            files.modified_time(cache_cfg) > max(map(files.modified_time, cfg_files)):
+    cache_cfg = f'{PKG_PATH}/markets/cached/{asset}_cfg.pkl'
+    last_mod = max(map(files.modified_time, cfg_files))
+    if files.exists(cache_cfg) and files.modified_time(cache_cfg) > last_mod:
         return pd.read_pickle(cache_cfg)
 
     config = (
