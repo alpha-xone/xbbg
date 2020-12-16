@@ -1,3 +1,5 @@
+|xbbg|
+
 xbbg
 ====
 
@@ -327,3 +329,6 @@ License        |license|
 .. |coffee| image:: https://www.buymeacoffee.com/assets/img/custom_images/purple_img.png
    :target: https://www.buymeacoffee.com/Lntx29Oof
 .. _Bloomberg API Library: https://www.bloomberg.com/professional/support/api-library/
+.. |xbbg| image:: https://raw.githubusercontent.com/alpha-xone/xbbg/master/docs/xbbg.png
+   :alt: xbbg
+

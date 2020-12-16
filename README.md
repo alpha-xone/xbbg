@@ -1,3 +1,5 @@
+![xbbg](https://raw.githubusercontent.com/alpha-xone/xbbg/master/docs/xbbg.png)
+
 # xbbg
 
 Intuitive Bloomberg data API
