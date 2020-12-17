@@ -673,8 +673,8 @@ def active_futures(ticker: str, dt, **kwargs) -> str:
     info = const.market_info(f'{prefix[:-1]}1 {asset}')
 
     f1, f2 = f'{prefix[:-1]}1 {asset}', f'{prefix[:-1]}2 {asset}'
-    fut_2 = fut_ticker(gen_ticker=f2, dt=dt, freq=info['freq'], **kwargs)
-    fut_1 = fut_ticker(gen_ticker=f1, dt=dt, freq=info['freq'], **kwargs)
+    fut_2 = fut_ticker(gen_ticker=f2, dt=dt, freq=info.get('freq', 'M'), **kwargs)
+    fut_1 = fut_ticker(gen_ticker=f1, dt=dt, freq=info.get('freq', 'M'), **kwargs)
 
     fut_tk = bdp(tickers=[fut_1, fut_2], flds='Last_Tradeable_Dt')
 
