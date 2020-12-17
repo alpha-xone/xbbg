@@ -169,14 +169,14 @@ def process_ref(msg: blpapi.message.Message, **kwargs) -> dict:
     Returns:
         dict
     """
-    kwargs.pop('@_<', None)
+    kwargs.pop('(@_<)', None)
     data = None
     if msg.hasElement('securityData'):
         data = msg.getElement('securityData')
     elif msg.hasElement('data') and \
             msg.getElement('data').hasElement('securityData'):
         data = msg.getElement('data').getElement('securityData')
-    if data is None: yield {}
+    if not data: return iter([])
 
     for sec in data.values():
         ticker = sec.getElement('security').getValue()
@@ -207,7 +207,7 @@ def process_hist(msg: blpapi.message.Message, **kwargs) -> dict:
     Returns:
         dict
     """
-    kwargs.pop('>_<', None)
+    kwargs.pop('(>_<)', None)
     if not msg.hasElement('securityData'): return {}
     ticker = msg.getElement('securityData').getElement('security').getValue()
     for val in msg.getElement('securityData').getElement('fieldData').values():
@@ -228,7 +228,7 @@ def process_bar(msg: blpapi.message.Message, typ='bar', **kwargs) -> OrderedDict
     Yields:
         OrderedDict
     """
-    kwargs.pop('#_#', None)
+    kwargs.pop('(#_#)', None)
     check_error(msg=msg)
     if typ[0].lower() == 't':
         lvls = [TICK_DATA, TICK_DATA]

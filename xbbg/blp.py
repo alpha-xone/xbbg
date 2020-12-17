@@ -491,7 +491,7 @@ def beqs(
         request='BeqsRequest',
         settings=[
             ('screenName', screen),
-            ('GLOBAL' if typ[0].upper() in ['G', 'B'] else 'PRIVATE'),
+            ('screenType', 'GLOBAL' if typ[0].upper() in ['G', 'B'] else 'PRIVATE'),
             ('Group', group),
         ],
         ovrds=[('PiTDate', utils.fmt_dt(asof, '%Y%m%d'))] if asof else None,
