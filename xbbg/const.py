@@ -252,7 +252,7 @@ def asset_config(asset: str) -> pd.DataFrame:
     config = (
         pd.concat([
             explode(
-                data=pd.DataFrame(param.load_yaml(cf)[asset]),
+                data=pd.DataFrame(param.load_yaml(cf).get(asset, [])),
                 columns=ASSET_INFO[asset],
             )
             for cf in cfg_files
@@ -276,6 +276,7 @@ def explode(data: pd.DataFrame, columns: list) -> pd.DataFrame:
     Returns:
         pd.DataFrame
     """
+    if data.empty: return pd.DataFrame()
     if len(columns) == 1:
         return data.explode(column=columns[0])
     return explode(
