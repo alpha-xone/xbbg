@@ -1,9 +1,11 @@
 import pandas as pd
+import numpy as np
 
 import pytest
 try: import blpapi
 except ImportError: blpapi = pytest.importorskip('blpapi')
 
+from itertools import starmap
 from collections import OrderedDict
 
 from xbbg import const
@@ -17,6 +19,46 @@ MESSAGE = blpapi.Name("message")
 BAR_DATA = blpapi.Name('barData')
 BAR_TICK = blpapi.Name('barTickData')
 TICK_DATA = blpapi.Name('tickData')
+
+
+def create_request(
+        service: str,
+        request: str,
+        settings: list = None,
+        ovrds: list = None,
+        append: dict = None,
+        **kwargs,
+) -> blpapi.request.Request:
+    """
+    Create request for query
+
+    Args:
+        service: service name
+        request: request name
+        settings: list of settings
+        ovrds: list of overrides
+        append: info to be appended to request directly
+        kwargs: other overrides
+
+    Returns:
+        Bloomberg request
+    """
+    srv = conn.bbg_service(service=service, **kwargs)
+    req = srv.createRequest(request)
+
+    list(starmap(req.set, settings if settings else []))
+    if ovrds:
+        ovrd = req.getElement('overrides')
+        for fld, val in ovrds:
+            item = ovrd.appendElement()
+            item.setElement('fieldId', fld)
+            item.setElement('value', val)
+    if append:
+        for key, val in append.items():
+            vals = [val] if isinstance(val, str) else val
+            for v in vals: req.append(key, v)
+
+    return req
 
 
 def init_request(request: blpapi.request.Request, tickers, flds, **kwargs):
@@ -212,3 +254,43 @@ def check_error(msg):
             f'{error.getElementAsString(CATEGORY)}: '
             f'{error.getElementAsString(MESSAGE)}'
         )
+
+
+def elem_value(element: conn.blpapi.Element):
+    """
+    Get value from element
+
+    Args:
+        element: Bloomberg element
+
+    Returns:
+        value
+    """
+    if element.isNull(): return None
+    value = element.getValue()
+    if isinstance(value, np.bool_): return bool(value)
+    if isinstance(value, conn.blpapi.name.Name): return str(value)
+    return value
+
+
+def earning_pct(data: pd.DataFrame, yr):
+    """
+    Calculate % of earnings by year
+    """
+    pct = f'{yr}_pct'
+    data.loc[:, pct] = np.nan
+
+    # Calculate level 1 percentage
+    data.loc[data.level == 1, pct] = \
+        100 * data.loc[data.level == 1, yr] / data.loc[data.level == 1, yr].sum()
+
+    # Calculate level 2 percentage (higher levels will be ignored)
+    sub_pct = []
+    for r, snap in data.reset_index()[::-1].iterrows():
+        if snap.level > 2: continue
+        if snap.level == 1:
+            if len(sub_pct) == 0: continue
+            data.iloc[sub_pct, data.columns.get_loc(pct)] = \
+                100 * data[yr].iloc[sub_pct] / data[yr].iloc[sub_pct].sum()
+            sub_pct = []
+        if snap.level == 2: sub_pct.append(r)
