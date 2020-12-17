@@ -115,7 +115,7 @@ def select(table: str, **kwargs) -> str:
         f'{key}={db_value(value)}'
         for key, value in kwargs.items()
     )
-    s = f'SELECT * FROM "{table}"'
+    s = f'SELECT * FROM {table}'
     if kwargs:
         return f"""
             {s}
