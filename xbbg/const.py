@@ -66,8 +66,8 @@ def exch_info(ticker: str, **kwargs) -> pd.Series:
         allday    [01:00, 21:00]
         day       [01:00, 21:00]
         Name: FuturesFinancialsICE, dtype: object
-        >>> exch_info('TESTTICKER Corp').empty
-        True
+        >>> exch_info('TESTTICKER Corp')
+        Series([], dtype: object)
         >>> exch_info('US')
         tz        America/New_York
         allday      [04:00, 20:00]
@@ -80,6 +80,10 @@ def exch_info(ticker: str, **kwargs) -> pd.Series:
         allday      [18:00, 17:00]
         day         [18:00, 17:00]
         Name: FuturesCBOE, dtype: object
+        >>> exch_info('TESTTICKER Index', original='TESTTICKER Index')
+        Series([], dtype: object)
+        >>> exch_info('TESTTCK Index')
+        Series([], dtype: object)
     """
     logger = logs.get_logger(exch_info, level='debug')
 
@@ -172,17 +176,14 @@ def market_info(ticker: str) -> pd.Series:
     #           Currency / Commodity / Index           #
     # ================================================ #
 
-    if t_info[-1] in ['Curncy', 'Comdty', 'Index']:
-        if t_info[0][-1].isdigit():
-            symbol = t_info[0][:-1].strip()
-            # Special contracts
-            if (symbol[:2] == 'UX') and (t_info[-1] == 'Index'):
-                symbol = 'UX'
-        else:
-            symbol = t_info[0].split('+')[0]
-        return take_first(data=a_info, query=f'tickers == "{symbol}"')
-
-    return pd.Series(dtype=object)
+    if t_info[0][-1].isdigit():
+        symbol = t_info[0][:-1].strip()
+        # Special contracts
+        if (symbol[:2] == 'UX') and (t_info[-1] == 'Index'):
+            symbol = 'UX'
+    else:
+        symbol = t_info[0].split('+')[0]
+    return take_first(data=a_info, query=f'tickers == "{symbol}"')
 
 
 def take_first(data: pd.DataFrame, query: str) -> pd.Series:

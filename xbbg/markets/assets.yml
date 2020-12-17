@@ -175,6 +175,8 @@ Index:
     exch: FuturesNYFICE
     freq: Q
     is_fut: True
+  - tickers: [TESTTCK]
+    exch: TestExch
 
 Corp:
   - {}

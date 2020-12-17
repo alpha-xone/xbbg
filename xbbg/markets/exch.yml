@@ -281,3 +281,6 @@ CMX:
 CBT:
   tz: America/New_York
   allday: [1800, 1700]
+
+TestExch:
+  tz: America/New_York

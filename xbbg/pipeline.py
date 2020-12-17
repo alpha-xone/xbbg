@@ -251,6 +251,21 @@ def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
 def perf(data: pd.DataFrame) -> pd.DataFrame:
     """
     Performance rebased to 100
+
+    Examples:
+        >>> (
+        ...     pd.DataFrame({
+        ...         's1': [1., np.nan, 1.01, 1.03, .99],
+        ...         's2': [np.nan, 1., .99, 1.04, 1.1],
+        ...     })
+        ...     .pipe(perf)
+        ... )
+              s1     s2
+        0  100.0    NaN
+        1    NaN  100.0
+        2  101.0   99.0
+        3  103.0  104.0
+        4   99.0  110.0
     """
     return pd.DataFrame(
         pd.concat([
