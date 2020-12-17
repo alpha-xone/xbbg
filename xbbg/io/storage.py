@@ -132,7 +132,7 @@ def ref_file(
             diff = pd.Timestamp('today') - pd.Timestamp(upd_dt)
             if diff >= pd.Timedelta(days=cache_days): return missing
             return sorted(cur_files)[-1]
-        else: return missing
+        return missing
 
     return f'{root}/{info}.{ext}'
 
