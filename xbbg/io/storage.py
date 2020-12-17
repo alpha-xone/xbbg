@@ -150,7 +150,7 @@ def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE', **kwargs):
     Examples:
         >>> os.environ['BBG_ROOT'] = f'{PKG_PATH}/tests/data'
         >>> sample = pd.read_parquet(f'{PKG_PATH}/tests/data/aapl.parq')
-        >>> # save_intraday(sample, 'AAPL US Equity', '2018-11-02')
+        >>> save_intraday(sample, 'AAPL US Equity', '2018-11-02')
         >>> # Invalid exchange
         >>> save_intraday(sample, 'AAPL XX Equity', '2018-11-02')
         >>> # Invalid empty data
