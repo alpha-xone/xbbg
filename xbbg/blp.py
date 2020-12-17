@@ -527,8 +527,9 @@ def beqs(
     conn.send_request(request=request, **kwargs)
     res = pd.DataFrame(process.rec_events(func=process.process_ref, **kwargs))
     if res.empty:
-        if kwargs.get('trial', 0): return pd.DataFrame()
-        else: return beqs(
+        if kwargs.get('trial', 0):
+            return pd.DataFrame()
+        return beqs(
             screen=screen, asof=asof, typ=typ, group=group, trial=1, **kwargs
         )
 

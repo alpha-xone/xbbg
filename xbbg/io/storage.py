@@ -134,7 +134,7 @@ def ref_file(
             return sorted(cur_files)[-1]
         else: return missing
 
-    else: return f'{root}/{info}.{ext}'
+    return f'{root}/{info}.{ext}'
 
 
 def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE', **kwargs):
