@@ -236,21 +236,12 @@ def bdib(
             logger.debug(f'Loading Bloomberg intraday data from: {data_file}')
             return res
 
-    t_1 = pd.Timestamp('today').date() - pd.Timedelta('1D')
-    whole_day = pd.Timestamp(dt).date() < t_1
-    batch = kwargs.pop('batch', False)
-    if (not whole_day) and batch:
-        logger.warning(f'Querying date {t_1} is too close, ignoring download ...')
+    if not process.check_current(dt=dt, logger=logger, **kwargs):
         return pd.DataFrame()
 
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
-    info_log = f'{ticker} / {cur_dt} / {typ}'
-
     q_tckr = ticker
     if ex_info.get('is_fut', False):
-        if 'freq' not in ex_info:
-            logger.error(f'[freq] missing in info for {info_log} ...')
-
         is_sprd = ex_info.get('has_sprd', False) and (len(ticker[:-1]) != ex_info['tickers'][0])
         if not is_sprd:
             q_tckr = fut_ticker(gen_ticker=ticker, dt=dt, freq=ex_info['freq'])
@@ -262,7 +253,7 @@ def bdib(
     trial_kw = dict(ticker=ticker, dt=dt, typ=typ, func='bdib')
     num_trials = trials.num_trials(**trial_kw)
     if num_trials >= 2:
-        if batch: return pd.DataFrame()
+        if kwargs.get('batch', False): return pd.DataFrame()
         logger.info(f'{num_trials} trials with no data {info_log}')
         return pd.DataFrame()
 

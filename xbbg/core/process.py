@@ -294,3 +294,15 @@ def earning_pct(data: pd.DataFrame, yr):
                 100 * data[yr].iloc[sub_pct] / data[yr].iloc[sub_pct].sum()
             sub_pct = []
         if snap.level == 2: sub_pct.append(r)
+
+
+def check_current(dt, logger, **kwargs) -> bool:
+    """
+    Check current time against T-1
+    """
+    t_1 = pd.Timestamp('today').date() - pd.Timedelta('1D')
+    whole_day = pd.Timestamp(dt).date() < t_1
+    if (not whole_day) and kwargs.get('batch', False):
+        logger.warning(f'Querying date {t_1} is too close, ignoring download ...')
+        return False
+    return True
