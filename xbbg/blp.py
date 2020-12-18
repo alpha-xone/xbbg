@@ -583,7 +583,7 @@ async def live(
         cnt = 0
         while True and cnt <= max_cnt:
             try:
-                ev = sess.nextEvent(interval)
+                ev = sess.tryNextEvent()
                 if conn.event_types()[ev.eventType()] != 'SUBSCRIPTION_DATA':
                     continue
 
