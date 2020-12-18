@@ -207,7 +207,8 @@ def market_info(ticker: str) -> pd.Series:
     # ================================================ #
 
     if t_info[0][-1].isdigit():
-        symbol = t_info[0][:-1].strip()
+        end_idx = 2 if t_info[-2].isdigit() else 1
+        symbol = t_info[0][:-end_idx].strip()
         # Special contracts
         if (symbol[:2] == 'UX') and (t_info[-1] == 'Index'):
             symbol = 'UX'
