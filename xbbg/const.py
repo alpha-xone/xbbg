@@ -20,6 +20,36 @@ ASSET_INFO = {
     'Equity': ['exch_codes'],
 }
 
+DVD_TPYES = {
+    'all': 'DVD_Hist_All',
+    'dvd': 'DVD_Hist',
+    'split': 'Eqy_DVD_Hist_Splits',
+    'gross': 'Eqy_DVD_Hist_Gross',
+    'adjust': 'Eqy_DVD_Adjust_Fact',
+    'adj_fund': 'Eqy_DVD_Adj_Fund',
+    'with_amt': 'DVD_Hist_All_with_Amt_Status',
+    'dvd_amt': 'DVD_Hist_with_Amt_Status',
+    'gross_amt': 'DVD_Hist_Gross_with_Amt_Stat',
+    'projected': 'BDVD_Pr_Ex_Dts_DVD_Amts_w_Ann',
+}
+
+DVD_COLS = {
+    'Declared Date': 'dec_date',
+    'Ex-Date': 'ex_date',
+    'Record Date': 'rec_date',
+    'Payable Date': 'pay_date',
+    'Dividend Amount': 'dvd_amt',
+    'Dividend Frequency': 'dvd_freq',
+    'Dividend Type': 'dvd_type',
+    'Amount Status': 'amt_status',
+    'Adjustment Date': 'adj_date',
+    'Adjustment Factor': 'adj_factor',
+    'Adjustment Factor Operator Type': 'adj_op',
+    'Adjustment Factor Flag': 'adj_flag',
+    'Amount Per Share': 'amt_ps',
+    'Projected/Confirmed': 'category',
+}
+
 
 def exch_info(ticker: str, **kwargs) -> pd.Series:
     """
@@ -177,7 +207,8 @@ def market_info(ticker: str) -> pd.Series:
     # ================================================ #
 
     if t_info[0][-1].isdigit():
-        symbol = t_info[0][:-1].strip()
+        end_idx = 2 if t_info[-2].isdigit() else 1
+        symbol = t_info[0][:-end_idx].strip()
         # Special contracts
         if (symbol[:2] == 'UX') and (t_info[-1] == 'Index'):
             symbol = 'UX'
@@ -222,7 +253,7 @@ def asset_config(asset: str) -> pd.DataFrame:
     config = (
         pd.concat([
             explode(
-                data=pd.DataFrame(param.load_yaml(cf)[asset]),
+                data=pd.DataFrame(param.load_yaml(cf).get(asset, [])),
                 columns=ASSET_INFO[asset],
             )
             for cf in cfg_files
@@ -246,6 +277,7 @@ def explode(data: pd.DataFrame, columns: list) -> pd.DataFrame:
     Returns:
         pd.DataFrame
     """
+    if data.empty: return pd.DataFrame()
     if len(columns) == 1:
         return data.explode(column=columns[0])
     return explode(

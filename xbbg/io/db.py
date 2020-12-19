@@ -122,8 +122,7 @@ def select(table: str, **kwargs) -> str:
             WHERE
             {where}
         """
-    else:
-        return s
+    return s
 
 
 def replace_into(table: str, **kwargs) -> str:

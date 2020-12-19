@@ -7,6 +7,8 @@ from xbbg import const
 from xbbg.io import files, logs
 from xbbg.core import utils, overrides
 
+PKG_PATH = files.abspath(__file__, 1)
+
 
 def bar_file(ticker: str, dt, typ='TRADE') -> str:
     """
@@ -130,9 +132,9 @@ def ref_file(
             diff = pd.Timestamp('today') - pd.Timestamp(upd_dt)
             if diff >= pd.Timedelta(days=cache_days): return missing
             return sorted(cur_files)[-1]
-        else: return missing
+        return missing
 
-    else: return f'{root}/{info}.{ext}'
+    return f'{root}/{info}.{ext}'
 
 
 def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE', **kwargs):
@@ -146,9 +148,9 @@ def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE', **kwargs):
         typ: [TRADE, BID, ASK, BID_BEST, ASK_BEST, BEST_BID, BEST_ASK]
 
     Examples:
-        >>> os.environ['BBG_ROOT'] = 'xbbg/tests/data'
-        >>> sample = pd.read_parquet('xbbg/tests/data/aapl.parq')
-        >>> # save_intraday(sample, 'AAPL US Equity', '2018-11-02')
+        >>> os.environ['BBG_ROOT'] = f'{PKG_PATH}/tests/data'
+        >>> sample = pd.read_parquet(f'{PKG_PATH}/tests/data/aapl.parq')
+        >>> save_intraday(sample, 'AAPL US Equity', '2018-11-02')
         >>> # Invalid exchange
         >>> save_intraday(sample, 'AAPL XX Equity', '2018-11-02')
         >>> # Invalid empty data

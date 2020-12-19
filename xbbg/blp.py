@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 
 from itertools import product
 from contextlib import contextmanager
@@ -40,9 +39,11 @@ def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
     if isinstance(tickers, str): tickers = [tickers]
     if isinstance(flds, str): flds = [flds]
 
-    service = conn.bbg_service(service='//blp/refdata', **kwargs)
-    request = service.createRequest('ReferenceDataRequest')
-
+    request = process.create_request(
+        service='//blp/refdata',
+        request='ReferenceDataRequest',
+        **kwargs,
+    )
     process.init_request(request=request, tickers=tickers, flds=flds, **kwargs)
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
@@ -52,16 +53,14 @@ def bdp(tickers, flds, **kwargs) -> pd.DataFrame:
     if res.empty or any(fld not in res for fld in ['ticker', 'field']):
         return pd.DataFrame()
 
-    col_maps = kwargs.get('col_maps', None)
-    cols = res.field.unique()
     return (
         res
         .set_index(['ticker', 'field'])
         .unstack(level=1)
         .rename_axis(index=None, columns=[None, None])
         .droplevel(axis=1, level=0)
-        .loc[:, cols]
-        .pipe(pipeline.standard_cols, col_maps=col_maps)
+        .loc[:, res.field.unique()]
+        .pipe(pipeline.standard_cols, col_maps=kwargs.get('col_maps', None))
     )
 
 
@@ -80,45 +79,60 @@ def bds(tickers, flds, use_port=False, **kwargs) -> pd.DataFrame:
     """
     logger = logs.get_logger(bds, **kwargs)
 
-    service = conn.bbg_service(service='//blp/refdata', **kwargs)
-    request = service.createRequest(
-        'PortfolioDataRequest' if use_port else 'ReferenceDataRequest'
+    request = process.create_request(
+        service='//blp/refdata',
+        request='PortfolioDataRequest' if use_port else 'ReferenceDataRequest',
+        **kwargs,
     )
 
     if isinstance(tickers, str):
-        if 'has_date' not in kwargs: kwargs['has_date'] = True
-        data_file = storage.ref_file(
-            ticker=tickers, fld=flds, ext='pkl', **kwargs
-        )
-        if files.exists(data_file):
-            logger.debug(f'Loading Bloomberg data from: {data_file}')
-            return pd.DataFrame(pd.read_pickle(data_file))
-
-        process.init_request(request=request, tickers=tickers, flds=flds, **kwargs)
-        logger.debug(f'Sending request to Bloomberg ...\n{request}')
-        conn.send_request(request=request, **kwargs)
-
-        res = pd.DataFrame(process.rec_events(func=process.process_ref, **kwargs))
-        if kwargs.get('raw', False): return res
-        if res.empty or any(fld not in res for fld in ['ticker', 'field']):
-            return pd.DataFrame()
-
-        data = (
-            res
-            .set_index(['ticker', 'field'])
-            .droplevel(axis=0, level=1)
-            .rename_axis(index=None)
-            .pipe(pipeline.standard_cols, col_maps=kwargs.get('col_maps', None))
-        )
-        if data_file:
-            logger.debug(f'Saving Bloomberg data to: {data_file}')
-            files.create_folder(data_file, is_file=True)
-            data.to_pickle(data_file)
-        return data
+        return _bds_(tickers, fld=flds, logger=logger, request=request, **kwargs)
 
     return pd.DataFrame(pd.concat([
         bds(tickers=ticker, flds=flds, **kwargs) for ticker in tickers
     ], sort=False))
+
+
+def _bds_(
+        ticker: str,
+        fld: str,
+        logger: logs.logging.Logger,
+        request: conn.blpapi.request.Request,
+        **kwargs
+) -> pd.DataFrame:
+    """
+    Get data of BDS of single ticker
+    """
+    if 'has_date' not in kwargs: kwargs['has_date'] = True
+    data_file = storage.ref_file(
+        ticker=ticker, fld=fld, ext='pkl', **kwargs
+    )
+    if files.exists(data_file):
+        logger.debug(f'Loading Bloomberg data from: {data_file}')
+        return pd.DataFrame(pd.read_pickle(data_file))
+
+    process.init_request(request=request, tickers=ticker, flds=fld, **kwargs)
+    logger.debug(f'Sending request to Bloomberg ...\n{request}')
+    conn.send_request(request=request, **kwargs)
+
+    res = pd.DataFrame(process.rec_events(func=process.process_ref, **kwargs))
+    if kwargs.get('raw', False): return res
+    if res.empty or any(fld not in res for fld in ['ticker', 'field']):
+        return pd.DataFrame()
+
+    data = (
+        res
+        .set_index(['ticker', 'field'])
+        .droplevel(axis=0, level=1)
+        .rename_axis(index=None)
+        .pipe(pipeline.standard_cols, col_maps=kwargs.get('col_maps', None))
+    )
+    if data_file:
+        logger.debug(f'Saving Bloomberg data to: {data_file}')
+        files.create_folder(data_file, is_file=True)
+        data.to_pickle(data_file)
+
+    return data
 
 
 def bdh(
@@ -151,9 +165,11 @@ def bdh(
     if start_date is None: start_date = pd.Timestamp(e_dt) - pd.Timedelta(weeks=8)
     s_dt = utils.fmt_dt(start_date, fmt='%Y%m%d')
 
-    service = conn.bbg_service(service='//blp/refdata', **kwargs)
-    request = service.createRequest('HistoricalDataRequest')
-
+    request = process.create_request(
+        service='//blp/refdata',
+        request='HistoricalDataRequest',
+        **kwargs,
+    )
     process.init_request(
         request=request, tickers=tickers, flds=flds,
         start_date=s_dt, end_date=e_dt, adjust=adjust, **kwargs
@@ -202,7 +218,8 @@ def bdib(
     logger = logs.get_logger(bdib, **kwargs)
 
     ex_info = const.exch_info(ticker=ticker, **kwargs)
-    if ex_info.empty: raise KeyError(f'Cannot find exchange info for {ticker}')
+    if ex_info.empty:
+        raise KeyError(f'Cannot find exchange info for {ticker}')
 
     ss_rng = process.time_range(
         dt=dt, ticker=ticker, session=session, tz=ex_info.tz, **kwargs
@@ -219,21 +236,12 @@ def bdib(
             logger.debug(f'Loading Bloomberg intraday data from: {data_file}')
             return res
 
-    t_1 = pd.Timestamp('today').date() - pd.Timedelta('1D')
-    whole_day = pd.Timestamp(dt).date() < t_1
-    batch = kwargs.pop('batch', False)
-    if (not whole_day) and batch:
-        logger.warning(f'Querying date {t_1} is too close, ignoring download ...')
+    if not process.check_current(dt=dt, logger=logger, **kwargs):
         return pd.DataFrame()
 
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
-    info_log = f'{ticker} / {cur_dt} / {typ}'
-
     q_tckr = ticker
     if ex_info.get('is_fut', False):
-        if 'freq' not in ex_info:
-            logger.error(f'[freq] missing in info for {info_log} ...')
-
         is_sprd = ex_info.get('has_sprd', False) and (len(ticker[:-1]) != ex_info['tickers'][0])
         if not is_sprd:
             q_tckr = fut_ticker(gen_ticker=ticker, dt=dt, freq=ex_info['freq'])
@@ -245,22 +253,24 @@ def bdib(
     trial_kw = dict(ticker=ticker, dt=dt, typ=typ, func='bdib')
     num_trials = trials.num_trials(**trial_kw)
     if num_trials >= 2:
-        if batch: return pd.DataFrame()
+        if kwargs.get('batch', False): return pd.DataFrame()
         logger.info(f'{num_trials} trials with no data {info_log}')
         return pd.DataFrame()
 
-    service = conn.bbg_service(service='//blp/refdata', **kwargs)
-    request = service.createRequest('IntradayBarRequest')
-
     while conn.bbg_session(**kwargs).tryNextEvent(): pass
-    request.set('security', ticker)
-    request.set('eventType', typ)
-    request.set('interval', kwargs.get('interval', 1))
-
     time_rng = process.time_range(dt=dt, ticker=ticker, session='allday', **kwargs)
-    request.set('startDateTime', time_rng[0])
-    request.set('endDateTime', time_rng[1])
-
+    request = process.create_request(
+        service='//blp/refdata',
+        request='IntradayBarRequest',
+        settings=[
+            ('security', ticker),
+            ('eventType', typ),
+            ('interval', kwargs.get('interval', 1)),
+            ('startDateTime', time_rng[0]),
+            ('endDateTime', time_rng[1])
+        ],
+        **kwargs,
+    )
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
 
@@ -307,25 +317,28 @@ def bdtick(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
     time_rng = process.time_range(
         dt=dt, ticker=ticker, session=session, tz=exch.tz, **kwargs
     )
-
-    service = conn.bbg_service(service='//blp/refdata', **kwargs)
-    request = service.createRequest('IntradayTickRequest')
+    if types is None: types = ['TRADE']
 
     while conn.bbg_session(**kwargs).tryNextEvent(): pass
-    if types is None: types = ['TRADE']
-    if isinstance(types, str): types = [types]
-    request.set('security', ticker)
-    for typ in types: request.append('eventTypes', typ)
-    request.set('startDateTime', time_rng[0])
-    request.set('endDateTime', time_rng[1])
-    request.set('includeConditionCodes', True)
-    request.set('includeExchangeCodes', True)
-    request.set('includeNonPlottableEvents', True)
-    request.set('includeBrokerCodes', True)
-    request.set('includeRpsCodes', True)
-    request.set('includeTradeTime', True)
-    request.set('includeActionCodes', True)
-    request.set('includeIndicatorCodes', True)
+    request = process.create_request(
+        service='//blp/refdata',
+        request='IntradayTickRequest',
+        settings=[
+            ('security', ticker),
+            ('startDateTime', time_rng[0]),
+            ('endDateTime', time_rng[1]),
+            ('includeConditionCodes', True),
+            ('includeExchangeCodes', True),
+            ('includeNonPlottableEvents', True),
+            ('includeBrokerCodes', True),
+            ('includeRpsCodes', True),
+            ('includeTradeTime', True),
+            ('includeActionCodes', True),
+            ('includeIndicatorCodes', True),
+        ],
+        append={'eventTypes': types},
+        **kwargs,
+    )
 
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request)
@@ -399,23 +412,7 @@ def earning(
 
     if 'level' not in data: raise KeyError('Cannot find [level] in data')
     for yr in data.columns[data.columns.str.startswith('fy')]:
-        pct = f'{yr}_pct'
-        data.loc[:, pct] = np.nan
-
-        # Calculate level 1 percentage
-        data.loc[data.level == 1, pct] = \
-            100 * data.loc[data.level == 1, yr] / data.loc[data.level == 1, yr].sum()
-
-        # Calculate level 2 percentage (higher levels will be ignored)
-        sub_pct = []
-        for r, snap in data.reset_index()[::-1].iterrows():
-            if snap.level > 2: continue
-            if snap.level == 1:
-                if len(sub_pct) == 0: continue
-                data.iloc[sub_pct, data.columns.get_loc(pct)] = \
-                    100 * data[yr].iloc[sub_pct] / data[yr].iloc[sub_pct].sum()
-                sub_pct = []
-            if snap.level == 2: sub_pct.append(r)
+        process.earning_pct(data=data, yr=yr)
 
     return data
 
@@ -450,47 +447,17 @@ def dividend(
     if isinstance(tickers, str): tickers = [tickers]
     tickers = [t for t in tickers if ('Equity' in t) and ('=' not in t)]
 
-    fld = {
-        'all': 'DVD_Hist_All',
-        'dvd': 'DVD_Hist',
-        'split': 'Eqy_DVD_Hist_Splits',
-        'gross': 'Eqy_DVD_Hist_Gross',
-        'adjust': 'Eqy_DVD_Adjust_Fact',
-        'adj_fund': 'Eqy_DVD_Adj_Fund',
-        'with_amt': 'DVD_Hist_All_with_Amt_Status',
-        'dvd_amt': 'DVD_Hist_with_Amt_Status',
-        'gross_amt': 'DVD_Hist_Gross_with_Amt_Stat',
-        'projected': 'BDVD_Pr_Ex_Dts_DVD_Amts_w_Ann',
-    }.get(typ, typ)
+    fld = const.DVD_TPYES.get(typ, typ)
 
     if (fld == 'Eqy_DVD_Adjust_Fact') and ('Corporate_Actions_Filter' not in kwargs):
         kwargs['Corporate_Actions_Filter'] = 'NORMAL_CASH|ABNORMAL_CASH|CAPITAL_CHANGE'
 
-    if fld in [
-        'DVD_Hist_All', 'DVD_Hist', 'Eqy_DVD_Hist_Gross',
-        'DVD_Hist_All_with_Amt_Status', 'DVD_Hist_with_Amt_Status',
-    ]:
-        if start_date:
-            kwargs['DVD_Start_Dt'] = utils.fmt_dt(start_date, fmt='%Y%m%d')
-        if end_date:
-            kwargs['DVD_End_Dt'] = utils.fmt_dt(end_date, fmt='%Y%m%d')
+    if start_date:
+        kwargs['DVD_Start_Dt'] = utils.fmt_dt(start_date, fmt='%Y%m%d')
+    if end_date:
+        kwargs['DVD_End_Dt'] = utils.fmt_dt(end_date, fmt='%Y%m%d')
 
-    return bds(tickers=tickers, flds=fld, col_maps={
-        'Declared Date': 'dec_date',
-        'Ex-Date': 'ex_date',
-        'Record Date': 'rec_date',
-        'Payable Date': 'pay_date',
-        'Dividend Amount': 'dvd_amt',
-        'Dividend Frequency': 'dvd_freq',
-        'Dividend Type': 'dvd_type',
-        'Amount Status': 'amt_status',
-        'Adjustment Date': 'adj_date',
-        'Adjustment Factor': 'adj_factor',
-        'Adjustment Factor Operator Type': 'adj_op',
-        'Adjustment Factor Flag': 'adj_flag',
-        'Amount Per Share': 'amt_ps',
-        'Projected/Confirmed': 'category',
-    }, **kwargs)
+    return bds(tickers=tickers, flds=fld, col_maps=const.DVD_COLS, **kwargs)
 
 
 def beqs(
@@ -510,25 +477,25 @@ def beqs(
     """
     logger = logs.get_logger(beqs, **kwargs)
 
-    service = conn.bbg_service(service='//blp/refdata', **kwargs)
-    request = service.createRequest('BeqsRequest')
-
-    request.set('screenName', screen)
-    request.set('screenType', 'GLOBAL' if typ[0].upper() in ['G', 'B'] else 'PRIVATE')
-    request.set('Group', group)
-
-    if asof:
-        overrides = request.getElement('overrides')
-        ovrd = overrides.appendElement()
-        ovrd.setElement('fieldId', 'PiTDate')
-        ovrd.setElement('value', utils.fmt_dt(asof, '%Y%m%d'))
+    request = process.create_request(
+        service='//blp/refdata',
+        request='BeqsRequest',
+        settings=[
+            ('screenName', screen),
+            ('screenType', 'GLOBAL' if typ[0].upper() in ['G', 'B'] else 'PRIVATE'),
+            ('Group', group),
+        ],
+        ovrds=[('PiTDate', utils.fmt_dt(asof, '%Y%m%d'))] if asof else None,
+        **kwargs,
+    )
 
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
     res = pd.DataFrame(process.rec_events(func=process.process_ref, **kwargs))
     if res.empty:
-        if kwargs.get('trial', 0): return pd.DataFrame()
-        else: return beqs(
+        if kwargs.get('trial', 0):
+            return pd.DataFrame()
+        return beqs(
             screen=screen, asof=asof, typ=typ, group=group, trial=1, **kwargs
         )
 
@@ -604,23 +571,6 @@ async def live(
     from collections.abc import Iterable
 
     logger = logs.get_logger(live, **kwargs)
-    conv = [conn.blpapi.name.Name]
-
-    def get_value(element: conn.blpapi.Element):
-        """
-        Get value from element
-
-        Args:
-            element: Bloomberg element
-
-        Returns:
-            value
-        """
-        if element.isNull(): return None
-        value = element.getValue()
-        if isinstance(value, np.bool_): return bool(value)
-        if isinstance(value, tuple(conv)): return str(value)
-        return value
 
     if isinstance(flds, str): flds = [flds]
     s_flds = [fld.upper() for fld in flds]
@@ -633,7 +583,7 @@ async def live(
         cnt = 0
         while True and cnt <= max_cnt:
             try:
-                ev = sess.nextEvent(interval)
+                ev = sess.tryNextEvent()
                 if conn.event_types()[ev.eventType()] != 'SUBSCRIPTION_DATA':
                     continue
 
@@ -646,7 +596,7 @@ async def live(
                             'FIELD': fld,
                         },
                         **{
-                            str(elem.name()): get_value(elem)
+                            str(elem.name()): process.elem_value(elem)
                             for elem in msg.asElement().elements()
                             if (True if not info else str(elem.name()) in info)
                         },
