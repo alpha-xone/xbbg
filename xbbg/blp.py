@@ -542,7 +542,7 @@ def subscribe(tickers, flds=None, identity=None, **kwargs):
 
 
 async def live(
-        tickers, flds='Last_Price', info=None, max_cnt=0, interval=500, **kwargs
+        tickers, flds='Last_Price', info=None, max_cnt=0, **kwargs
 ):
     """
     Subscribe and getting data feeds from
@@ -552,7 +552,6 @@ async def live(
         flds: fields to subscribe
         info: list of keys of interests (ticker will be included)
         max_cnt: max number of data points to receive
-        interval: update interval, default 500ms
 
     Yields:
         dict: Bloomberg market data
@@ -584,6 +583,7 @@ async def live(
         while True and cnt <= max_cnt:
             try:
                 ev = sess.tryNextEvent()
+                if ev is None: continue
                 if conn.event_types()[ev.eventType()] != 'SUBSCRIPTION_DATA':
                     continue
 
