@@ -41,7 +41,7 @@ def main(**kwargs):
 
 if __name__ == "__main__":
 
-    # Example: python pub.py --tickers="['SPY US Equity','NQA Index']"
+    # Example: python pub.py --tickers="['SPY US Equity','XLE US Equity']"
     try:
         fire.Fire(main)
     except KeyboardInterrupt:
