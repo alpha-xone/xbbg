@@ -12,19 +12,20 @@ DEFAULT_FDLS = [
     'LAST_PRICE', 'RT_PX_CHG_PCT_1D', 'IS_DELAYED_STREAM',
     'VOLUME', 'EQY_TURNOVER_REALTIME',
 ]
-ADDRESS = 'ipc:///xbbg/stream.ipc'
+ADDRESS = 'ipc:///xbbg/stream'
 
 
-async def live(tickers, **kwargs):
+async def live(channel: str, tickers, **kwargs):
     """
     Broadcasts live data feeds
 
     Args:
+        channel: channel name
         tickers: list of tickers
         **kwargs: other parameters for `blp.live`
     """
     with pynng.Pub0() as pub:
-        pub.listen(address=ADDRESS)
+        pub.listen(address=f'{ADDRESS}/{channel}')
         async for data in blp.live(tickers=tickers, **kwargs):
             print(data)
             await pub.asend(orjson.dumps(data))
@@ -32,6 +33,7 @@ async def live(tickers, **kwargs):
 
 def main(**kwargs):
 
+    kwargs['channel'] = kwargs.get('channel', 'futures')
     kwargs['tickers'] = kwargs.get('tickers', ['ESA Index', 'CLA Comdty'])
     kwargs['info'] = kwargs.get('info', DEFAULT_FDLS)
     print(kwargs['tickers'])
@@ -41,7 +43,8 @@ def main(**kwargs):
 
 if __name__ == "__main__":
 
-    # Example: python pub.py --tickers="['SPY US Equity','XLE US Equity']"
+    # Example: 
+    #   python pub.py --channel=equity --tickers="['SPY US Equity','XLE US Equity']"
     try:
         fire.Fire(main)
     except KeyboardInterrupt:
