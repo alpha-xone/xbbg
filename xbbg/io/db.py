@@ -1,8 +1,10 @@
+import pandas as pd
+
 import sqlite3
 import json
 
 WAL_MODE = 'PRAGMA journal_mode=WAL'
-ALL_TABLES = 'SELECT name FROM sqlite_schema WHERE type="table"'
+ALL_TABLES = 'SELECT name FROM sqlite_master WHERE type="table"'
 
 
 class Singleton(type):
@@ -23,6 +25,31 @@ class Singleton(type):
 
 
 class SQLite(metaclass=Singleton):
+    """
+    Examples:
+        >>> from xone import files
+        >>>
+        >>> db_file_ = f'{files.abspath(__file__)}/tests/xone.db'
+        >>> with SQLite(db_file_) as con_:
+        ...     _ = con_.execute('DROP TABLE IF EXISTS xone')
+        ...     _ = con_.execute('CREATE TABLE xone (rowid int)')
+        >>> db_ = SQLite(db_file_)
+        >>> db_.tables()
+        ['xone']
+        >>> db_.replace_into(table='xone', rowid=1)
+        >>> db_.select(table='xone')
+           rowid
+        0      1
+        >>> db_.replace_into(
+        ...     table='xone',
+        ...     data=pd.DataFrame([{'rowid': 2}, {'rowid': 3}])
+        ... )
+        >>> db_.select(table='xone')
+           rowid
+        0      1
+        1      2
+        2      3
+    """
 
     def __init__(self, db_file, keep_live=False):
 
@@ -39,21 +66,84 @@ class SQLite(metaclass=Singleton):
         if not keep_live: self.close()
         return [r[0] for r in res]
 
-    def select(self, table: str, **kwargs) -> list:
+    def select(self, table: str, cond='', **kwargs) -> pd.DataFrame:
         """
         SELECT query
         """
         keep_live = self.is_live
-        res = self.con.execute(select(table=table, **kwargs)).fetchall()
+        q_str = select(table=table, cond=cond, **kwargs)
+        data = self.con.execute(q_str).fetchall()
         if not keep_live: self.close()
-        return res
+        return pd.DataFrame(data, columns=self.columns(table=table))
 
-    def replace_into(self, table: str, **kwargs):
+    def select_recent(
+            self,
+            table: str,
+            dateperiod: str,
+            date_col: str = 'modified_date',
+            cond='',
+            **kwargs
+    ) -> pd.DataFrame:
         """
-        REPLACE INTO
+        Select recent
+
+        Args:
+            table: table name
+            dateperiod: time period, e.g., 1M, 1Q, etc.
+            date_col: column for time period
+            cond: conditions
+            **kwargs: other select criteria
+
+        Returns:
+            pd.DataFrame
         """
-        keep_live = self.is_live
-        self.con.execute(replace_into(table=table, **kwargs))
+        cols = self.columns(table=table)
+        if date_col not in cols: return pd.DataFrame()
+        start_dt = (
+            pd.date_range(
+                end='today', freq=dateperiod, periods=2, normalize=True,
+            )[0]
+            .strftime('%Y-%m-%d')
+        )
+        return (
+            self.select(table=table, cond=cond, **kwargs)
+            .query(f'{date_col} >= {start_dt}')
+            .reset_index(drop=True)
+        )
+
+    def columns(self, table: str):
+        """
+        Table columns
+        """
+        return [
+            info[1] for info in (
+                self.con.execute(f'PRAGMA table_info (`{table}`)').fetchall()
+            )
+        ]
+
+    def replace_into(self, table: str, data: pd.DataFrame = None, **kwargs):
+        """
+        Replace records into table
+
+        Args:
+            table: table name
+            data: DataFrame - if given, **kwargs will be ignored
+            **kwargs: record values
+        """
+        if isinstance(data, pd.DataFrame):
+            keep_live = self.is_live
+            cols = ', '.join(map(lambda v: f'`{v}`', data.columns))
+            vals = ', '.join(['?'] * data.shape[1])
+            # noinspection PyTypeChecker
+            self.con.executemany(
+                f'REPLACE INTO `{table}` ({cols}) values ({vals})',
+                data.apply(tuple, axis=1).tolist()
+            )
+        else:
+            keep_live = self.is_live or kwargs.get('_live_', False)
+            self.con.execute(replace_into(table=table, **{
+                k: v for k, v in kwargs.items() if k != '_live_'
+            }))
         if not keep_live: self.close()
 
     @property
@@ -93,36 +183,47 @@ def db_value(val) -> str:
     """
     Database value as in query string
     """
-    return f'"{val}"' if isinstance(val, str) else str(val)
+    if isinstance(val, str):
+        return json.dumps(val.replace('\"', '').strip())
+    return json.dumps(val, default=str)
 
 
-def select(table: str, **kwargs) -> str:
+def select(table: str, cond='', **kwargs) -> str:
     """
     Query string of SELECT statement
 
     Args:
         table: table name
+        cond: conditions
         **kwargs: data as kwargs
 
     Examples:
-        >>> query = select('daily', ticker='ES1 Index', price=3000)
-        >>> query.splitlines()[-2].strip()
+        >>> q1 = select('daily', ticker='ES1 Index', price=3000)
+        >>> q1.splitlines()[-2].strip()
         'ticker="ES1 Index" AND price=3000'
+        >>> q2 = select('daily', cond='price > 3000', ticker='ES1 Index')
+        >>> q2.splitlines()[-2].strip()
+        'price > 3000 AND ticker="ES1 Index"'
+        >>> q3 = select('daily', cond='price > 3000')
+        >>> q3.splitlines()[-2].strip()
+        'price > 3000'
         >>> select('daily')
         'SELECT * FROM daily'
     """
-    where = ' AND '.join(
+    all_cond = [cond] + [
         f'{key}={db_value(value)}'
         for key, value in kwargs.items()
-    )
-    s = f'SELECT * FROM {table}'
-    if kwargs:
+    ]
+    where = ' AND '.join(filter(bool, all_cond))
+    s = f'SELECT * FROM `{table}`'
+    if where:
         return f"""
             {s}
             WHERE
             {where}
         """
-    return s
+    else:
+        return s
 
 
 def replace_into(table: str, **kwargs) -> str:
@@ -136,11 +237,11 @@ def replace_into(table: str, **kwargs) -> str:
     Examples:
         >>> query = replace_into('daily', ticker='ES1 Index', price=3000)
         >>> query.splitlines()[1].strip()
-        'REPLACE INTO daily (ticker, price)'
+        'REPLACE INTO `daily` (ticker, price)'
         >>> query.splitlines()[2].strip()
         'VALUES ("ES1 Index", 3000)'
     """
     return f"""
-        REPLACE INTO {table} ({', '.join(list(kwargs.keys()))})
+        REPLACE INTO `{table}` ({', '.join(list(kwargs.keys()))})
         VALUES ({', '.join(map(db_value, list(kwargs.values())))})
     """
