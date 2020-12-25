@@ -29,7 +29,7 @@ class SQLite(metaclass=Singleton):
     Examples:
         >>> from xone import files
         >>>
-        >>> db_file_ = f'{files.abspath(__file__)}/tests/xone.db'
+        >>> db_file_ = f'{files.abspath(__file__, 1)}/tests/xone.db'
         >>> with SQLite(db_file_) as con_:
         ...     _ = con_.execute('DROP TABLE IF EXISTS xone')
         ...     _ = con_.execute('CREATE TABLE xone (rowid int)')
@@ -208,7 +208,7 @@ def select(table: str, cond='', **kwargs) -> str:
         >>> q3.splitlines()[-2].strip()
         'price > 3000'
         >>> select('daily')
-        'SELECT * FROM daily'
+        'SELECT * FROM `daily`'
     """
     all_cond = [cond] + [
         f'{key}={db_value(value)}'
