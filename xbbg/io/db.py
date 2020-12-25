@@ -27,7 +27,7 @@ class Singleton(type):
 class SQLite(metaclass=Singleton):
     """
     Examples:
-        >>> from xone import files
+        >>> from xbbg.io import files
         >>>
         >>> db_file_ = f'{files.abspath(__file__, 1)}/tests/xone.db'
         >>> with SQLite(db_file_) as con_:
