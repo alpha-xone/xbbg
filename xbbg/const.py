@@ -20,6 +20,13 @@ ASSET_INFO = {
     'Equity': ['exch_codes'],
 }
 
+LIVE_INFO = [
+    'MKTDATA_EVENT_TYPE', 'EVT_TRADE_DATE_RT', 'TIME',
+    'TRADE_UPDATE_STAMP_RT', 'BID_UPDATE_STAMP_RT', 'ASK_UPDATE_STAMP_RT',
+    'LAST_PRICE', 'RT_PX_CHG_PCT_1D', 'IS_DELAYED_STREAM',
+    'VOLUME', 'EQY_TURNOVER_REALTIME',
+]
+
 DVD_TPYES = {
     'all': 'DVD_Hist_All',
     'dvd': 'DVD_Hist',

@@ -267,7 +267,8 @@ def elem_value(element: conn.blpapi.Element):
         value
     """
     if element.isNull(): return None
-    value = element.getValue()
+    try: value = element.getValue()
+    except ValueError: return None
     if isinstance(value, np.bool_): return bool(value)
     if isinstance(value, conn.blpapi.name.Name): return str(value)
     return value
