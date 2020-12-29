@@ -2,6 +2,7 @@ import pandas as pd
 
 import os
 
+from typing import Union
 from ruamel.yaml import YAML
 from xbbg.io import files
 
@@ -81,7 +82,7 @@ def load_yaml(yaml_file: str) -> pd.Series:
         return data
 
 
-def to_hours(num_ts: (str, list, int, float)) -> (str, list):
+def to_hours(num_ts: Union[str, list, int, float]) -> Union[str, list]:
     """
     Convert YAML input to hours
 

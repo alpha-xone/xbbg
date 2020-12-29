@@ -6,6 +6,8 @@ import inspect
 import sys
 import datetime
 
+from typing import Union
+
 DEFAULT_TZ = pytz.FixedOffset(-time.timezone / 60)
 
 
@@ -78,7 +80,7 @@ def fmt_dt(dt, fmt='%Y-%m-%d') -> str:
     return pd.Timestamp(dt).strftime(fmt)
 
 
-def cur_time(typ='date', tz=DEFAULT_TZ) -> (datetime.date, str):
+def cur_time(typ='date', tz=DEFAULT_TZ) -> Union[datetime.date, str]:
     """
     Current time
 

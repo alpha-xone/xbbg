@@ -1,8 +1,10 @@
 import pandas as pd
 import numpy as np
 
+from typing import Union
 
-def get_series(data: (pd.Series, pd.DataFrame), col='close') -> pd.DataFrame:
+
+def get_series(data: Union[pd.Series, pd.DataFrame], col='close') -> pd.DataFrame:
     """
     Get close column from intraday data
 
@@ -59,8 +61,9 @@ def standard_cols(data: pd.DataFrame, col_maps: dict = None) -> pd.DataFrame:
 
 
 def apply_fx(
-        data: (pd.Series, pd.DataFrame),
-        fx: (int, float, pd.Series, pd.DataFrame), power=-1.
+        data: Union[pd.Series, pd.DataFrame],
+        fx: Union[int, float, pd.Series, pd.DataFrame],
+        power=-1.,
 ) -> pd.DataFrame:
     """
     Apply FX to data
@@ -116,7 +119,7 @@ def apply_fx(
     return data.mul(add_fx.iloc[:, -1].pow(power), axis=0).dropna(how='all')
 
 
-def daily_stats(data: (pd.Series, pd.DataFrame), **kwargs) -> pd.DataFrame:
+def daily_stats(data: Union[pd.Series, pd.DataFrame], **kwargs) -> pd.DataFrame:
     """
     Daily stats for given data
 
@@ -140,8 +143,9 @@ def daily_stats(data: (pd.Series, pd.DataFrame), **kwargs) -> pd.DataFrame:
 
 
 def dropna(
-        data: (pd.Series, pd.DataFrame), cols: (int, list) = 0
-) -> (pd.Series, pd.DataFrame):
+        data: Union[pd.Series, pd.DataFrame],
+        cols: Union[int, list] = 0,
+) -> Union[pd.Series, pd.DataFrame]:
     """
     Drop NAs by columns
     """
