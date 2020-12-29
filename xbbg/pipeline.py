@@ -252,7 +252,7 @@ def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
     )]
 
 
-def perf(data: pd.DataFrame) -> pd.DataFrame:
+def perf(data: Union[pd.Series, pd.DataFrame]) -> Union[pd.Series, pd.DataFrame]:
     """
     Performance rebased to 100
 
@@ -271,17 +271,14 @@ def perf(data: pd.DataFrame) -> pd.DataFrame:
         3  103.0  104.0
         4   99.0  110.0
     """
-    return pd.DataFrame(
-        pd.concat([
-            (
-                srs
-                .dropna()
-                .pct_change()
-                .fillna(0)
-                .add(1)
-                .cumprod()
-                .mul(100)
-            )
-            for _, srs in data.items()
-        ], axis=1)
-    )
+    if isinstance(data, pd.Series):
+        return (
+            data
+            .dropna()
+            .pct_change()
+            .fillna(0)
+            .add(1)
+            .cumprod()
+            .mul(100)
+        )
+    return data.apply(perf, axis=0)
