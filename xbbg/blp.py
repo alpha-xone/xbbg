@@ -570,8 +570,7 @@ async def live(
     from collections.abc import Iterable
 
     logger = logs.get_logger(live, **kwargs)
-    SUB_DATA = 'SUBSCRIPTION_DATA'
-    EVT_TYPS = conn.event_types()
+    evt_typs = conn.event_types()
 
     if isinstance(flds, str): flds = [flds]
     s_flds = [fld.upper() for fld in flds]
@@ -586,7 +585,7 @@ async def live(
             try:
                 ev = sess.tryNextEvent()
                 if ev is None: continue
-                if EVT_TYPS[ev.eventType()] != SUB_DATA: continue
+                if evt_typs[ev.eventType()] != 'SUBSCRIPTION_DATA': continue
 
                 for msg, fld in product(ev, s_flds):
                     if not msg.hasElement(fld): continue
