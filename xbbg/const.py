@@ -20,12 +20,20 @@ ASSET_INFO = {
     'Equity': ['exch_codes'],
 }
 
-LIVE_INFO = [
-    'MKTDATA_EVENT_TYPE', 'EVT_TRADE_DATE_RT', 'TIME',
-    'TRADE_UPDATE_STAMP_RT', 'BID_UPDATE_STAMP_RT', 'ASK_UPDATE_STAMP_RT',
-    'LAST_PRICE', 'RT_PX_CHG_PCT_1D', 'IS_DELAYED_STREAM',
-    'VOLUME', 'EQY_TURNOVER_REALTIME',
-]
+LIVE_INFO = {
+    # Common fields
+    'MKTDATA_EVENT_TYPE', 'MKTDATA_EVENT_SUBTYPE', 'IS_DELAYED_STREAM',
+    # Last Price
+    'LAST_PRICE', 'EVT_TRADE_DATE_RT', 'VOLUME',
+    'TRADE_UPDATE_STAMP_RT', 'RT_PX_CHG_PCT_1D', 'EQY_TURNOVER_REALTIME',
+    'REALTIME_PERCENT_BID_ASK_SPREAD',
+    # Bid
+    'BID', 'BID_UPDATE_STAMP_RT',
+    # Ask
+    'ASK', 'ASK_UPDATE_STAMP_RT',
+    # Common in bid / ask
+    'SPREAD_BA', 'MID',
+}
 
 DVD_TPYES = {
     'all': 'DVD_Hist_All',
