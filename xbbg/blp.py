@@ -557,15 +557,7 @@ async def live(
         dict: Bloomberg market data
 
     Examples:
-        >>> info_ = [
-        ...     'last_price', 'last_trade', 'rt_px_chg_pct_1d',
-        ...     'time', 'trade_update_stamp_rt',
-        ...     'bid_update_stamp_rt', 'ask_update_stamp_rt',
-        ...     'bid', 'ask', 'high', 'low',
-        ...     'volume', 'turnover_today_realtime',
-        ...     'eqy_turnover_realtime', 'is_delayed_stream',
-        ... ]
-        >>> # async for _ in live('SPY US Equity', info=info_): pass
+        >>> # async for _ in live('SPY US Equity', info=const.LIVE_INFO): pass
     """
     from collections.abc import Iterable
 
