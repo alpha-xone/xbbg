@@ -20,21 +20,6 @@ ASSET_INFO = {
     'Equity': ['exch_codes'],
 }
 
-LIVE_INFO = {
-    # Common fields
-    'MKTDATA_EVENT_TYPE', 'MKTDATA_EVENT_SUBTYPE', 'IS_DELAYED_STREAM',
-    # Last Price
-    'LAST_PRICE', 'EVT_TRADE_DATE_RT', 'VOLUME',
-    'TRADE_UPDATE_STAMP_RT', 'RT_PX_CHG_PCT_1D', 'EQY_TURNOVER_REALTIME',
-    'REALTIME_PERCENT_BID_ASK_SPREAD',
-    # Bid
-    'BID', 'BID_UPDATE_STAMP_RT',
-    # Ask
-    'ASK', 'ASK_UPDATE_STAMP_RT',
-    # Common in bid / ask
-    'SPREAD_BA', 'MID',
-}
-
 DVD_TPYES = {
     'all': 'DVD_Hist_All',
     'dvd': 'DVD_Hist',
@@ -63,6 +48,50 @@ DVD_COLS = {
     'Adjustment Factor Flag': 'adj_flag',
     'Amount Per Share': 'amt_ps',
     'Projected/Confirmed': 'category',
+}
+
+LIVE_INFO = {
+    # Common fields
+    'MKTDATA_EVENT_TYPE', 'MKTDATA_EVENT_SUBTYPE', 'IS_DELAYED_STREAM',
+    # Last Price
+    'LAST_PRICE', 'RT_PX_CHG_PCT_1D', 'REALTIME_PERCENT_BID_ASK_SPREAD',
+    'EVT_TRADE_DATE_RT', 'TRADE_UPDATE_STAMP_RT',
+    'EQY_TURNOVER_REALTIME', 'VOLUME',
+    # Bid
+    'BID', 'BID_UPDATE_STAMP_RT',
+    # Ask
+    'ASK', 'ASK_UPDATE_STAMP_RT',
+    # Common in bid / ask
+    'SPREAD_BA', 'MID',
+}
+
+LIVE_CHG = {
+    'RT_PX_CHG_PCT_1D', 'CHG_PCT_1M_RT', 'CHG_PCT_3M_RT',
+    'CHG_PCT_MTD_RT', 'CHG_PCT_QTD_RT', 'CHG_PCT_YTD_RT',
+    'REALTIME_2_DAY_CHANGE_PERCENT', 'REALTIME_5_DAY_CHANGE_PERCENT',
+    'REALTIME_15_SEC_PRICE_PCT_CHG', 'REALTIME_ONE_MIN_PRICE_PCT_CHG',
+    # Equities only
+    'REALTIME_FIVE_MIN_PRICE_PCT_CHG', 'REALTIME_15_MIN_PRICE_PCT_CHG',
+    'REALTIME_ONE_HOUR_PRICE_PCT_CHG',
+}
+
+LIVE_VOL = {
+    'REALTIME_VOLUME_5_DAY_INTERVAL',
+    # Real-time current volume as % change from N-day avg volume
+    'DELTA_AVAT_1_DAY_INTERVAL', 'DELTA_AVAT_5_DAY_INTERVAL',
+    'DELTA_AVAT_10_DAY_INTERVAL', 'DELTA_AVAT_20_DAY_INTERVAL',
+    'DELTA_AVAT_30_DAY_INTERVAL', 'DELTA_AVAT_100_DAY_INTERVAL',
+    'DELTA_AVAT_180_DAY_INTERVAL',
+    # Real-time turnover as % change from N-day average turnover
+    'DELTA_ATAT_1_DAY_INTERVAL', 'DELTA_ATAT_5_DAY_INTERVAL',
+    'DELTA_ATAT_10_DAY_INTERVAL', 'DELTA_ATAT_20_DAY_INTERVAL',
+    'DELTA_ATAT_30_DAY_INTERVAL', 'DELTA_ATAT_100_DAY_INTERVAL',
+    'DELTA_ATAT_180_DAY_INTERVAL',
+}
+
+LIVE_RATIO = {
+    'PRICE_EARNINGS_RATIO_RT', 'PRICE_TO_BOOK_RATIO_RT',
+    'PRICE_TO_SALES_RATIO_RT', 'PRICE_CASH_FLOW_RT', 'PRICE_EBITDA_RT',
 }
 
 
