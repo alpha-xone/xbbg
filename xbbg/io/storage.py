@@ -1,7 +1,6 @@
 import pandas as pd
 
 import os
-import re
 
 from xbbg import const
 from xbbg.io import files, logs
