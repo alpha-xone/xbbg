@@ -16,6 +16,7 @@ def exists(path) -> bool:
     Args:
         path: path or file
     """
+    if not path: return False
     return Path(path).is_dir() or Path(path).is_file()
 
 

@@ -1,5 +1,6 @@
 import pandas as pd
 
+from functools import partial
 from itertools import product
 from contextlib import contextmanager
 
@@ -84,13 +85,9 @@ def bds(tickers, flds, use_port=False, **kwargs) -> pd.DataFrame:
         request='PortfolioDataRequest' if use_port else 'ReferenceDataRequest',
         **kwargs,
     )
-
-    if isinstance(tickers, str):
-        return _bds_(tickers, fld=flds, logger=logger, request=request, **kwargs)
-
-    return pd.DataFrame(pd.concat([
-        bds(tickers=ticker, flds=flds, **kwargs) for ticker in tickers
-    ], sort=False))
+    part = partial(_bds_, fld=flds, logger=logger, request=request, **kwargs)
+    if isinstance(tickers, str): tickers = [tickers]
+    return pd.DataFrame(pd.concat(map(part, tickers), sort=False))
 
 
 def _bds_(
@@ -104,9 +101,7 @@ def _bds_(
     Get data of BDS of single ticker
     """
     if 'has_date' not in kwargs: kwargs['has_date'] = True
-    data_file = storage.ref_file(
-        ticker=ticker, fld=fld, ext='pkl', **kwargs
-    )
+    data_file = storage.ref_file(ticker=ticker, fld=fld, ext='pkl', **kwargs)
     if files.exists(data_file):
         logger.debug(f'Loading Bloomberg data from: {data_file}')
         return pd.DataFrame(pd.read_pickle(data_file))
