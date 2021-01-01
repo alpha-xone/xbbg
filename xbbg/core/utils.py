@@ -7,6 +7,7 @@ import sys
 import datetime
 
 from typing import Union
+from pathlib import Path
 
 DEFAULT_TZ = pytz.FixedOffset(-time.timezone / 60)
 
@@ -212,19 +213,18 @@ def load_module(full_path):
     References:
         https://stackoverflow.com/a/67692/1332656
     Examples:
-        >>> import os
+        >>> from pathlib import Path
         >>>
-        >>> cur_file = os.path.abspath(__file__).replace('\\\\', '/')
-        >>> cur_path = '/'.join(cur_file.split('/')[:-1])
-        >>> load_module(f'{cur_path}/timezone.py').__name__
+        >>> cur_path = Path(__file__).parent
+        >>> load_module(cur_path / 'timezone.py').__name__
         'timezone'
-        >>> load_module(f'{cur_path}/timezone.pyc')
+        >>> load_module(cur_path / 'timezone.pyc')
         Traceback (most recent call last):
         ImportError: not a python file: timezone.pyc
     """
     from importlib import util
 
-    file_name = full_path.replace('\\', '/').split('/')[-1]
+    file_name = Path(full_path).name
     if file_name[-3:] != '.py':
         raise ImportError(f'not a python file: {file_name}')
     module_name = file_name[:-3]

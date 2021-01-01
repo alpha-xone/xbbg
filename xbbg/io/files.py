@@ -2,8 +2,9 @@ import pandas as pd
 
 import os
 import re
-import glob
 import time
+
+from pathlib import Path
 
 DATE_FMT = r'\d{4}-(0?[1-9]|1[012])-(0?[1-9]|[12][0-9]|3[01])'
 
@@ -15,10 +16,10 @@ def exists(path) -> bool:
     Args:
         path: path or file
     """
-    return os.path.exists(path=path)
+    return Path(path).is_dir() or Path(path).is_file()
 
 
-def abspath(cur_file, parent=0) -> str:
+def abspath(cur_file, parent=0) -> Path:
     """
     Absolute path
 
@@ -29,10 +30,10 @@ def abspath(cur_file, parent=0) -> str:
     Returns:
         str
     """
-    file_path = os.path.abspath(cur_file).replace('\\', '/')
-    if os.path.isdir(file_path) and parent == 0: return file_path
-    adj = 1 - os.path.isdir(file_path)
-    return '/'.join(file_path.split('/')[:-(parent + adj)])
+    p = Path(cur_file)
+    cur_path = p.parent if p.is_file() else p
+    if parent == 0: return cur_path
+    return abspath(cur_file=cur_path.parent, parent=parent - 1)
 
 
 def create_folder(path_name: str, is_file=False):
@@ -43,11 +44,8 @@ def create_folder(path_name: str, is_file=False):
         path_name: full path name
         is_file: whether input is name of file
     """
-    path_sep = path_name.replace('\\', '/').split('/')
-    for i in range(1, len(path_sep) + (0 if is_file else 1)):
-        cur_path = '/'.join(path_sep[:i])
-        if not cur_path: continue
-        if not os.path.exists(cur_path): os.mkdir(cur_path)
+    p = Path(path_name).parent if is_file else Path(path_name)
+    p.mkdir(parents=True, exist_ok=True)
 
 
 def all_files(
@@ -69,27 +67,15 @@ def all_files(
     Returns:
         list: all file names with criteria fulfilled
     """
-    if not os.path.exists(path=path_name): return []
-    path_name = path_name.replace('\\', '/')
+    p = Path(path_name)
+    if not p.is_dir(): return []
 
-    if keyword or ext:
-        keyword = f'*{keyword}*' if keyword else '*'
-        if not ext: ext = '*'
-        files = sort_by_modified([
-            f.replace('\\', '/') for f in glob.iglob(f'{path_name}/{keyword}.{ext}')
-            if os.path.isfile(f) and (f.replace('\\', '/').split('/')[-1][0] != '~')
-        ])
+    keyword = f'*{keyword}*' if keyword else '*'
+    keyword += f'.{ext}' if ext else '.*'
+    files = list(p.glob(f'[!~]{keyword}'))
 
-    else:
-        files = sort_by_modified([
-            f'{path_name}/{f}' for f in os.listdir(path=path_name)
-            if os.path.isfile(f'{path_name}/{f}') and (f[0] != '~')
-        ])
-
-    if has_date:
-        files = filter_by_dates(files, date_fmt=date_fmt)
-
-    return files if full_path else [f.split('/')[-1] for f in files]
+    if has_date: files = filter_by_dates(files, date_fmt=date_fmt)
+    return files if full_path else [f.name for f in files]
 
 
 def all_folders(
@@ -108,24 +94,13 @@ def all_folders(
     Returns:
         list: all folder names fulfilled criteria
     """
-    if not os.path.exists(path=path_name): return []
-    path_name = path_name.replace('\\', '/')
+    p = Path(path_name)
+    if not p.is_dir(): return []
 
-    if keyword:
-        folders = sort_by_modified([
-            f.replace('\\', '/') for f in glob.iglob(f'{path_name}/*{keyword}*')
-            if os.path.isdir(f) and (f.replace('\\', '/').split('/')[-1][0] != '~')
-        ])
+    keyword = f'*{keyword}*' if keyword else '*'
+    folders = list(filter(lambda v: v.is_dir(), p.glob(f'[!~]{keyword}')))
 
-    else:
-        folders = sort_by_modified([
-            f'{path_name}/{f}' for f in os.listdir(path=path_name)
-            if os.path.isdir(f'{path_name}/{f}') and (f[0] != '~')
-        ])
-
-    if has_date:
-        folders = filter_by_dates(folders, date_fmt=date_fmt)
-
+    if has_date: folders = filter_by_dates(folders, date_fmt=date_fmt)
     return folders
 
 
@@ -155,7 +130,7 @@ def filter_by_dates(files_or_folders: list, date_fmt=DATE_FMT) -> list:
     """
     r = re.compile(f'.*{date_fmt}.*')
     return list(filter(
-        lambda vv: r.match(vv.replace('\\', '/').split('/')[-1]) is not None,
+        lambda v: r.match(Path(v).name) is not None,
         files_or_folders,
     ))
 
@@ -172,21 +147,18 @@ def latest_file(path_name, keyword='', ext='', **kwargs) -> str:
     Returns:
         str: latest file name
     """
-    files = all_files(
-        path_name=path_name, keyword=keyword, ext=ext, full_path=True
+    files = sort_by_modified(
+        all_files(path_name=path_name, keyword=keyword, ext=ext, full_path=True)
     )
 
     if not files:
         from xbbg.io import logs
 
         logger = logs.get_logger(latest_file, level=kwargs.pop('log', 'warning'))
-        logger.debug(f'file is not found in folder: {path_name}')
+        logger.debug(f'no file in folder: {path_name}')
         return ''
 
-    mod_time = [os.path.getmtime(f) for f in files]
-    files = [f for (dt, f) in sorted(zip(mod_time, files))]
-
-    return files[-1]
+    return str(files[0]).replace('\\', '/')
 
 
 def modified_time(file_name):

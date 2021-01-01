@@ -125,13 +125,13 @@ def ref_file(
         missing = f'{root}/asof={cur_dt}, {info}.{ext}'
         to_find = re.compile(rf'{root}/asof=(.*), {info}\.pkl')
         cur_files = list(filter(to_find.match, sorted(
-            files.all_files(path_name=root, keyword=info, ext=ext)
+            files.all_files(path_name=root, keyword=info, ext=ext, full_path=False)
         )))
         if len(cur_files) > 0:
             upd_dt = to_find.match(cur_files[-1]).group(1)
             diff = pd.Timestamp('today') - pd.Timestamp(upd_dt)
             if diff >= pd.Timedelta(days=cache_days): return missing
-            return sorted(cur_files)[-1]
+            return str(sorted(cur_files)[-1])
         return missing
 
     return f'{root}/{info}.{ext}'
