@@ -121,18 +121,13 @@ def ref_file(
 
     # Check date info
     if has_date:
+        cache_file = f'{root}/asof=[cur_date], {info}.{ext}'
         cur_dt = utils.cur_time()
-        missing = f'{root}/asof={cur_dt}, {info}.{ext}'
-        to_find = re.compile(rf'{root}/asof=(.*), {info}\.pkl')
-        cur_files = list(filter(to_find.match, sorted(
-            files.all_files(path_name=root, keyword=info, ext=ext, full_path=False)
-        )))
-        if len(cur_files) > 0:
-            upd_dt = to_find.match(cur_files[-1]).group(1)
-            diff = pd.Timestamp('today') - pd.Timestamp(upd_dt)
-            if diff >= pd.Timedelta(days=cache_days): return missing
-            return str(sorted(cur_files)[-1])
-        return missing
+        start_dt = pd.date_range(end=cur_dt, freq=f'{cache_days}D', periods=2)[0]
+        for dt in pd.date_range(start=start_dt, end=cur_dt, normalize=True)[1:][::-1]:
+            cur_file = cache_file.replace('[cur_date]', dt.strftime("%Y-%m-%d"))
+            if files.exists(cur_file): return cur_file
+        return cache_file.replace('[cur_date]', cur_dt)
 
     return f'{root}/{info}.{ext}'
 

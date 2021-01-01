@@ -568,7 +568,7 @@ async def live(
     while sess.tryNextEvent(): pass
     with subscribe(tickers=tickers, flds=s_flds, **kwargs):
         cnt = 0
-        while True and cnt <= max_cnt:
+        while True and cnt <= max_cnt - 1:
             try:
                 ev = sess.tryNextEvent()
                 if ev is None: continue
