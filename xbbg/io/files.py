@@ -73,7 +73,7 @@ def all_files(
 
     keyword = f'*{keyword}*' if keyword else '*'
     keyword += f'.{ext}' if ext else '.*'
-    files = list(p.glob(f'[!~]{keyword}'))
+    files = list(filter(lambda v: v.name[0] != '~', p.glob(keyword)))
 
     if has_date: files = filter_by_dates(files, date_fmt=date_fmt)
     return files if full_path else [f.name for f in files]
@@ -98,8 +98,10 @@ def all_folders(
     p = Path(path_name)
     if not p.is_dir(): return []
 
-    keyword = f'*{keyword}*' if keyword else '*'
-    folders = list(filter(lambda v: v.is_dir(), p.glob(f'[!~]{keyword}')))
+    folders = list(filter(
+        lambda v: v.is_dir() and v.name[0] != '~',
+        p.glob(f'*{keyword}*' if keyword else '*'),
+    ))
 
     if has_date: folders = filter_by_dates(folders, date_fmt=date_fmt)
     return folders
