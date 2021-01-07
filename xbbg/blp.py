@@ -537,7 +537,7 @@ def subscribe(tickers, flds=None, identity=None, **kwargs):
 
 
 async def live(
-        tickers, flds='Last_Price', info=None, max_cnt=0, **kwargs
+        tickers, flds=None, info=None, max_cnt=0, **kwargs
 ):
     """
     Subscribe and getting data feeds from
@@ -559,16 +559,21 @@ async def live(
     logger = logs.get_logger(live, **kwargs)
     evt_typs = conn.event_types()
 
-    if isinstance(flds, str): flds = [flds]
-    s_flds = [fld.upper() for fld in flds]
+    if flds is None:
+        s_flds = ['LAST_PRICE', 'BID', 'ASK']
+    else:
+        if isinstance(flds, str): flds = [flds]
+        s_flds = [fld.upper() for fld in flds]
+
     if isinstance(info, str): info = [info]
     if isinstance(info, Iterable): info = [key.upper() for key in info]
+    if info is None: info = const.LIVE_INFO
 
     sess = conn.bbg_session(**kwargs)
     while sess.tryNextEvent(): pass
     with subscribe(tickers=tickers, flds=s_flds, **kwargs):
         cnt = 0
-        while True and cnt <= max_cnt - 1:
+        while True and cnt <= max_cnt:
             try:
                 ev = sess.tryNextEvent()
                 if ev is None: continue
