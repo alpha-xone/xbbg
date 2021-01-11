@@ -250,7 +250,9 @@ def market_info(ticker: str) -> pd.Series:
     #           Currency / Commodity / Index           #
     # ================================================ #
 
-    if t_info[0][-1].isdigit():
+    if t_info[0] in a_info.tickers.values:
+        symbol = t_info[0]
+    elif t_info[0][-1].isdigit():
         end_idx = 2 if t_info[-2].isdigit() else 1
         symbol = t_info[0][:-end_idx].strip()
         # Special contracts
