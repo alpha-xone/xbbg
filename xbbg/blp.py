@@ -20,6 +20,8 @@ __all__ = [
     'beqs',
     'live',
     'subscribe',
+    'adjust_ccy',
+    'turnover',
 ]
 
 
