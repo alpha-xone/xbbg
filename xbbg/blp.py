@@ -717,7 +717,7 @@ def adjust_ccy(data: pd.DataFrame, ccy: str = 'USD') -> pd.DataFrame:
         adj = (
             uccy.crncy
             .map(lambda v: {
-                'ccy': None if v == 'USD' else f'USD{v.upper()} Curncy',
+                'ccy': None if v.upper() == ccy else f'{ccy}{v.upper()} Curncy',
                 'factor': .01 if v[-1].islower() else 1.,
             })
             .apply(pd.Series)
