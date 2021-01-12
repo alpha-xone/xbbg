@@ -695,52 +695,24 @@ def fut_ticker(gen_ticker: str, dt, freq: str, **kwargs) -> str:
     return sub_fut.index.values[idx]
 
 
-def turnover(
-        tickers,
-        flds='Turnover',
-        start_date=None,
-        end_date=None,
-        ccy: str = 'USD',
-        factor: float = 1e6,
-) -> pd.DataFrame:
+def adjust_ccy(data: pd.DataFrame, ccy: str = 'USD') -> pd.DataFrame:
     """
-    Currency adjusted turnover (in million)
+    Adjust
 
     Args:
-        tickers: ticker or list of tickers
-        start_date: start date, default 1 month prior to `end_date`
-        end_date: end date, default T - 1
-        ccy: currency - 'USD' (default), any currency, or 'local' (no adjustment)
-        factor: adjustment factor, default 1e6 - return values in millions
+        data: daily price / turnover / etc. to adjust
+        ccy: currency to adjust to
 
     Returns:
         pd.DataFrame
     """
-    if end_date is None:
-        end_date = pd.bdate_range(end='today', periods=2)[0]
-    if start_date is None:
-        start_date = pd.bdate_range(end=end_date, periods=2, freq='M')[0]
-    if isinstance(tickers, str): tickers = [tickers]
+    if data.empty: return pd.DataFrame()
+    if ccy.lower() == 'local': return data
+    tickers = data.columns.get_level_values(level=0).unique()
+    start_date = data.index[0]
+    end_date = data.index[-1]
 
-    data = bdh(tickers=tickers, flds=flds, start_date=start_date, end_date=end_date)
-    cols = data.columns.get_level_values(level=0).unique()
-
-    # If turnover is not available, use volume and price for calculation
-    use_volume = pd.DataFrame()
-    if isinstance(flds, str) and (flds.lower() == 'turnover'):
-        vol_tcks = [t for t in tickers if t not in cols]
-        if vol_tcks:
-            use_volume = turnover(
-                tickers=vol_tcks,
-                flds=['eqy_weighted_avg_px', 'volume'],
-                start_date=start_date,
-                end_date=end_date,
-                ccy=ccy,
-            )
-
-    if data.empty and use_volume.empty: return pd.DataFrame()
-
-    uccy = bdp(tickers=tickers, flds='crncy') if ccy.lower() != 'local' else pd.DataFrame()
+    uccy = bdp(tickers=tickers, flds='crncy')
     if not uccy.empty:
         adj = (
             uccy.crncy
@@ -760,25 +732,69 @@ def turnover(
         )
     else: fx = pd.DataFrame()
 
-    if not data.empty:
-        tover = (
-            pd.concat([
-                pd.Series(
-                    (
-                        data[t]
-                        .dropna()
-                        .prod(axis=1)
-                        .div(
-                            (fx[adj.loc[t, 'ccy']] * adj.loc[t, 'factor'])
-                            if t in adj.index else 1.,
-                        )
-                        .div(factor)
-                    ),
-                    name=t,
-                )
-                for t in cols
-            ], axis=1)
-        )
-    else: tover = pd.DataFrame()
+    return (
+        pd.concat([
+            pd.Series(
+                (
+                    data[t]
+                    .dropna()
+                    .prod(axis=1)
+                    .div(
+                        (fx[adj.loc[t, 'ccy']] * adj.loc[t, 'factor'])
+                        if t in adj.index else 1.,
+                    )
+                ),
+                name=t,
+            )
+            for t in tickers
+        ], axis=1)
+    )
 
-    return pd.concat([tover, use_volume], axis=1)
+
+def turnover(
+        tickers,
+        flds='Turnover',
+        start_date=None,
+        end_date=None,
+        ccy: str = 'USD',
+        factor: float = 1e6,
+) -> pd.DataFrame:
+    """
+    Currency adjusted turnover (in million)
+
+    Args:
+        tickers: ticker or list of tickers
+        flds: override `flds`,
+        start_date: start date, default 1 month prior to `end_date`
+        end_date: end date, default T - 1
+        ccy: currency - 'USD' (default), any currency, or 'local' (no adjustment)
+        factor: adjustment factor, default 1e6 - return values in millions
+
+    Returns:
+        pd.DataFrame
+    """
+    if end_date is None:
+        end_date = pd.bdate_range(end='today', periods=2)[0]
+    if start_date is None:
+        start_date = pd.bdate_range(end=end_date, periods=2, freq='M')[0]
+    if isinstance(tickers, str): tickers = [tickers]
+
+    data = bdh(tickers=tickers, flds=flds, start_date=start_date, end_date=end_date)
+    cols = data.columns.get_level_values(level=0).unique()
+
+    # If turnover is not available, use volume and vwap for calculation
+    use_volume = pd.DataFrame()
+    if isinstance(flds, str) and (flds.lower() == 'turnover'):
+        vol_tcks = [t for t in tickers if t not in cols]
+        if vol_tcks:
+            use_volume = turnover(
+                tickers=vol_tcks,
+                flds=['eqy_weighted_avg_px', 'volume'],
+                start_date=start_date,
+                end_date=end_date,
+                ccy=ccy,
+                factor=factor,
+            )
+
+    if data.empty and use_volume.empty: return pd.DataFrame()
+    return pd.concat([adjust_ccy(data=data, ccy=ccy).div(factor), use_volume], axis=1)
