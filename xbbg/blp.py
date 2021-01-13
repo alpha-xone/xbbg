@@ -720,7 +720,7 @@ def adjust_ccy(data: pd.DataFrame, ccy: str = 'USD') -> pd.DataFrame:
             uccy.crncy
             .map(lambda v: {
                 'ccy': None if v.upper() == ccy else f'{ccy}{v.upper()} Curncy',
-                'factor': .01 if v[-1].islower() else 1.,
+                'factor': 100. if v[-1].islower() else 1.,
             })
             .apply(pd.Series)
             .dropna(subset=['ccy'])
