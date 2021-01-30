@@ -375,7 +375,7 @@ def ccy_pair(local, base='USD') -> CurrencyPair:
             info['factor'] *= 100.
 
     else:
-        logger = logs.get_logger(ccy_pair)
+        logger = logs.get_logger(ccy_pair, level='debug')
         logger.error(f'incorrect currency - local {local} / base {base}')
         return CurrencyPair(ticker='', factor=1., power=1.0)
 
@@ -413,7 +413,7 @@ def market_timing(ticker, dt, timing='EOD', tz='local', **kwargs) -> str:
         >>> market_timing('TESTTICKER Corp', dt='2018-09-10')
         ''
     """
-    logger = logs.get_logger(market_timing)
+    logger = logs.get_logger(market_timing, level='debug')
     exch = pd.Series(exch_info(ticker=ticker, **kwargs))
     if any(req not in exch.index for req in ['tz', 'allday', 'day']):
         logger.error(f'required exchange info cannot be found in {ticker} ...')

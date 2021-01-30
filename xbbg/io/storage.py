@@ -154,7 +154,7 @@ def save_intraday(data: pd.DataFrame, ticker: str, dt, typ='TRADE', **kwargs):
         >>> save_intraday(sample, 'AAPL US Equity', cur_dt_)
     """
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
-    logger = logs.get_logger(save_intraday, level='debug')
+    logger = logs.get_logger(save_intraday, **kwargs)
     info = f'{ticker} / {cur_dt} / {typ}'
     data_file = bar_file(ticker=ticker, dt=dt, typ=typ)
     if not data_file: return

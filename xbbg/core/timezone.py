@@ -65,7 +65,7 @@ def tz_convert(dt, to_tz, from_tz=None) -> str:
         >>> tz_convert(dt_3, to_tz='NY', from_tz='JP')
         '2018-09-10 02:00:00-04:00'
     """
-    logger = logs.get_logger(tz_convert, level='info')
+    logger = logs.get_logger(tz_convert, level='debug')
     f_tz, t_tz = get_tz(from_tz), get_tz(to_tz)
 
     from_dt = pd.Timestamp(str(dt), tz=f_tz)
