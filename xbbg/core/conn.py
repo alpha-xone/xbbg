@@ -30,10 +30,15 @@ def connect_bbg(**kwargs) -> blpapi.session.Session:
     """
     logger = logs.get_logger(connect_bbg, **kwargs)
 
-    sess_opts = blpapi.SessionOptions()
-    sess_opts.setServerHost('localhost')
-    sess_opts.setServerPort(kwargs.get('port', _PORT_))
-    session = blpapi.Session(sess_opts)
+    if isinstance(kwargs.get('sess', None), blpapi.session.Session):
+        session = kwargs['sess']
+        logger.debug(f'Using Bloomberg session {session} ...')
+    else:
+        sess_opts = blpapi.SessionOptions()
+        sess_opts.setServerHost('localhost')
+        sess_opts.setServerPort(kwargs.get('port', _PORT_))
+        session = blpapi.Session(sess_opts)
+
     logger.debug('Connecting to Bloomberg ...')
     if session.start(): return session
     else: raise ConnectionError('Cannot connect to Bloomberg')

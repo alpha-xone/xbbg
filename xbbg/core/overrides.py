@@ -4,7 +4,7 @@ BBG_ROOT = 'BBG_ROOT'
 
 PRSV_COLS = [
     'raw', 'has_date', 'cache', 'cache_days', 'col_maps',
-    'keep_one', 'price_only', 'port', 'log', 'timeout',
+    'keep_one', 'price_only', 'port', 'log', 'timeout', 'sess',
 ]
 
 ELEMENTS = [
