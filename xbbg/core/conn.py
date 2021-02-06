@@ -32,11 +32,11 @@ def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
     referecing to blpapi example for full lists of available authentication methods:
         https://github.com/msitt/blpapi-python/blob/master/examples/ConnectionAndAuthExample.py
     """
-    
+
     if isinstance(kwargs.get('sess', None), blpapi.session.Session):
         bbg_session(sess=kwargs['sess'])
         return
-    
+
     sess_opts = blpapi.SessionOptions()
     sess_opts.setNumStartAttempts(numStartAttempts=max_attempt)
     sess_opts.setAutoRestartOnDisconnection(autoRestart=auto_restart)
@@ -44,7 +44,7 @@ def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
     if isinstance(kwargs.get('auth_method', None), str):
         auth_method = kwargs['auth_method']
         auth = None
-        
+
         if auth_method == 'user':
             user = blpapi.AuthUser.createWithLogonName()
             auth = blpapi.AuthOptions.createWithUser(user=user)
@@ -61,7 +61,7 @@ def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
             auth = blpapi.AuthOptions.createWithUserAndApp(user=user, appName=kwargs['app_name'])
         else:
             raise ValueError('Received invalid value for auth_method. auth_method must be one of followings: user, app, userapp, dir, manual')
-        
+
         sess_opts.setSessionIdentityOptions(authOptions=auth)
         
     if isinstance(kwargs.get('server_host', None), str):
@@ -69,7 +69,7 @@ def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
 
     if isinstance(kwargs.get('server_port', None), str):
         sess_opts.setServerPort(serverPort=kwargs['server_post'])
-        
+
     if isinstance(kwargs.get('tls_options', None), blpapi.sessionoptions.TlsOptions):
         sess_opts.setTlsOptions(tlsOptions=kwargs['tlsOptions'])
 
