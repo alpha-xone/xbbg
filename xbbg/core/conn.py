@@ -24,6 +24,59 @@ _CON_SYM_ = '_xcon_'
 _PORT_ = 8194
 
 
+def alt_connect(max_attempt = 3, auto_restart = True, **kwargs):
+    """
+    Use alternative method to connect to blpapi. If a session object is passed, arguments
+    max_attempt and auto_restart will be ignored.
+    
+    referecing to blpapi example for full lists of available authentication methods:
+        https://github.com/msitt/blpapi-python/blob/master/examples/ConnectionAndAuthExample.py
+    """
+    
+    if isinstance(kwargs.get('sess', None), blpapi.session.Session):
+        bbg_session(sess = session)
+        return
+    
+    sess_opts = blpapi.SessionOptions()
+    sess_opts.setNumStartAttempts(numStartAttempts = max_attempt)
+    sess_opts.setAutoRestartOnDisconnection(autoRestart = auto_restart)
+
+    if isinstance(kwargs.get('auth_method', None), str):
+        auth_method = kwargs['auth_method']
+        auth = None
+        
+        if auth_method == 'user':
+            user = blpapi.AuthUser.createWithLogonName()
+            auth = blpapi.AuthOptions.createWithUser(user = user)
+        elif auth_method == 'app':
+            auth = blpapi.AuthOptions.createWithApp(appName = kwargs['app_name'])
+        elif auth_method == 'userapp':
+            user = blpapi.createWithLogonName()
+            auth = blpapi.AuthOptions.createWithUserAndApp(user = user, appName = kwargs['app_name'])
+        elif auth_method == 'dir':
+            user = blpapi.AuthUser.createWithActiveDirectoryProperty(propertyName= kwargs['dir_property'])
+            auth = blpapi.AuthOptions.createWithUser(user = user)
+        elif auth_method == 'manual':
+            user = blpapi.AuthUser.createWithManualOptions(userId= kwargs['user_id'], ipAddress=kwargs['ip_address'])
+            auth = blpapi.AuthOptions.createWithUserAndApp(user = user, appName = kwargs['app_name'])
+        else:
+            raise ValueError('Received invalid value for auth_method. auth_method must be one of followings: user, app, userapp, dir, manual')
+        
+        sess_opts.setSessionIdentityOptions(authOptions = auth)
+        
+    if isinstance(kwargs.get('server_host', None), str):
+        sess_opts.setServerHost(serverHost = kwargs['server_host'])
+
+    if isinstance(kwargs.get('server_port', None), str):
+        sess_opts.setServerPort(serverPort = kwargs['server_post'])
+        
+    if isinstance(kwargs.get('tls_options', None), blpapi.sessionoptions.TlsOptions):
+        sess_opts.setTlsOptions(tlsOptions = kwargs['tlsOptions'])
+
+    session = blpapi.Session(sess_opts)
+    bbg_session(sess = session)
+
+
 def connect_bbg(**kwargs) -> blpapi.session.Session:
     """
     Create Bloomberg session and make connection
