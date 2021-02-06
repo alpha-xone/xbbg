@@ -63,7 +63,7 @@ def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
             raise ValueError('Received invalid value for auth_method. auth_method must be one of followings: user, app, userapp, dir, manual')
 
         sess_opts.setSessionIdentityOptions(authOptions=auth)
-        
+
     if isinstance(kwargs.get('server_host', None), str):
         sess_opts.setServerHost(serverHost=kwargs['server_host'])
 
