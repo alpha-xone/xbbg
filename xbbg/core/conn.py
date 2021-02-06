@@ -28,7 +28,7 @@ def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
     """
     Use alternative method to connect to blpapi. If a session object is passed, arguments
     max_attempt and auto_restart will be ignored.
-    
+
     referecing to blpapi example for full lists of available authentication methods:
         https://github.com/msitt/blpapi-python/blob/master/examples/ConnectionAndAuthExample.py
     """
