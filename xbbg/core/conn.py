@@ -24,7 +24,7 @@ _CON_SYM_ = '_xcon_'
 _PORT_ = 8194
 
 
-def alt_connect(max_attempt = 3, auto_restart = True, **kwargs):
+def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
     """
     Use alternative method to connect to blpapi. If a session object is passed, arguments
     max_attempt and auto_restart will be ignored.
