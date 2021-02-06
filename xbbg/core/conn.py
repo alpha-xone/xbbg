@@ -34,7 +34,7 @@ def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
     """
     
     if isinstance(kwargs.get('sess', None), blpapi.session.Session):
-        bbg_session(sess=session)
+        bbg_session(sess=kwargs['sess'])
         return
     
     sess_opts = blpapi.SessionOptions()
