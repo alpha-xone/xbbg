@@ -24,7 +24,7 @@ _CON_SYM_ = '_xcon_'
 _PORT_ = 8194
 
 
-def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
+def connect(max_attempt=3, auto_restart=True, **kwargs) -> blpapi.session.Session:
     """
     Use alternative method to connect to blpapi. If a session object is passed, arguments
     max_attempt and auto_restart will be ignored.
@@ -32,10 +32,8 @@ def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
     referecing to blpapi example for full lists of available authentication methods:
         https://github.com/msitt/blpapi-python/blob/master/examples/ConnectionAndAuthExample.py
     """
-
     if isinstance(kwargs.get('sess', None), blpapi.session.Session):
-        bbg_session(sess=kwargs['sess'])
-        return
+        return bbg_session(sess=kwargs['sess'])
 
     sess_opts = blpapi.SessionOptions()
     sess_opts.setNumStartAttempts(numStartAttempts=max_attempt)
@@ -60,7 +58,10 @@ def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
             user = blpapi.AuthUser.createWithManualOptions(userId=kwargs['user_id'], ipAddress=kwargs['ip_address'])
             auth = blpapi.AuthOptions.createWithUserAndApp(user=user, appName=kwargs['app_name'])
         else:
-            raise ValueError('Received invalid value for auth_method. auth_method must be one of followings: user, app, userapp, dir, manual')
+            raise ValueError(
+                'Received invalid value for auth_method. '
+                'auth_method must be one of followings: user, app, userapp, dir, manual'
+            )
 
         sess_opts.setSessionIdentityOptions(authOptions=auth)
 
@@ -73,8 +74,7 @@ def alt_connect(max_attempt=3, auto_restart=True, **kwargs):
     if isinstance(kwargs.get('tls_options', None), blpapi.sessionoptions.TlsOptions):
         sess_opts.setTlsOptions(tlsOptions=kwargs['tlsOptions'])
 
-    session = blpapi.Session(sess_opts)
-    bbg_session(sess=session)
+    return bbg_session(sess=blpapi.Session(sess_opts))
 
 
 def connect_bbg(**kwargs) -> blpapi.session.Session:

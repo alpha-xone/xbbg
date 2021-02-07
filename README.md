@@ -27,7 +27,7 @@ Below are main features. Jupyter notebook examples can be found [here](https://c
 
     - Downlaod C++ Experimental Release (for latest python API version `3.14.0`, this can only be downloaded thru `WAPI<GO>` in terminal).
 
-    - Copy `blpapi3_32.dll` and `blpapi3_64.dll` under `bin` 
+    - Copy `blpapi3_32.dll` and `blpapi3_64.dll` under `bin`
       folder to Bloomberg `BLPAPI_ROOT` folder, normally `blp/DAPI`
 
 - Bloomberg Open API (need to install manually as shown below)
@@ -42,6 +42,8 @@ pip install xbbg
 ```
 
 ## What's New
+
+_0.7.6a2_ - Use `blp.connect` for alternative Bloomberg connection (author `anxl2008`)
 
 _0.7.2_ - Use `async` for live data feeds
 
@@ -88,7 +90,7 @@ In [3]: blp.bdp('AAPL US Equity', 'Eqy_Weighted_Avg_Px', VWAP_Dt='20181224')
 ```
 
 ```pydocstring
-Out[3]: 
+Out[3]:
                 eqy_weighted_avg_px
 AAPL US Equity               148.75
 ```
@@ -146,7 +148,7 @@ In [6]: blp.bdh(
 ```
 
 ```pydocstring
-Out[6]: 
+Out[6]:
            AAPL US Equity
                   px_last
 2014-06-05         647.35
@@ -206,7 +208,7 @@ Out[9]:
 
 Above example works because 1) `AU` in equity ticker is mapped to `EquityAustralia` in
 `markets/assets.yml`, and 2) `EquityAustralia` is defined in `markets/exch.yml`.
-To add new mappings, define `BBG_ROOT` in sys path and add `assets.yml` and 
+To add new mappings, define `BBG_ROOT` in sys path and add `assets.yml` and
 `exch.yml` under `BBG_ROOT/markets`.
 
 *New in 0.6.6* - if exchange is defined in `/xbbg/markets/exch.yml`, can use `ref` to look for
@@ -316,11 +318,11 @@ By default, local storage is preferred than Bloomberg for all queries.
 Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 (full description in `DAPI<GO>`):
 
-> To access Bloomberg data via the API (and use that data in Microsoft Excel), 
-> your company must sign the 'Datafeed Addendum' to the Bloomberg Agreement. 
-> This legally binding contract describes the terms and conditions of your use 
-> of the data and information available via the API (the "Data"). 
-> The most fundamental requirement regarding your use of Data is that it cannot 
+> To access Bloomberg data via the API (and use that data in Microsoft Excel),
+> your company must sign the 'Datafeed Addendum' to the Bloomberg Agreement.
+> This legally binding contract describes the terms and conditions of your use
+> of the data and information available via the API (the "Data").
+> The most fundamental requirement regarding your use of Data is that it cannot
 > leave the local PC you use to access the BLOOMBERG PROFESSIONAL service.
 
 |                |                                                                                                                                                                                  |

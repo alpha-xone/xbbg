@@ -7,9 +7,11 @@ from contextlib import contextmanager
 from xbbg import __version__, const, pipeline
 from xbbg.io import logs, files, storage
 from xbbg.core import utils, conn, process
+from xbbg.core.conn import connect
 
 __all__ = [
     '__version__',
+    'connect',
     'bdp',
     'bds',
     'bdh',
