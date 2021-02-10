@@ -84,12 +84,7 @@ def bds(tickers, flds, use_port=False, **kwargs) -> pd.DataFrame:
     """
     logger = logs.get_logger(bds, **kwargs)
 
-    request = process.create_request(
-        service='//blp/refdata',
-        request='PortfolioDataRequest' if use_port else 'ReferenceDataRequest',
-        **kwargs,
-    )
-    part = partial(_bds_, fld=flds, logger=logger, request=request, **kwargs)
+    part = partial(_bds_, fld=flds, logger=logger, use_port=use_port, **kwargs)
     if isinstance(tickers, str): tickers = [tickers]
     return pd.DataFrame(pd.concat(map(part, tickers), sort=False))
 
@@ -98,8 +93,8 @@ def _bds_(
         ticker: str,
         fld: str,
         logger: logs.logging.Logger,
-        request: conn.blpapi.request.Request,
-        **kwargs
+        use_port: bool = False,
+        **kwargs,
 ) -> pd.DataFrame:
     """
     Get data of BDS of single ticker
@@ -110,6 +105,11 @@ def _bds_(
         logger.debug(f'Loading Bloomberg data from: {data_file}')
         return pd.DataFrame(pd.read_pickle(data_file))
 
+    request = process.create_request(
+        service='//blp/refdata',
+        request='PortfolioDataRequest' if use_port else 'ReferenceDataRequest',
+        **kwargs,
+    )
     process.init_request(request=request, tickers=ticker, flds=fld, **kwargs)
     logger.debug(f'Sending request to Bloomberg ...\n{request}')
     conn.send_request(request=request, **kwargs)
