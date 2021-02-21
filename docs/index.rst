@@ -42,7 +42,7 @@ Installation
 
 .. code-block:: console
 
-   pip install blpapi --index-url=https://bloomberg.bintray.com/pip/simple
+   pip install blpapi --index-url=https://bcms.bloomberg.com/pip/simple/
    pip install xbbg
 
 What's New

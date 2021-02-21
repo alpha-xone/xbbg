@@ -37,7 +37,7 @@ Below are main features. Jupyter notebook examples can be found [here](https://c
 ## Installation
 
 ```cmd
-pip install blpapi --index-url=https://bloomberg.bintray.com/pip/simple
+pip install blpapi --index-url=https://bcms.bloomberg.com/pip/simple/
 pip install xbbg
 ```
 
