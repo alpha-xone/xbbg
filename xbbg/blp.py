@@ -192,9 +192,7 @@ def bdh(
     )
 
 
-def bdib(
-        ticker: str, dt, session='allday', typ='TRADE', **kwargs
-) -> pd.DataFrame:
+def bdib(ticker: str, dt, session='allday', typ='TRADE', **kwargs) -> pd.DataFrame:
     """
     Bloomberg intraday bar data
 
@@ -294,7 +292,7 @@ def bdib(
     return data.loc[ss_rng[0]:ss_rng[1]]
 
 
-def bdtick(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
+def bdtick(ticker, dt=None, session='allday', time_range=None, types=None, **kwargs) -> pd.DataFrame:
     """
     Bloomberg tick data
 
@@ -302,6 +300,8 @@ def bdtick(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
         ticker: ticker name
         dt: date to download
         session: [allday, day, am, pm, pre, post]
+        time_range: tuple of start and end time (must be converted into UTC)
+                    if this is given, `dt` and `session` will be ignored
         types: str or list, one or combinations of [
             TRADE, AT_TRADE, BID, ASK, MID_PRICE,
             BID_BEST, ASK_BEST, BEST_BID, BEST_ASK,
@@ -312,11 +312,12 @@ def bdtick(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
     """
     logger = logs.get_logger(bdtick, **kwargs)
 
-    exch = const.exch_info(ticker=ticker, **kwargs)
-    time_rng = process.time_range(
-        dt=dt, ticker=ticker, session=session, tz=exch.tz, **kwargs
-    )
     if types is None: types = ['TRADE']
+    exch = const.exch_info(ticker=ticker, **kwargs)
+    if isinstance(time_range, (tuple, list)) and (len(time_range) == 2):
+        time_rng = process.intervals.Session(time_range[0], time_range[1])
+    else:
+        time_rng = process.time_range(dt=dt, ticker=ticker, session=session, **kwargs)
 
     while conn.bbg_session(**kwargs).tryNextEvent(): pass
     request = process.create_request(
@@ -363,9 +364,7 @@ def bdtick(ticker, dt, session='allday', types=None, **kwargs) -> pd.DataFrame:
     )
 
 
-def earning(
-        ticker, by='Geo', typ='Revenue', ccy=None, level=None, **kwargs
-) -> pd.DataFrame:
+def earning(ticker, by='Geo', typ='Revenue', ccy=None, level=None, **kwargs) -> pd.DataFrame:
     """
     Earning exposures by Geo or Products
 
@@ -416,9 +415,7 @@ def earning(
     return data
 
 
-def dividend(
-        tickers, typ='all', start_date=None, end_date=None, **kwargs
-) -> pd.DataFrame:
+def dividend(tickers, typ='all', start_date=None, end_date=None, **kwargs) -> pd.DataFrame:
     """
     Bloomberg dividend / split history
 
@@ -459,9 +456,7 @@ def dividend(
     return bds(tickers=tickers, flds=fld, col_maps=const.DVD_COLS, **kwargs)
 
 
-def beqs(
-        screen, asof=None, typ='PRIVATE', group='General', **kwargs
-) -> pd.DataFrame:
+def beqs(screen, asof=None, typ='PRIVATE', group='General', **kwargs) -> pd.DataFrame:
     """
     Bloomberg equity screening
 
@@ -540,9 +535,7 @@ def subscribe(tickers, flds=None, identity=None, **kwargs):
         conn.bbg_session(**kwargs).unsubscribe(sub_list)
 
 
-async def live(
-        tickers, flds=None, info=None, max_cnt=0, **kwargs
-):
+async def live(tickers, flds=None, info=None, max_cnt=0, **kwargs):
     """
     Subscribe and getting data feeds from
 
