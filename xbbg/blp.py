@@ -292,7 +292,7 @@ def bdib(ticker: str, dt, session='allday', typ='TRADE', **kwargs) -> pd.DataFra
     return data.loc[ss_rng[0]:ss_rng[1]]
 
 
-def bdtick(ticker, dt=None, session='allday', time_range=None, types=None, **kwargs) -> pd.DataFrame:
+def bdtick(ticker, dt, session='allday', time_range=None, types=None, **kwargs) -> pd.DataFrame:
     """
     Bloomberg tick data
 
@@ -314,8 +314,12 @@ def bdtick(ticker, dt=None, session='allday', time_range=None, types=None, **kwa
 
     if types is None: types = ['TRADE']
     exch = const.exch_info(ticker=ticker, **kwargs)
+
     if isinstance(time_range, (tuple, list)) and (len(time_range) == 2):
-        time_rng = process.intervals.Session(time_range[0], time_range[1])
+        cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
+        time_rng = pd.DatetimeIndex([
+            f'{cur_dt} {time_range[0]}', f'{cur_dt} {time_range[1]}']
+        ).tz_localize(exch.tz).tz_convert(process.DEFAULT_TZ).tz_convert('UTC')
     else:
         time_rng = process.time_range(dt=dt, ticker=ticker, session=session, **kwargs)
 
