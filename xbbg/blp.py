@@ -215,15 +215,11 @@ def bdib(ticker: str, dt, session='allday', typ='TRADE', **kwargs) -> pd.DataFra
     logger = logs.get_logger(bdib, **kwargs)
 
     ex_info = const.exch_info(ticker=ticker, **kwargs)
-    if ex_info.empty:
-        raise KeyError(f'Cannot find exchange info for {ticker}')
+    if ex_info.empty: raise KeyError(f'Cannot find exchange info for {ticker}')
 
-    ss_rng = process.time_range(
-        dt=dt, ticker=ticker, session=session, tz=ex_info.tz, **kwargs
-    )
+    ss_rng = process.time_range(dt=dt, ticker=ticker, session=session, tz=ex_info.tz, **kwargs)
     data_file = storage.bar_file(ticker=ticker, dt=dt, typ=typ)
-    if files.exists(data_file) and kwargs.get('cache', True) \
-            and (not kwargs.get('reload', False)):
+    if files.exists(data_file) and kwargs.get('cache', True) and (not kwargs.get('reload', False)):
         res = (
             pd.read_parquet(data_file)
             .pipe(pipeline.add_ticker, ticker=ticker)
@@ -233,8 +229,7 @@ def bdib(ticker: str, dt, session='allday', typ='TRADE', **kwargs) -> pd.DataFra
             logger.debug(f'Loading Bloomberg intraday data from: {data_file}')
             return res
 
-    if not process.check_current(dt=dt, logger=logger, **kwargs):
-        return pd.DataFrame()
+    if not process.check_current(dt=dt, logger=logger, **kwargs): return pd.DataFrame()
 
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
     q_tckr = ticker
@@ -264,7 +259,7 @@ def bdib(ticker: str, dt, session='allday', typ='TRADE', **kwargs) -> pd.DataFra
             ('eventType', typ),
             ('interval', kwargs.get('interval', 1)),
             ('startDateTime', time_rng[0]),
-            ('endDateTime', time_rng[1])
+            ('endDateTime', time_rng[1]),
         ],
         **kwargs,
     )
@@ -314,12 +309,19 @@ def bdtick(ticker, dt, session='allday', time_range=None, types=None, **kwargs) 
 
     if types is None: types = ['TRADE']
     exch = const.exch_info(ticker=ticker, **kwargs)
+    if exch.empty: raise LookupError(f'Cannot find exchange info for {ticker}')
 
     if isinstance(time_range, (tuple, list)) and (len(time_range) == 2):
         cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
-        time_rng = pd.DatetimeIndex([
-            f'{cur_dt} {time_range[0]}', f'{cur_dt} {time_range[1]}']
-        ).tz_localize(exch.tz).tz_convert(process.DEFAULT_TZ).tz_convert('UTC')
+        time_rng = (
+            pd.DatetimeIndex([
+                f'{cur_dt} {time_range[0]}',
+                f'{cur_dt} {time_range[1]}',
+            ])
+            .tz_localize(exch.tz)
+            .tz_convert(process.DEFAULT_TZ)
+            .tz_convert('UTC')
+        )
     else:
         time_rng = process.time_range(dt=dt, ticker=ticker, session=session, **kwargs)
 
@@ -491,11 +493,8 @@ def beqs(screen, asof=None, typ='PRIVATE', group='General', **kwargs) -> pd.Data
     conn.send_request(request=request, **kwargs)
     res = pd.DataFrame(process.rec_events(func=process.process_ref, **kwargs))
     if res.empty:
-        if kwargs.get('trial', 0):
-            return pd.DataFrame()
-        return beqs(
-            screen=screen, asof=asof, typ=typ, group=group, trial=1, **kwargs
-        )
+        if kwargs.get('trial', 0): return pd.DataFrame()
+        return beqs(screen=screen, asof=asof, typ=typ, group=group, trial=1, **kwargs)
 
     if kwargs.get('raw', False): return res
     cols = res.field.unique()
@@ -621,8 +620,7 @@ def active_futures(ticker: str, dt, **kwargs) -> str:
 
     fut_tk = bdp(tickers=[fut_1, fut_2], flds='Last_Tradeable_Dt')
 
-    if pd.Timestamp(dt).month < pd.Timestamp(fut_tk.last_tradeable_dt[0]).month:
-        return fut_1
+    if pd.Timestamp(dt).month < pd.Timestamp(fut_tk.last_tradeable_dt[0]).month: return fut_1
 
     dts = pd.bdate_range(end=dt, periods=10)
     volume = bdh(fut_tk.index, flds='volume', start_date=dts[0], end_date=dts[-1])

@@ -120,9 +120,15 @@ def time_range(dt, ticker, session='allday', tz='UTC', **kwargs) -> intervals.Se
     ex_info = const.exch_info(ticker=ticker, **kwargs)
     cur_dt = pd.Timestamp(dt).strftime('%Y-%m-%d')
     time_fmt = '%Y-%m-%dT%H:%M:%S'
-    time_idx = pd.DatetimeIndex([
-        f'{cur_dt} {ss.start_time}', f'{cur_dt} {ss.end_time}']
-    ).tz_localize(ex_info.tz).tz_convert(DEFAULT_TZ).tz_convert(tz)
+    time_idx = (
+        pd.DatetimeIndex([
+            f'{cur_dt} {ss.start_time}',
+            f'{cur_dt} {ss.end_time}'],
+        )
+        .tz_localize(ex_info.tz)
+        .tz_convert(DEFAULT_TZ)
+        .tz_convert(tz)
+    )
     if time_idx[0] > time_idx[1]: time_idx -= pd.TimedeltaIndex(['1D', '0D'])
     return intervals.Session(time_idx[0].strftime(time_fmt), time_idx[1].strftime(time_fmt))
 
