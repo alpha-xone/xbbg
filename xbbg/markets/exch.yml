@@ -204,7 +204,7 @@ CommoditiesDalian:
 
 FuturesSingapore:
   tz: Asia/Singapore
-  allday: [1700, 445]
+  allday: [1700, 1635]
   day: [900, 1635]
   night: [1700, 445]
 
