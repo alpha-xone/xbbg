@@ -23,9 +23,7 @@ Requirements
 
 - Bloomberg C++ SDK version 3.12.1 or higher
 
-    - Visit `Bloomberg API Library`_
-
-    - Downlaod C++ Supported Release - current latest ``3.16.1.1``
+    - Visit `Bloomberg API Library`_ and downlaod C++ Supported Release - current latest ``3.16.1.1``
 
     - In the ``bin`` folder of downloaded zip file, copy ``blpapi3_32.dll`` and ``blpapi3_64.dll`` to Bloomberg ``BLPAPI_ROOT`` folder (usually ``blp/DAPI``)
 
