@@ -33,7 +33,7 @@ Comdty:
 
 Curncy:
   - tickers: [
-      JPY, AUD, HKD, CNHHKD, CNH, EUR, GBP, GBPAUD, SEK,
+      JPY, AUD, HKD, CNHHKD, CNH, EUR, GBP, GBPAUD, SEK, XAU,
       GBPEUR, AUDGBP, GBPHKD, KWN, IRN, NTN, CNH1M, ZAR, CHF
     ]
     exch: CurrencyGeneric

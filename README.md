@@ -23,16 +23,15 @@ Below are main features. Jupyter notebook examples can be found [here](https://c
 
 - Bloomberg C++ SDK version 3.12.1 or higher:
 
-    - [Bloomberg API Library](https://www.bloomberg.com/professional/support/api-library/)
+    - Visit [Bloomberg API Library](https://www.bloomberg.com/professional/support/api-library/)
 
-    - Downlaod C++ Experimental Release (for latest python API version `3.14.0`, this can only be downloaded thru `WAPI<GO>` in terminal).
+    - Downlaod C++ Supported Release - [current latest 3.16.1.1](https://bcms.bloomberg.com/BLPAPI-Generic/blpapi_cpp_3.16.1.1-windows.zip)
 
-    - Copy `blpapi3_32.dll` and `blpapi3_64.dll` under `bin`
-      folder to Bloomberg `BLPAPI_ROOT` folder, normally `blp/DAPI`
+    - In the `bin` folder of downloaded zip file, copy `blpapi3_32.dll` and `blpapi3_64.dll` to Bloomberg `BLPAPI_ROOT` folder (usually `blp/DAPI`)
 
 - Bloomberg Open API (need to install manually as shown below)
 
-- numpy, pandas, ruamel.yaml and pyarrow
+- `numpy`, `pandas`, `ruamel.yaml` and `pyarrow`
 
 ## Installation
 

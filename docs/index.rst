@@ -23,18 +23,17 @@ Requirements
 
 - Bloomberg C++ SDK version 3.12.1 or higher
 
-    - `Bloomberg API Library`_
+    - Visit `Bloomberg API Library`_
 
-    - Downlaod C++ Experimental Release (for latest python API version ``3.14.0``, this can only be downloaded thru ``WAPI<GO>`` in terminal).
+    - Downlaod C++ Supported Release - current latest ``3.16.1.1``
 
-    - Copy ``blpapi3_32.dll`` and ``blpapi3_64.dll`` under ``bin`` folder to Bloomberg installation folder ``blp/DAPI``
+    - In the ``bin`` folder of downloaded zip file, copy ``blpapi3_32.dll`` and ``blpapi3_64.dll`` to Bloomberg ``BLPAPI_ROOT`` folder (usually ``blp/DAPI``)
 
 - Bloomberg Open API (need to install manually as shown below)
 
 - numpy, pandas, ruamel.yaml and pyarrow
 
-.. _pdblp: https://github.com/matthewgilbert/pdblp
-.. _download: https://bloomberg.bintray.com/BLPAPI-Experimental-Generic/blpapi_cpp_3.12.2.1-linux.tar.gz
+.. _download: https://bcms.bloomberg.com/BLPAPI-Generic/blpapi_cpp_3.16.1.1-windows.zip
 .. _here: https://colab.research.google.com/drive/1YVVS5AiJAQGGEECmOFAb7DNQZMOHdXLR
 
 Installation
@@ -278,11 +277,11 @@ Dividends:
 Data Storage
 ------------
 
-If `BBG_ROOT` is provided in `os.environ`, data can be saved locally.
+If ``BBG_ROOT`` is provided in ``os.environ``, data can be saved locally.
 By default, local storage is preferred than Bloomberg for all queries.
 
 Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
-(full description in `DAPI<GO>`):
+(full description in ``DAPI<GO>``):
 
     To access Bloomberg data via the API (and use that data in Microsoft Excel),
     your company must sign the 'Datafeed Addendum' to the Bloomberg Agreement.
@@ -335,4 +334,3 @@ License        |license|
 .. _Bloomberg API Library: https://www.bloomberg.com/professional/support/api-library/
 .. |xbbg| image:: https://raw.githubusercontent.com/alpha-xone/xbbg/master/docs/xbbg.png
    :alt: xbbg
-
