@@ -27,14 +27,17 @@ Below are main features. Jupyter notebook examples can be found [here](https://c
 
     - In the `bin` folder of downloaded zip file, copy `blpapi3_32.dll` and `blpapi3_64.dll` to Bloomberg `BLPAPI_ROOT` folder (usually `blp/DAPI`)
 
-- Bloomberg Open API (need to install manually as shown below)
+- Bloomberg official Python API:
+
+```cmd
+pip install blpapi --index-url=https://bcms.bloomberg.com/pip/simple/
+```
 
 - `numpy`, `pandas`, `ruamel.yaml` and `pyarrow`
 
 ## Installation
 
 ```cmd
-pip install blpapi --index-url=https://bcms.bloomberg.com/pip/simple/
 pip install xbbg
 ```
 

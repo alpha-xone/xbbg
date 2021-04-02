@@ -27,7 +27,11 @@ Requirements
 
     - In the ``bin`` folder of downloaded zip file, copy ``blpapi3_32.dll`` and ``blpapi3_64.dll`` to Bloomberg ``BLPAPI_ROOT`` folder (usually ``blp/DAPI``)
 
-- Bloomberg Open API (need to install manually as shown below)
+- Bloomberg offical Python API:
+
+.. code-block:: console
+
+   pip install blpapi --index-url=https://bcms.bloomberg.com/pip/simple/
 
 - numpy, pandas, ruamel.yaml and pyarrow
 
@@ -39,7 +43,6 @@ Installation
 
 .. code-block:: console
 
-   pip install blpapi --index-url=https://bcms.bloomberg.com/pip/simple/
    pip install xbbg
 
 What's New
