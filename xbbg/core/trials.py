@@ -99,7 +99,9 @@ def num_trials(**kwargs) -> int:
     data_path = root_path()
     if not data_path: return 0
 
-    with db.SQLite(f'{data_path}/Logs/xbbg.db') as con:
+    db_file = f'{data_path}/Logs/xbbg.db'
+    files.create_folder(db_file, is_file=True)
+    with db.SQLite(db_file) as con:
         con.execute(TRIALS_TABLE)
         num = con.execute(db.select(
             table='trials',
@@ -119,7 +121,9 @@ def update_trials(**kwargs):
     if 'cnt' not in kwargs:
         kwargs['cnt'] = num_trials(**kwargs) + 1
 
-    with db.SQLite(f'{data_path}/Logs/xbbg.db') as con:
+    db_file = f'{data_path}/Logs/xbbg.db'
+    files.create_folder(db_file, is_file=True)
+    with db.SQLite(db_file) as con:
         con.execute(TRIALS_TABLE)
         con.execute(db.replace_into(
             table='trials',
