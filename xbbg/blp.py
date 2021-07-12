@@ -510,7 +510,7 @@ def beqs(screen, asof=None, typ='PRIVATE', group='General', **kwargs) -> pd.Data
 
 
 @contextmanager
-def subscribe(tickers, flds=None, identity=None, **kwargs):
+def subscribe(tickers, flds=None, identity=None, options=None,**kwargs):
     """
     Subscribe Bloomberg realtime data
 
@@ -529,7 +529,7 @@ def subscribe(tickers, flds=None, identity=None, **kwargs):
         topic = f'//blp/mktdata/{ticker}'
         cid = conn.blpapi.CorrelationId(ticker)
         logger.debug(f'Subscribing {cid} => {topic}')
-        sub_list.add(topic, flds, correlationId=cid)
+        sub_list.add(topic, flds, correlationId=cid, options=options)
 
     try:
         conn.bbg_session(**kwargs).subscribe(sub_list, identity)
@@ -538,7 +538,7 @@ def subscribe(tickers, flds=None, identity=None, **kwargs):
         conn.bbg_session(**kwargs).unsubscribe(sub_list)
 
 
-async def live(tickers, flds=None, info=None, max_cnt=0, **kwargs):
+async def live(tickers, flds=None, info=None, max_cnt=0, options=None, **kwargs):
     """
     Subscribe and getting data feeds from
 
@@ -571,7 +571,7 @@ async def live(tickers, flds=None, info=None, max_cnt=0, **kwargs):
 
     sess = conn.bbg_session(**kwargs)
     while sess.tryNextEvent(): pass
-    with subscribe(tickers=tickers, flds=s_flds, **kwargs):
+    with subscribe(tickers=tickers, flds=s_flds, options=options, **kwargs):
         cnt = 0
         while True and cnt <= max_cnt:
             try:
