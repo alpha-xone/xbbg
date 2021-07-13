@@ -510,7 +510,7 @@ def beqs(screen, asof=None, typ='PRIVATE', group='General', **kwargs) -> pd.Data
 
 
 @contextmanager
-def subscribe(tickers, flds=None, identity=None, options=None,**kwargs):
+def subscribe(tickers, flds=None, identity=None, options=None, **kwargs):
     """
     Subscribe Bloomberg realtime data
 
