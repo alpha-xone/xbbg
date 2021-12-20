@@ -15,25 +15,25 @@ Intuitive Bloomberg data API
 
 Below are main features. Jupyter notebook examples can be found [here](https://colab.research.google.com/drive/1YVVS5AiJAQGGEECmOFAb7DNQZMOHdXLR).
 
-- Excel compatible inputs
-- Straightforward intraday bar requests
-- Subscriptions
+  - Excel compatible inputs
+  - Straightforward intraday bar requests
+  - Subscriptions
 
 ## Requirements
 
-- Bloomberg C++ SDK version 3.12.1 or higher:
+  - Bloomberg C++ SDK version 3.12.1 or higher:
 
-    - Visit [Bloomberg API Library](https://www.bloomberg.com/professional/support/api-library/) and downlaod C++ Supported Release
+    * Visit [Bloomberg API Library](https://www.bloomberg.com/professional/support/api-library/) and downlaod C++ Supported Release
 
-    - In the `bin` folder of downloaded zip file, copy `blpapi3_32.dll` and `blpapi3_64.dll` to Bloomberg `BLPAPI_ROOT` folder (usually `blp/DAPI`)
+    * In the `bin` folder of downloaded zip file, copy `blpapi3_32.dll` and `blpapi3_64.dll` to Bloomberg `BLPAPI_ROOT` folder (usually `blp/DAPI`)
 
-- Bloomberg official Python API:
+  - Bloomberg official Python API:
 
 ```cmd
 pip install blpapi --index-url=https://bcms.bloomberg.com/pip/simple/
 ```
 
-- `numpy`, `pandas`, `ruamel.yaml` and `pyarrow`
+  - `numpy`, `pandas`, `ruamel.yaml` and `pyarrow`
 
 ## Installation
 
@@ -73,7 +73,7 @@ In [1]: from xbbg import blp
 
 ### Basics
 
-- ``BDP`` example:
+  - ``BDP`` example:
 
 ```python
 In [2]: blp.bdp(tickers='NVDA US Equity', flds=['Security_Name', 'GICS_Sector_Name'])
@@ -85,7 +85,7 @@ Out[2]:
 NVDA US Equity   NVIDIA Corp  Information Technology
 ```
 
-- ``BDP`` with overrides:
+  - ``BDP`` with overrides:
 
 ```python
 In [3]: blp.bdp('AAPL US Equity', 'Eqy_Weighted_Avg_Px', VWAP_Dt='20181224')
@@ -97,7 +97,7 @@ Out[3]:
 AAPL US Equity               148.75
 ```
 
-- ``BDH`` example:
+  - ``BDH`` example:
 
 ```python
 In [4]: blp.bdh(
@@ -120,7 +120,7 @@ Out[4]:
 2018-10-19  2,797.77 2,760.27   2,767.78
 ```
 
-- ``BDH`` example with Excel compatible inputs:
+  - ``BDH`` example with Excel compatible inputs:
 
 ```python
 In [5]: blp.bdh(
@@ -140,7 +140,7 @@ Out[5]:
 2018-10-19     2,611.97 2,449.20   2,550.47
 ```
 
-- ``BDH`` without adjustment for dividends and splits:
+  - ``BDH`` without adjustment for dividends and splits:
 
 ```python
 In [6]: blp.bdh(
@@ -159,7 +159,7 @@ Out[6]:
 2014-06-10          94.25
 ```
 
-- ``BDH`` adjusted for dividends and splits:
+  - ``BDH`` adjusted for dividends and splits:
 
 ```python
 In [7]: blp.bdh(
@@ -178,7 +178,7 @@ Out[7]:
 2014-06-10          87.09
 ```
 
-- ``BDS`` example:
+  - ``BDS`` example:
 
 ```python
 In [8]: blp.bds('AAPL US Equity', 'DVD_Hist_All', DVD_Start_Dt='20180101', DVD_End_Dt='20180531')
@@ -191,7 +191,7 @@ AAPL US Equity    2018-05-01  2018-05-11  2018-05-14   2018-05-17             0.
 AAPL US Equity    2018-02-01  2018-02-09  2018-02-12   2018-02-15             0.63            Quarter  Regular Cash
 ```
 
-- Intraday bars ``BDIB`` example:
+  - Intraday bars ``BDIB`` example:
 
 ```python
 In [9]: blp.bdib(ticker='BHP AU Equity', dt='2018-10-17').tail()
@@ -213,7 +213,7 @@ Above example works because 1) `AU` in equity ticker is mapped to `EquityAustral
 To add new mappings, define `BBG_ROOT` in sys path and add `assets.yml` and
 `exch.yml` under `BBG_ROOT/markets`.
 
-*New in 0.6.6* - if exchange is defined in `/xbbg/markets/exch.yml`, can use `ref` to look for
+_New in 0.6.6_ - if exchange is defined in `/xbbg/markets/exch.yml`, can use `ref` to look for
 relevant exchange market hours. Both `ref='ES1 Index'` and `ref='CME'` work for this example:
 
 ```python
@@ -231,7 +231,7 @@ out[10]:
 2020-03-20 16:59:00-04:00   2,265.25 2,272.00 2,265.00 2,266.50   1271      378 2,882,978.25
 ```
 
-- Intraday bars within market session:
+  - Intraday bars within market session:
 
 ```python
 In [11]: blp.bdib(ticker='7974 JT Equity', dt='2018-10-17', session='am_open_30').tail()
@@ -248,7 +248,7 @@ Out[11]:
 2018-10-17 09:31:00+09:00      39,990.00 40,000.00 39,980.00 39,990.00   2000       15
 ```
 
-- Corporate earnings:
+  - Corporate earnings:
 
 ```python
 In [12]: blp.earning('AMD US Equity', by='Geo', Eqy_Fund_Year=2017, Number_Of_Periods=1)
@@ -266,7 +266,7 @@ Europe            1.00    263.00        4.94
 Other Countries   1.00    162.00        3.04
 ```
 
-- Dividends:
+  - Dividends:
 
 ```python
 In [13]: blp.dividend(['C US Equity', 'MS US Equity'], start_date='2018-01-01', end_date='2018-05-01')
@@ -282,7 +282,7 @@ MS US Equity  2018-01-18  2018-01-30  2018-01-31  2018-02-15     0.25  Quarter  
 
 -----
 
-*New in 0.1.17* - Dividend adjustment can be simplified to one parameter `adjust`:
+_New in 0.1.17_ - Dividend adjustment can be simplified to one parameter `adjust`:
 
 - ``BDH`` without adjustment for dividends and splits:
 
