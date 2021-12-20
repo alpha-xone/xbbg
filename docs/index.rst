@@ -48,6 +48,8 @@ Installation
 What's New
 ==========
 
+*0.7.7a2* - Custom `config` and etc. for reference exchange (author `hceh`)
+
 *0.7.6a2* - Use `blp.connect` for alternative Bloomberg connection (author `anxl2008`)
 
 *0.7.2* - Use `async` for live data feeds

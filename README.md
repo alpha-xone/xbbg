@@ -43,6 +43,8 @@ pip install xbbg
 
 ## What's New
 
+_0.7.7a2_ - Custom `config` and etc. for reference exchange (author `hceh`)
+
 _0.7.6a2_ - Use `blp.connect` for alternative Bloomberg connection (author `anxl2008`)
 
 _0.7.2_ - Use `async` for live data feeds
