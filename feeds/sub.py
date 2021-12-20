@@ -1,5 +1,4 @@
 import pynng
-import orjson
 import trio
 import fire
 

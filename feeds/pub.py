@@ -43,7 +43,7 @@ def main(**kwargs):
 
 if __name__ == "__main__":
 
-    # Example: 
+    # Example:
     #   python pub.py --channel=equity --tickers="['SPY US Equity','XLE US Equity']"
     try:
         fire.Fire(main)
