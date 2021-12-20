@@ -161,10 +161,8 @@ def exch_info(ticker: str, **kwargs) -> pd.Series:
     """
     logger = logs.get_logger(exch_info, level='debug')
 
-    if kwargs.get('ref', '') and kwargs.get('config') is not None:
-        return exch_info(ticker=kwargs['ref'], config=kwargs['config'])
-    elif kwargs.get('ref', ''):
-        return exch_info(ticker=kwargs['ref'])
+    if kwargs.get('ref', ''):
+        return exch_info(ticker=kwargs['ref'], **{k: v for k, v in kwargs.items() if k != 'ref'})
 
     exch = kwargs.get('config', param.load_config(cat='exch'))
     original = kwargs.get('original', '')
