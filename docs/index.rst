@@ -321,8 +321,8 @@ License        |license|
 .. |codefactor| image:: https://www.codefactor.io/repository/github/alpha-xone/xbbg/badge
    :target: https://www.codefactor.io/repository/github/alpha-xone/xbbg
    :alt: CodeFactor
-.. |codacy| image:: https://api.codacy.com/project/badge/Grade/2ec89be198cf4689a6a6c6407b0bc965
-   :target: https://www.codacy.com/app/alpha-xone/xbbg
+.. |codacy| image:: https://app.codacy.com/project/badge/Grade/daec9f52ba344e3ea116c15f1fc6d541
+   :target: https://www.codacy.com/gh/alpha-xone/xbbg/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=alpha-xone/xbbg&amp;utm_campaign=Badge_Grade
 .. |codebeat| image:: https://codebeat.co/badges/eef1f14d-72eb-445a-af53-12d3565385ec
    :target: https://codebeat.co/projects/github-com-alpha-xone-xbbg-master
 .. |license| image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
