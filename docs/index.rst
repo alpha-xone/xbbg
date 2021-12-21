@@ -313,7 +313,7 @@ License        |license|
 .. |azure| image:: https://dev.azure.com/alpha-xone/xbbg/_apis/build/status/alpha-xone.xbbg
     :target: https://dev.azure.com/alpha-xone/xbbg/_build
     :alt: Azure Pipeline
-.. |codecov| image:: https://codecov.io/gh/alpha-xone/xbbg/branch/master/graph/badge.svg
+.. |codecov| image:: https://codecov.io/gh/alpha-xone/xbbg/branch/main/graph/badge.svg
     :target: https://codecov.io/gh/alpha-xone/xbbg
     :alt: Codecov
 .. |docs| image:: https://readthedocs.org/projects/xbbg/badge/?version=latest
@@ -322,12 +322,12 @@ License        |license|
    :target: https://www.codefactor.io/repository/github/alpha-xone/xbbg
    :alt: CodeFactor
 .. |codacy| image:: https://app.codacy.com/project/badge/Grade/daec9f52ba344e3ea116c15f1fc6d541
-   :target: https://www.codacy.com/gh/alpha-xone/xbbg/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=alpha-xone/xbbg&amp;utm_campaign=Badge_Grade
+   :target: https://www.codacy.com/gh/alpha-xone/xbbg
 .. |codebeat| image:: https://codebeat.co/badges/eef1f14d-72eb-445a-af53-12d3565385ec
-   :target: https://codebeat.co/projects/github-com-alpha-xone-xbbg-master
+   :target: https://codebeat.co/projects/github-com-alpha-xone-xbbg-main
 .. |license| image:: https://img.shields.io/github/license/alpha-xone/xbbg.svg
     :alt: GitHub license
-    :target: https://github.com/alpha-xone/xbbg/blob/master/LICENSE
+    :target: https://github.com/alpha-xone/xbbg/blob/main/LICENSE
 .. |chat| image:: https://badges.gitter.im/xbbg/community.svg
    :target: https://gitter.im/xbbg/community
 .. |download| image:: https://img.shields.io/pypi/dm/xbbg
@@ -335,5 +335,5 @@ License        |license|
 .. |coffee| image:: https://www.buymeacoffee.com/assets/img/custom_images/purple_img.png
    :target: https://www.buymeacoffee.com/Lntx29Oof
 .. _Bloomberg API Library: https://www.bloomberg.com/professional/support/api-library/
-.. |xbbg| image:: https://raw.githubusercontent.com/alpha-xone/xbbg/master/docs/xbbg.png
+.. |xbbg| image:: https://raw.githubusercontent.com/alpha-xone/xbbg/main/docs/xbbg.png
    :alt: xbbg
