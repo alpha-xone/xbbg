@@ -327,6 +327,10 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 > The most fundamental requirement regarding your use of Data is that it cannot
 > leave the local PC you use to access the BLOOMBERG PROFESSIONAL service.
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=alpha-xone/xbbg&type=Date)](https://star-history.com/#alpha-xone/xbbg&Date)
+
 |                |                                                                                                                                                                                  |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Docs           | [![Documentation Status](https://readthedocs.org/projects/xbbg/badge/?version=latest)](https://xbbg.readthedocs.io/)                                                             |
