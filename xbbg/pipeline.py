@@ -78,7 +78,7 @@ def apply_fx(
         where FX uses latest available price
 
     Examples:
-        >>> pd.set_option('precision', 2)
+        >>> pd.options.display.precision = 2
         >>> rms = (
         ...     pd.read_pickle('xbbg/tests/data/sample_rms_ib1.pkl')
         ...     .pipe(get_series, col='close')
@@ -124,7 +124,7 @@ def daily_stats(data: Union[pd.Series, pd.DataFrame], **kwargs) -> pd.DataFrame:
     Daily stats for given data
 
     Examples:
-        >>> pd.set_option('precision', 2)
+        >>> pd.options.display.precision = 2
         >>> (
         ...     pd.concat([
         ...         pd.read_pickle('xbbg/tests/data/sample_rms_ib0.pkl'),
@@ -232,9 +232,9 @@ def since_year(data: pd.DataFrame, year: int) -> pd.DataFrame:
         pd.DataFrame
 
     Examples:
-        >>> pd.set_option('display.width', 120)
-        >>> pd.set_option('display.max_columns', 10)
-        >>> pd.set_option('precision', 2)
+        >>> pd.options.display.width = 120
+        >>> pd.options.display.max_columns = 10
+        >>> pd.options.display.precision = 2
         >>> amzn = pd.read_pickle('xbbg/tests/data/sample_earning_amzn.pkl')
         >>> amzn.query('level == 1').pipe(since_year, year=2017)
                          segment_name  level    fy2018    fy2017  fy2018_pct  fy2017_pct
