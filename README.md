@@ -23,7 +23,7 @@ Below are main features. Jupyter notebook examples can be found [here](https://c
 
 - Bloomberg C++ SDK version 3.12.1 or higher:
 
-    - Visit [Bloomberg API Library](https://www.bloomberg.com/professional/support/api-library/) and downlaod C++ Supported Release
+    - Visit [Bloomberg API Library](https://www.bloomberg.com/professional/support/api-library/) and download C++ Supported Release
 
     - In the `bin` folder of downloaded zip file, copy `blpapi3_32.dll` and `blpapi3_64.dll` to Bloomberg `BLPAPI_ROOT` folder (usually `blp/DAPI`)
 
@@ -326,6 +326,10 @@ Noted that local data usage must be compliant with Bloomberg Datafeed Addendum
 > of the data and information available via the API (the "Data").
 > The most fundamental requirement regarding your use of Data is that it cannot
 > leave the local PC you use to access the BLOOMBERG PROFESSIONAL service.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=alpha-xone/xbbg&type=Date)](https://star-history.com/#alpha-xone/xbbg&Date)
 
 |                |                                                                                                                                                                                  |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

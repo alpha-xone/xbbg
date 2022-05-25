@@ -69,7 +69,7 @@ def connect(max_attempt=3, auto_restart=True, **kwargs) -> blpapi.session.Sessio
         sess_opts.setServerHost(serverHost=kwargs['server_host'])
 
     if isinstance(kwargs.get('server_port', None), str):
-        sess_opts.setServerPort(serverPort=kwargs['server_post'])
+        sess_opts.setServerPort(serverPort=kwargs['server_port'])
 
     if isinstance(kwargs.get('tls_options', None), blpapi.sessionoptions.TlsOptions):
         sess_opts.setTlsOptions(tlsOptions=kwargs['tlsOptions'])
