@@ -1,3 +1,3 @@
-"""Intuitive Bloomberg data API"""
+"""An intuitive Bloomberg API"""
 
-__version__ = '0.7.7'
+__version__ = '0.7.8a1'
