@@ -2,7 +2,7 @@
 
 # xbbg
 
-Intuitive Bloomberg data API
+An intuitive Bloomberg API
 
 [![PyPI version](https://img.shields.io/pypi/v/xbbg.svg)](https://badge.fury.io/py/xbbg)
 [![PyPI version](https://img.shields.io/pypi/pyversions/xbbg.svg)](https://badge.fury.io/py/xbbg)

@@ -3,7 +3,7 @@
 xbbg
 ====
 
-Intuitive Bloomberg data API
+An intuitive Bloomberg API
 
 |pypi| |version| |download| |chat|
 
