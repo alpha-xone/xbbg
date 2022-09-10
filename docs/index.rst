@@ -310,7 +310,7 @@ License        |license|
 .. |actions| image:: https://github.com/alpha-xone/xbbg/workflows/Auto%20CI/badge.svg
     :target: https://github.com/alpha-xone/xbbg/actions
     :alt: Travis CI
-.. |azure| image:: https://dev.azure.com/alpha-xone/xbbg/_apis/build/status/alpha-xone.xbbg
+.. |azure| image:: https://dev.azure.com/alpha-xone/xbbg/_apis/build/status/alpha-xone.xbbg?branchName=main
     :target: https://dev.azure.com/alpha-xone/xbbg/_build
     :alt: Azure Pipeline
 .. |codecov| image:: https://codecov.io/gh/alpha-xone/xbbg/branch/main/graph/badge.svg
