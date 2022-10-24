@@ -85,7 +85,7 @@ Equity:
     exch: EquitySpain
   - exch_codes: [SS]
     exch: EquityStockholm
-  - exch_codes: [US]
+  - exch_codes: [US, UN]
     exch: EquityUS
   - exch_codes: [IS, IB, IN]
     exch: EquityFuturesIndia
@@ -118,7 +118,7 @@ Index:
     is_fut: True
   - tickers: [HSI, HSCEI]
     exch: EquityHongKong
-  - tickers: [HI, HC]
+  - tickers: [HI, HC, HCT]
     exch: FuturesHongKong
     freq: M
     is_fut: True
