@@ -500,3 +500,152 @@ fn live_schema_introspection_element_details() {
 
     sess.stop();
 }
+
+// ============================================================================
+// Identity / Entitlement Probe (classic token flow)
+// ============================================================================
+
+/// Decisive probe for whether THIS endpoint supports the classic manual
+/// authorization flow (generateToken -> //blp/apiauth AuthorizationRequest ->
+/// sendAuthorizationRequest). Desktop API endpoints are expected to fail at
+/// token generation; SAPI/B-PIPE succeeds and yields a real seat type and
+/// entitlement answers. Prints every step — run with --nocapture.
+#[test]
+fn live_probe_classic_token_authorization() {
+    use xbbg_core::CorrelationId;
+
+    let sess = create_session();
+    sess.start().expect("failed to start session");
+    wait_for_session_started(&sess, 5000);
+
+    // Step 1: token generation for the logged-in user.
+    let token_cid = CorrelationId::Int(7_777);
+    sess.generate_token(Some(&token_cid))
+        .expect("generateToken call should enqueue");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut token: Option<String> = None;
+    let mut token_failure: Option<String> = None;
+    while Instant::now() < deadline && token.is_none() && token_failure.is_none() {
+        let Some(ev) = sess.try_next_event() else {
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        };
+        for msg in ev.iter() {
+            let ty = msg.message_type();
+            let name = ty.as_str();
+            println!("[token pump] event={:?} message={name}", ev.event_type());
+            match name {
+                "TokenGenerationSuccess" => {
+                    token = msg
+                        .elements()
+                        .get_by_str("token")
+                        .and_then(|e| e.get_str(0))
+                        .map(str::to_string);
+                    println!(
+                        "[token pump] token generated ({} chars)",
+                        token.as_deref().map_or(0, str::len)
+                    );
+                }
+                "TokenGenerationFailure" => {
+                    let reason = msg
+                        .elements()
+                        .get_by_str("reason")
+                        .and_then(|r| r.get_by_str("description"))
+                        .and_then(|e| e.get_str(0))
+                        .map(str::to_string);
+                    token_failure =
+                        Some(reason.unwrap_or_else(|| "TokenGenerationFailure".to_string()));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let Some(token) = token else {
+        println!(
+            "=== PROBE RESULT: token generation unavailable on this endpoint: {} ===",
+            token_failure.as_deref().unwrap_or("timed out")
+        );
+        sess.stop();
+        return;
+    };
+
+    // Step 2: authorization request against //blp/apiauth.
+    sess.open_service("//blp/apiauth")
+        .expect("open //blp/apiauth");
+    let auth_svc = sess.get_service("//blp/apiauth").expect("get apiauth");
+    let mut auth_req = auth_svc
+        .create_request("AuthorizationRequest")
+        .expect("create AuthorizationRequest");
+    auth_req.set_str("token", &token).expect("set token");
+
+    let mut identity = sess.create_identity().expect("createIdentity");
+    let auth_cid = CorrelationId::Int(7_778);
+    sess.send_authorization_request(&auth_req, &mut identity, Some(&auth_cid))
+        .expect("sendAuthorizationRequest");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut authorized: Option<bool> = None;
+    while Instant::now() < deadline && authorized.is_none() {
+        let Some(ev) = sess.try_next_event() else {
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        };
+        for msg in ev.iter() {
+            let ty = msg.message_type();
+            let name = ty.as_str();
+            println!("[auth pump] event={:?} message={name}", ev.event_type());
+            match name {
+                "AuthorizationSuccess" => authorized = Some(true),
+                "AuthorizationFailure" => {
+                    let reason = msg
+                        .elements()
+                        .get_by_str("reason")
+                        .and_then(|r| r.get_by_str("description"))
+                        .and_then(|e| e.get_str(0))
+                        .map(str::to_string);
+                    println!(
+                        "[auth pump] failure detail: {}",
+                        reason.as_deref().unwrap_or("(none)")
+                    );
+                    authorized = Some(false);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if authorized != Some(true) {
+        println!("=== PROBE RESULT: authorization failed or timed out ===");
+        sess.stop();
+        return;
+    }
+
+    // Step 3: the identity is real — exercise seat type + entitlements.
+    let seat = identity.seat_type().expect("seat_type");
+    println!("=== PROBE RESULT: AUTHORIZED; seat_type={} ===", seat.as_str());
+
+    sess.open_service("//blp/refdata").expect("open refdata");
+    let refdata = sess.get_service("//blp/refdata").expect("get refdata");
+    println!(
+        "is_authorized(//blp/refdata) = {}",
+        identity.is_authorized(&refdata)
+    );
+    let real = identity
+        .check_entitlements(&refdata, &[14003, 14080])
+        .expect("check_entitlements real");
+    println!(
+        "real EIDs entitled={} failed={:?}",
+        real.entitled, real.failed_eids
+    );
+    let bogus = identity
+        .check_entitlements(&refdata, &[999_999_999])
+        .expect("check_entitlements bogus");
+    println!(
+        "bogus EID entitled={} failed={:?}",
+        bogus.entitled, bogus.failed_eids
+    );
+
+    sess.stop();
+}

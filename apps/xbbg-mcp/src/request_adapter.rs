@@ -177,6 +177,11 @@ pub(crate) struct RequestArgs {
     field_types: Option<BTreeMap<String, String>>,
     #[serde(default)]
     include_security_errors: Option<bool>,
+    /// Request per-security entitlement IDs (`returnEids`); they surface in
+    /// the batch metadata (`xbbg.eid_data`). ReferenceData/HistoricalData
+    /// operations only.
+    #[serde(default)]
+    return_eids: Option<bool>,
     #[serde(default)]
     validate_fields: Option<bool>,
     #[serde(default)]
@@ -376,6 +381,7 @@ pub(crate) fn generic_request_params(args: RequestArgs) -> Result<RequestParams,
         options: map_to_pairs(args.options),
         field_types: map_to_hash_map(args.field_types),
         include_security_errors: args.include_security_errors,
+        return_eids: args.return_eids,
         validate_fields: args.validate_fields,
         search_spec,
         field_ids,
@@ -497,6 +503,7 @@ mod tests {
             options: None,
             field_types: None,
             include_security_errors: None,
+            return_eids: None,
             validate_fields: None,
             search_spec: None,
             field_ids: None,
@@ -654,6 +661,14 @@ mod tests {
                 .and_then(|values| values.get("returnEids")),
             Some(&"true".to_string())
         );
+
+        let mut with_eids = empty_request_args("//blp/refdata", None);
+        with_eids.operation = Some(Operation::ReferenceData.to_string());
+        with_eids.securities = Some(vec!["IBM US Equity".to_string()]);
+        with_eids.fields = Some(vec!["PX_LAST".to_string()]);
+        with_eids.return_eids = Some(true);
+        let with_eids = generic_request_params(with_eids).unwrap();
+        assert!(with_eids.return_eids, "return_eids should map through");
     }
 
     #[test]

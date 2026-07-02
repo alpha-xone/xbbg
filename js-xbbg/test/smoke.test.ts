@@ -1,12 +1,16 @@
 import { expectTypeOf } from 'vitest';
+import { Field, Int32, Schema, Table, tableToIPC } from 'apache-arrow';
 
 import { tableFromNativeArrowBatch } from '../src/arrow-zero-copy';
 import * as api from '../src/index';
 import type {
   BackendKind,
+  EntitlementReport,
   FormatKind,
   OverridesInput,
   RequestOptions,
+  ResultMetadata,
+  SeatType,
   StreamOptions,
 } from '../src/index';
 import type { NativeArrowZeroCopyBatch } from '../src/napi';
@@ -50,6 +54,13 @@ function fakeNativeSubscription(): any {
 
 function typedBuffer(view: ArrayBufferView): Buffer {
   return Buffer.from(view.buffer, view.byteOffset, view.byteLength);
+}
+
+function metadataIpc(metadata: Record<string, string>): Buffer {
+  const field = new Field('answer', new Int32(), false);
+  const schema = new Schema([field], new Map(Object.entries(metadata)));
+  const table = new Table(schema);
+  return Buffer.from(tableToIPC(table, 'stream'));
 }
 
 function captureRequests(): api.Engine & { readonly calls: RequestInput[] } {
@@ -110,6 +121,16 @@ describe('@xbbg/core surface', () => {
     }
   });
   it('keeps representative public type exports available', () => {
+    const seatType: SeatType = 'BPS';
+    const entitlementReport: EntitlementReport = { entitled: false, failedEids: [101] };
+    const resultMetadata: ResultMetadata = {
+      eidData: { 'IBM US Equity': [101] },
+      metadata: { 'xbbg.eid_data': '{"IBM US Equity":[101]}' },
+    };
+
+    expectTypeOf(seatType).toExtend<SeatType>();
+    expectTypeOf(entitlementReport).toEqualTypeOf<EntitlementReport>();
+    expectTypeOf(resultMetadata).toEqualTypeOf<ResultMetadata>();
     const backend: BackendKind = api.Backend.ARROW;
     const format: FormatKind = api.Format.LONG_TYPED;
     const requestOptions: RequestOptions = { backend, format };
@@ -475,6 +496,7 @@ describe('native Arrow zero-copy table construction', () => {
       ],
       kind: 'zeroCopy',
       numRows: 2,
+      metadata: { 'xbbg.eid_data': '{"IBM US Equity":[101]}' },
     };
 
     const table = tableFromNativeArrowBatch(batch);
@@ -490,6 +512,7 @@ describe('native Arrow zero-copy table construction', () => {
     expect(table.getChild('YIELD')?.get(0)).toBeCloseTo(1.25);
     expect(table.getChild('TRADE_DATE')?.get(0)).toBe(1_700_000_000_000);
     expect([...(table.getChild('PAYLOAD')?.get(1) ?? [])]).toStrictEqual([0xbe, 0xef, 0x01]);
+    expect(table.schema.metadata.get('xbbg.eid_data')).toBe('{"IBM US Equity":[101]}');
   });
 
   it('rejects native descriptors whose primitive data buffer is too small', () => {
@@ -506,6 +529,7 @@ describe('native Arrow zero-copy table construction', () => {
           data: Buffer.alloc(Float64Array.BYTES_PER_ELEMENT),
         },
       ],
+      metadata: {},
     };
 
     expect(() => tableFromNativeArrowBatch(batch)).toThrow(/LAST_PRICE data buffer is too small/u);
@@ -557,6 +581,7 @@ describe('native Arrow zero-copy table construction', () => {
       ],
       kind: 'zeroCopy',
       numRows: 1,
+      metadata: { 'xbbg.eid_data': '{"IBM US Equity":[101]}' },
     };
     const sub = new api.Subscription({
       add: async () => {},
@@ -575,6 +600,85 @@ describe('native Arrow zero-copy table construction', () => {
 
     expect(drained).toHaveLength(1);
     expect(drained[0]?.getChild('answer')?.get(0)).toBe(7);
+    const drainedTable = drained[0];
+    if (drainedTable === undefined) {
+      throw new Error('expected drained table');
+    }
+    const metadataResult = drainedTable as unknown as ResultMetadata;
+    expect(metadataResult.metadata).toStrictEqual({ 'xbbg.eid_data': '{"IBM US Equity":[101]}' });
+    expect(metadataResult.eidData).toStrictEqual({ 'IBM US Equity': [101] });
+    expect(metadataResult.securityErrors).toBeUndefined();
+    expect(metadataResult.fieldExceptions).toBeUndefined();
+  });
+
+  it('parses JSON result metadata and ignores absent or malformed convenience payloads', async () => {
+    const engine = Object.create(api.Engine.prototype) as api.Engine;
+    const buffers = [
+      metadataIpc({
+        'xbbg.eid_data': '{"IBM US Equity":[101,202]}',
+        'xbbg.field_exceptions':
+          '{"IBM US Equity":[{"field":"PX_BAD","category":"BAD_FLD","code":9,"subcategory":"INVALID_FIELD","message":"bad field"}]}',
+        'xbbg.security_errors':
+          '{"MSFT US Equity":{"category":"BAD_SEC","code":"10","subcategory":"INVALID_SECURITY","message":"bad security"}}',
+      }),
+      metadataIpc({}),
+      metadataIpc({ 'xbbg.eid_data': '{not-json' }),
+    ];
+    Reflect.set(engine, 'inner', {
+      request: async () => {
+        const next = buffers.shift();
+        if (next === undefined) {
+          throw new Error('unexpected request');
+        }
+        return next;
+      },
+    });
+
+    const valid = await engine.request({
+      backend: api.Backend.JSON,
+      operation: 'ReferenceDataRequest',
+      service: '//blp/refdata',
+    });
+    const validMetadata = valid as ResultMetadata;
+    expect(Array.isArray(valid)).toBe(true);
+    expect(validMetadata.eidData).toStrictEqual({ 'IBM US Equity': [101, 202] });
+    expect(validMetadata.securityErrors).toStrictEqual({
+      'MSFT US Equity': {
+        category: 'BAD_SEC',
+        code: '10',
+        message: 'bad security',
+        subcategory: 'INVALID_SECURITY',
+      },
+    });
+    expect(validMetadata.fieldExceptions).toStrictEqual({
+      'IBM US Equity': [
+        {
+          category: 'BAD_FLD',
+          code: 9,
+          field: 'PX_BAD',
+          message: 'bad field',
+          subcategory: 'INVALID_FIELD',
+        },
+      ],
+    });
+
+    const absent = await engine.request({
+      backend: api.Backend.JSON,
+      operation: 'ReferenceDataRequest',
+      service: '//blp/refdata',
+    });
+    const absentMetadata = absent as ResultMetadata;
+    expect(absentMetadata.metadata).toStrictEqual({});
+    expect(absentMetadata.eidData).toBeUndefined();
+
+    const malformed = await engine.request({
+      backend: api.Backend.JSON,
+      operation: 'ReferenceDataRequest',
+      service: '//blp/refdata',
+    });
+    const malformedMetadata = malformed as ResultMetadata;
+    expect(malformedMetadata.metadata).toStrictEqual({ 'xbbg.eid_data': '{not-json' });
+    expect(malformedMetadata.eidData).toBeUndefined();
   });
 });
 
@@ -753,6 +857,45 @@ describe('engine wrapper request plumbing', () => {
         },
       ],
     });
+  });
+
+  it('forwards returnEids on reference and historical request helpers', async () => {
+    const engine = captureRequests();
+
+    await engine.bdp(['IBM US Equity'], ['PX_LAST'], { returnEids: true });
+    await engine.bds(['IBM US Equity'], ['DVD_HIST_ALL'], { returnEids: true });
+    await engine.bdh(['IBM US Equity'], ['PX_LAST'], {
+      end: '2024-01-31',
+      returnEids: true,
+      start: '2024-01-01',
+    });
+
+    expect(engine.calls[0]?.returnEids).toBe(true);
+    expect(engine.calls[1]?.returnEids).toBe(true);
+    expect(engine.calls[2]?.returnEids).toBe(true);
+  });
+
+  it('wraps native errors from entitlement methods', async () => {
+    const engine = Object.create(api.Engine.prototype) as api.Engine;
+    Reflect.set(engine, 'inner', {
+      checkEntitlements: async () => {
+        throw new Error('[XBBG:VALIDATION] invalid eids');
+      },
+      identityIsAuthorized: async () => {
+        throw new Error('[XBBG:SESSION] not authorized');
+      },
+      seatType: async () => {
+        throw new Error('[XBBG:TIMEOUT] authorization timed out');
+      },
+    });
+
+    await expect(engine.seatType()).rejects.toBeInstanceOf(api.BlpTimeoutError);
+    await expect(engine.checkEntitlements('//blp/refdata', [101])).rejects.toBeInstanceOf(
+      api.BlpValidationError,
+    );
+    await expect(engine.identityIsAuthorized('//blp/refdata')).rejects.toBeInstanceOf(
+      api.BlpSessionError,
+    );
   });
 
   it('forwards intraday timezone controls and typed tick include options', async () => {

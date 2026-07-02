@@ -111,6 +111,11 @@ pub(crate) fn dict_to_request_params(dict: &Bound<'_, PyDict>) -> PyResult<Reque
         .get_item("include_security_errors")?
         .map(|v| v.extract())
         .transpose()?;
+    let return_eids: Option<bool> = dict
+        .get_item("return_eids")?
+        .map(|v| v.extract())
+        .transpose()?;
+
 
     let validate_fields: Option<bool> = dict
         .get_item("validate_fields")?
@@ -163,6 +168,7 @@ pub(crate) fn dict_to_request_params(dict: &Bound<'_, PyDict>) -> PyResult<Reque
         options,
         field_types,
         include_security_errors,
+        return_eids,
         validate_fields,
         search_spec,
         field_ids,

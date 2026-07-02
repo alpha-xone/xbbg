@@ -13,7 +13,7 @@ use super::refdata::{LongMode, OutputFormat};
 use super::typed_builder::{ArrowType, ColumnSet};
 use super::value_utils::{
     append_long_value_row, common_value_type, get_value_cached_datatype, top_level_response_error,
-    LongStringColumns, WideColumns,
+    FieldExceptionMeta, LongStringColumns, ResponseMetadata, SecurityErrorMeta, WideColumns,
 };
 use xbbg_core::{BlpError, DataType as BlpDataType, Message, Name, Value};
 
@@ -23,6 +23,14 @@ struct HistDataElementNames {
     security_error: Name,
     field_data: Name,
     date: Name,
+    eid_data: Name,
+    field_exceptions: Name,
+    field_id: Name,
+    error_info: Name,
+    category: Name,
+    code: Name,
+    subcategory: Name,
+    message: Name,
 }
 
 impl HistDataElementNames {
@@ -33,6 +41,14 @@ impl HistDataElementNames {
             security_error: Name::get_or_intern("securityError"),
             field_data: Name::get_or_intern("fieldData"),
             date: Name::get_or_intern("date"),
+            eid_data: Name::get_or_intern("eidData"),
+            field_exceptions: Name::get_or_intern("fieldExceptions"),
+            field_id: Name::get_or_intern("fieldId"),
+            error_info: Name::get_or_intern("errorInfo"),
+            category: Name::get_or_intern("category"),
+            code: Name::get_or_intern("code"),
+            subcategory: Name::get_or_intern("subcategory"),
+            message: Name::get_or_intern("message"),
         }
     }
 }
@@ -63,6 +79,9 @@ pub struct HistDataState {
     wide_columns: Option<WideColumns>,
     /// Security identifiers that returned securityError.
     failed_securities: Vec<String>,
+    /// Response-level diagnostics (eidData / securityError / fieldExceptions)
+    /// attached to the result batch as schema metadata.
+    response_meta: ResponseMetadata,
     /// Reply channel
     pub reply: oneshot::Sender<Result<RecordBatch, BlpError>>,
 }
@@ -134,6 +153,7 @@ impl HistDataState {
             long_columns: long_value_type.map(LongStringColumns::histdata),
             wide_columns,
             failed_securities: Vec::new(),
+            response_meta: ResponseMetadata::default(),
             reply,
         }
     }
@@ -179,6 +199,7 @@ impl HistDataState {
             return;
         }
         let reply = self.reply;
+        let response_meta = std::mem::take(&mut self.response_meta);
         let result = match self.format {
             OutputFormat::Long => match self.long_mode {
                 LongMode::String => {
@@ -214,7 +235,8 @@ impl HistDataState {
                 }
             }
         };
-        if let Ok(ref batch) = result {
+        let result = result.map(|batch| response_meta.attach(batch));
+        if let Ok(batch) = &result {
             xbbg_log::debug!(
                 rows = batch.num_rows(),
                 cols = batch.num_columns(),
@@ -257,11 +279,72 @@ impl HistDataState {
             .and_then(|e| e.get_str(0))
             .unwrap_or("");
 
+        // eidData rides alongside fieldData when returnEids was requested.
+        if let Some(eids) = security_data.get(&self.names.eid_data) {
+            self.response_meta.record_eid_data(ticker, &eids);
+        }
+
         // Check for security error
-        if security_data.get(&self.names.security_error).is_some() {
+        if let Some(security_error) = security_data.get(&self.names.security_error) {
+            let read_str = |name: &Name| {
+                security_error
+                    .get(name)
+                    .and_then(|e| e.get_str(0))
+                    .map(str::to_string)
+                    .unwrap_or_default()
+            };
+            let error = SecurityErrorMeta {
+                category: read_str(&self.names.category),
+                code: security_error
+                    .get(&self.names.code)
+                    .and_then(|e| e.get_i32(0))
+                    .unwrap_or_default(),
+                subcategory: read_str(&self.names.subcategory),
+                message: read_str(&self.names.message),
+            };
+            xbbg_log::warn!(
+                ticker = ticker,
+                category = error.category.as_str(),
+                code = error.code,
+                message = error.message.as_str(),
+                "HistoricalData securityError; skipping security"
+            );
             self.failed_securities.push(ticker.to_string());
-            trace!(ticker = ticker, "Security has error, skipping");
+            self.response_meta.record_security_error(ticker, error);
             return;
+        }
+
+        // Collect per-field exceptions (invalid fields, entitlement misses).
+        if let Some(field_exceptions) = security_data.get(&self.names.field_exceptions) {
+            for exc in field_exceptions.values() {
+                let field = exc
+                    .get(&self.names.field_id)
+                    .and_then(|e| e.get_str(0))
+                    .unwrap_or("?");
+                let err_info = exc.get(&self.names.error_info);
+                let read_err = |name: &Name| {
+                    err_info
+                        .as_ref()
+                        .and_then(|e| e.get(name))
+                        .and_then(|e| e.get_str(0))
+                        .map(str::to_string)
+                        .unwrap_or_default()
+                };
+                self.response_meta.record_field_exception(
+                    ticker,
+                    FieldExceptionMeta {
+                        field: field.to_string(),
+                        category: read_err(&self.names.category),
+                        code: err_info
+                            .as_ref()
+                            .and_then(|e| e.get(&self.names.code))
+                            .and_then(|e| e.get_i32(0))
+                            .unwrap_or_default(),
+                        subcategory: read_err(&self.names.subcategory),
+                        message: read_err(&self.names.message),
+                    },
+                );
+            }
         }
 
         // Get fieldData array

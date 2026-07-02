@@ -16,9 +16,12 @@ use napi::bindgen_prelude::{
 };
 use napi::{Error, Result, Status};
 
+use crate::StringPair;
+
 pub struct NativeArrowBatch {
     num_rows: usize,
     columns: Vec<NativeArrowColumn>,
+    metadata: Vec<StringPair>,
 }
 
 struct NativeArrowColumn {
@@ -94,6 +97,15 @@ impl NativeArrowBatch {
             ));
         }
 
+        let schema = batch.schema();
+        let metadata = schema
+            .metadata()
+            .iter()
+            .map(|(key, value)| StringPair {
+                key: key.clone(),
+                value: value.clone(),
+            })
+            .collect();
         let batch = Arc::new(batch);
         let schema = batch.schema();
         let columns = batch
@@ -114,6 +126,7 @@ impl NativeArrowBatch {
         Ok(Self {
             num_rows: batch.num_rows(),
             columns,
+            metadata,
         })
     }
 }
@@ -467,9 +480,14 @@ impl ToNapiValue for NativeArrowBatch {
     ) -> Result<napi::sys::napi_value> {
         let env = Env::from_raw(env);
         let mut obj = Object::new(&env)?;
+        let mut metadata = Object::new(&env)?;
+        for pair in value.metadata {
+            metadata.set_named_property(&pair.key, pair.value)?;
+        }
         obj.set_named_property("kind", "zeroCopy")?;
         obj.set_named_property("numRows", checked_js_u32_len("numRows", value.num_rows)?)?;
         obj.set_named_property("columns", value.columns)?;
+        obj.set_named_property("metadata", metadata)?;
         Ok(obj.raw())
     }
 }

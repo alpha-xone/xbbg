@@ -17,6 +17,9 @@ from .blp import (
     abql as abql,
     abqr as abqr,
     absrch as absrch,
+    acheck_entitlements as acheck_entitlements,
+    aidentity_is_authorized as aidentity_is_authorized,
+    aseat_type as aseat_type,
     arequest as arequest,
     bcurves as bcurves,
     bdh as bdh,
@@ -32,7 +35,10 @@ from .blp import (
     bql as bql,
     bqr as bqr,
     bsrch as bsrch,
+    check_entitlements as check_entitlements,
+    identity_is_authorized as identity_is_authorized,
     request as request,
+    seat_type as seat_type,
 )
 
 __all__ = [
@@ -50,6 +56,9 @@ __all__ = [
     "abql",
     "abqr",
     "absrch",
+    "acheck_entitlements",
+    "aidentity_is_authorized",
+    "aseat_type",
     "arequest",
     "bcurves",
     "bdh",
@@ -65,5 +74,8 @@ __all__ = [
     "bql",
     "bqr",
     "bsrch",
+    "check_entitlements",
+    "identity_is_authorized",
     "request",
+    "seat_type",
 ]

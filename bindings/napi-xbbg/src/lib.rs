@@ -155,6 +155,7 @@ pub struct RequestInput {
     pub options: Option<Vec<StringPair>>,
     pub field_types: Option<Vec<StringPair>>,
     pub include_security_errors: Option<bool>,
+    pub return_eids: Option<bool>,
     pub validate_fields: Option<bool>,
     pub search_spec: Option<String>,
     pub field_ids: Option<Vec<String>>,
@@ -187,6 +188,12 @@ pub struct NativeSubscriptionUpdate {
     pub fields: Vec<String>,
     pub values: Vec<serde_json::Value>,
     pub value_kinds: Vec<String>,
+}
+
+#[napi(object)]
+pub struct EntitlementReport {
+    pub entitled: bool,
+    pub failed_eids: Vec<i32>,
 }
 
 fn to_i64_saturating(value: u64) -> i64 {
@@ -906,6 +913,57 @@ impl JsEngine {
             .await
             .map_err(blp_async_error_to_napi)?;
         to_ipc_buffer(batch)
+    }
+
+    /// Return the Bloomberg identity seat type: "BPS", "NONBPS", or "INVALID".
+    ///
+    /// Identity operations authorize lazily using the engine auth config when
+    /// configured, otherwise the Desktop terminal OS-logon user. The first call
+    /// may block for a few seconds and transient authorization failures are
+    /// retryable by calling again.
+    #[napi]
+    pub async fn seat_type(&self) -> napi::Result<String> {
+        self.engine
+            .seat_type()
+            .await
+            .map(|seat| seat.as_str().to_string())
+            .map_err(blp_async_error_to_napi)
+    }
+
+    /// Check whether the authorized identity is entitled to all supplied EIDs.
+    ///
+    /// Identity operations authorize lazily using the engine auth config when
+    /// configured, otherwise the Desktop terminal OS-logon user. The first call
+    /// may block for a few seconds and transient authorization failures are
+    /// retryable by calling again.
+    #[napi]
+    pub async fn check_entitlements(
+        &self,
+        service: String,
+        eids: Vec<i32>,
+    ) -> napi::Result<EntitlementReport> {
+        self.engine
+            .check_entitlements(&service, &eids)
+            .await
+            .map(|report| EntitlementReport {
+                entitled: report.entitled,
+                failed_eids: report.failed_eids,
+            })
+            .map_err(blp_async_error_to_napi)
+    }
+
+    /// Return whether the authorized identity may use the Bloomberg service.
+    ///
+    /// Identity operations authorize lazily using the engine auth config when
+    /// configured, otherwise the Desktop terminal OS-logon user. The first call
+    /// may block for a few seconds and transient authorization failures are
+    /// retryable by calling again.
+    #[napi]
+    pub async fn identity_is_authorized(&self, service: String) -> napi::Result<bool> {
+        self.engine
+            .identity_is_authorized(&service)
+            .await
+            .map_err(blp_async_error_to_napi)
     }
 
     #[napi]
@@ -2034,6 +2092,7 @@ mod tests {
             options: Some(vec![pair("includeConditionCodes", "true")]),
             field_types: Some(vec![pair("PX_LAST", "Float64")]),
             include_security_errors: Some(true),
+            return_eids: Some(true),
             validate_fields: Some(false),
             search_spec: Some("price".to_string()),
             field_ids: Some(vec!["PX_LAST".to_string()]),
@@ -2107,6 +2166,7 @@ mod tests {
             Some(&"Float64".to_string())
         );
         assert!(params.include_security_errors);
+        assert!(params.return_eids);
         assert_eq!(params.validate_fields, Some(false));
         assert_eq!(params.search_spec.as_deref(), Some("price"));
         assert_eq!(

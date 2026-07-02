@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Bloomberg entitlement IDs and identity checks across bindings**: Rust, Python, JavaScript, and MCP request paths now accept opt-in `returnEids` / `return_eids` for reference and historical data. Results expose `eidData` plus structured Bloomberg `securityError` and `fieldExceptions` metadata; Python adds `seat_type()`, `check_entitlements()`, and `identity_is_authorized()` helpers, and `@xbbg/core` adds matching `engine.seatType()`, `engine.checkEntitlements()`, and `engine.identityIsAuthorized()` APIs.
+
+### Fixed
+
+- **Bloomberg response diagnostics survive every result backend**: Reference, historical, bulk, raw/generic, Arrow IPC, NAPI zero-copy, pandas, JavaScript JSON, and MCP JSON paths now preserve entitlement IDs and Bloomberg security/field diagnostics instead of dropping them during format conversion or shard merging.
+
 ## [1.4.1] - 2026-06-26
 
 ### Fixed

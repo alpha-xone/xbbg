@@ -48,7 +48,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Datelike, NaiveDate, Timelike};
 use pyo3::exceptions::{PyRuntimeError, PyStopAsyncIteration, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDate, PyDateTime, PyDict, PyTime, PyTzInfo};
+use pyo3::types::{PyBool, PyDate, PyDateTime, PyDict, PyTime, PyTzInfo};
 use pyo3_async_runtimes::tokio::future_into_py;
 #[cfg(feature = "stub-gen")]
 use pyo3_stub_gen::{define_stub_info_gatherer, derive::*};
@@ -1033,6 +1033,28 @@ impl TryFrom<&PyEngineConfig> for EngineConfig {
     }
 }
 
+/// Result of a Bloomberg entitlement check.
+#[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
+#[pyclass(module = "xbbg._core", frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct EntitlementReport {
+    #[pyo3(get)]
+    entitled: bool,
+    #[pyo3(get)]
+    failed_eids: Vec<i32>,
+}
+
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
+#[pymethods]
+impl EntitlementReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "EntitlementReport(entitled={}, failed_eids={:?})",
+            self.entitled, self.failed_eids
+        )
+    }
+}
+
 /// Python wrapper for the xbbg Engine.
 #[cfg_attr(feature = "stub-gen", gen_stub_pyclass)]
 #[pyclass]
@@ -1151,6 +1173,74 @@ impl PyEngine {
             debug!(num_rows = batch.num_rows(), "PyEngine: request completed");
 
             Python::attach(|py| native_arrow::record_batch_to_arrow_record_batch(py, batch))
+        })
+    }
+
+    /// Return the seat type for the lazily authorized identity.
+    ///
+    /// Authorization is performed on first use: the configured auth identity is used when
+    /// EngineConfig has auth settings, otherwise the Desktop terminal OS-logon user is used.
+    /// First use may take a moment and authorization timeout failures are retryable.
+    fn seat_type<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.engine.clone();
+        shutdown_safe_future(py, &self.engine, async move {
+            let seat_type = engine
+                .seat_type()
+                .await
+                .map_err(blp_async_error_to_pyerr)?;
+            Python::attach(|py| Ok(seat_type.as_str().into_pyobject(py)?.into_any().unbind()))
+        })
+    }
+
+    /// Check EID entitlements for the lazily authorized identity.
+    ///
+    /// Authorization is performed on first use: the configured auth identity is used when
+    /// EngineConfig has auth settings, otherwise the Desktop terminal OS-logon user is used.
+    /// First use may take a moment and authorization timeout failures are retryable.
+    #[pyo3(signature = (service, eids))]
+    fn check_entitlements<'py>(
+        &self,
+        py: Python<'py>,
+        service: String,
+        eids: Vec<i32>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.engine.clone();
+        shutdown_safe_future(py, &self.engine, async move {
+            let report = engine
+                .check_entitlements(&service, &eids)
+                .await
+                .map_err(blp_async_error_to_pyerr)?;
+            Python::attach(|py| {
+                Py::new(
+                    py,
+                    EntitlementReport {
+                        entitled: report.entitled,
+                        failed_eids: report.failed_eids,
+                    },
+                )
+                .map(|obj| obj.into_any())
+            })
+        })
+    }
+
+    /// Return whether the lazily authorized identity is authorized for a service.
+    ///
+    /// Authorization is performed on first use: the configured auth identity is used when
+    /// EngineConfig has auth settings, otherwise the Desktop terminal OS-logon user is used.
+    /// First use may take a moment and authorization timeout failures are retryable.
+    #[pyo3(signature = (service))]
+    fn identity_is_authorized<'py>(
+        &self,
+        py: Python<'py>,
+        service: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.engine.clone();
+        shutdown_safe_future(py, &self.engine, async move {
+            let authorized = engine
+                .identity_is_authorized(&service)
+                .await
+                .map_err(blp_async_error_to_pyerr)?;
+            Python::attach(|py| Ok(PyBool::new(py, authorized).to_owned().into_any().unbind()))
         })
     }
 
@@ -2542,9 +2632,10 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(sdk_version, m)?)?;
     native_arrow::register(m)?;
-    m.add_class::<PyEngine>()?;
+    m.add_class::<EntitlementReport>()?;
     m.add_class::<PyEngineConfig>()?;
     m.add_class::<PySubscription>()?;
+    m.add_class::<PyEngine>()?;
 
     // Register exception classes for use from Python
     m.add("BlpError", _py.get_type::<BlpErrorBase>())?;
@@ -2886,6 +2977,7 @@ mod tests {
                 "ArrowRecordBatch",
                 "ArrowSchema",
                 "ArrowField",
+                "EntitlementReport",
                 "BlpError",
                 "BlpSessionError",
                 "BlpRequestError",
@@ -2950,6 +3042,7 @@ mod tests {
             .expect("field_types");
             dict.set_item("include_security_errors", true)
                 .expect("include_security_errors");
+            dict.set_item("return_eids", true).expect("return_eids");
             dict.set_item("validate_fields", false)
                 .expect("validate_fields");
             dict.set_item("search_spec", "price").expect("search_spec");
@@ -3016,6 +3109,7 @@ mod tests {
                 Some(&"Float64".to_string())
             );
             assert!(params.include_security_errors);
+            assert!(params.return_eids);
             assert_eq!(params.validate_fields, Some(false));
             assert_eq!(params.search_spec.as_deref(), Some("price"));
             assert_eq!(

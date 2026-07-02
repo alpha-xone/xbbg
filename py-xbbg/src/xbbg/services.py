@@ -85,6 +85,8 @@ class RequestParams:
         format: Output format (LONG, LONG_TYPED, LONG_WITH_METADATA).
         include_security_errors: When True for ReferenceData requests, include
             ``__SECURITY_ERROR__`` rows for securities that failed.
+        return_eids: When True for ReferenceData and HistoricalData requests,
+            ask Bloomberg to return EID entitlement metadata alongside the data.
         validate_fields: Optional per-request override for field validation.
             ``True`` forces strict validation, ``False`` disables it, and
             ``None`` (default) follows engine configuration.
@@ -114,6 +116,7 @@ class RequestParams:
     extractor: ExtractorHint | None = None
     format: Format | None = None
     include_security_errors: bool = False
+    return_eids: bool = False
     validate_fields: bool | None = None
 
     def __post_init__(self) -> None:
@@ -274,6 +277,8 @@ class RequestParams:
             result["format"] = self.format.value if isinstance(self.format, Format) else self.format
         if self.include_security_errors:
             result["include_security_errors"] = True
+        if self.return_eids:
+            result["return_eids"] = True
         if self.validate_fields is not None:
             result["validate_fields"] = self.validate_fields
 

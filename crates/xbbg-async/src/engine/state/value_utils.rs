@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use super::refdata::LongMode;
@@ -9,6 +9,186 @@ use arrow_array::ArrayRef;
 use arrow_array::RecordBatch;
 use arrow_schema::{Field, Schema};
 use xbbg_core::{BlpError, DataType as BlpDataType, Element, Message, Name, Value};
+
+/// Schema-metadata key carrying per-security entitlement IDs
+/// (`securityData[].eidData`, JSON: `{"<ticker>": [eid, ...]}`).
+pub const METADATA_KEY_EID_DATA: &str = "xbbg.eid_data";
+/// Schema-metadata key carrying per-security `securityError` details
+/// (JSON: `{"<ticker>": {"category", "code", "subcategory", "message"}}`).
+pub const METADATA_KEY_SECURITY_ERRORS: &str = "xbbg.security_errors";
+/// Schema-metadata key carrying per-security `fieldExceptions`
+/// (JSON: `{"<ticker>": [{"field", "category", "code", "subcategory", "message"}, ...]}`).
+pub const METADATA_KEY_FIELD_EXCEPTIONS: &str = "xbbg.field_exceptions";
+
+/// `securityError` details captured for batch metadata.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SecurityErrorMeta {
+    pub category: String,
+    pub code: i32,
+    pub subcategory: String,
+    pub message: String,
+}
+
+/// One `fieldExceptions[]` entry captured for batch metadata.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct FieldExceptionMeta {
+    pub field: String,
+    pub category: String,
+    pub code: i32,
+    pub subcategory: String,
+    pub message: String,
+}
+
+/// Response-level diagnostics that must survive into the result batch: raw
+/// responses carry `eidData` / `securityError` / `fieldExceptions` next to the
+/// field data, and dropping them silently is exactly the failure mode a
+/// market-data consumer cannot detect. Collected during message processing
+/// and attached to the final [`RecordBatch`] as Arrow schema metadata (JSON
+/// values under the `xbbg.*` keys above) so every output format — long, wide,
+/// typed — and every binding surface sees them without shape changes.
+#[derive(Debug, Default)]
+pub(crate) struct ResponseMetadata {
+    eid_data: BTreeMap<String, Vec<i64>>,
+    security_errors: BTreeMap<String, SecurityErrorMeta>,
+    field_exceptions: BTreeMap<String, Vec<FieldExceptionMeta>>,
+}
+
+impl ResponseMetadata {
+    /// Record `securityData[].eidData` (an int array element) for `ticker`.
+    pub(crate) fn record_eid_data(&mut self, ticker: &str, eids: &Element<'_>) {
+        let n = eids.len();
+        if n == 0 {
+            return;
+        }
+        let entry = self.eid_data.entry(ticker.to_string()).or_default();
+        for i in 0..n {
+            if let Some(eid) = eids.get_i32(i) {
+                entry.push(i64::from(eid));
+            }
+        }
+        if entry.is_empty() {
+            self.eid_data.remove(ticker);
+        }
+    }
+
+    pub(crate) fn record_security_error(&mut self, ticker: &str, error: SecurityErrorMeta) {
+        self.security_errors.insert(ticker.to_string(), error);
+    }
+
+    pub(crate) fn record_field_exception(&mut self, ticker: &str, exception: FieldExceptionMeta) {
+        self.field_exceptions
+            .entry(ticker.to_string())
+            .or_default()
+            .push(exception);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.eid_data.is_empty()
+            && self.security_errors.is_empty()
+            && self.field_exceptions.is_empty()
+    }
+
+    /// Attach the collected diagnostics to `batch` as schema metadata.
+    /// Infallible by design: a metadata failure must never turn a good data
+    /// batch into an error, so serialization problems only log.
+    pub(crate) fn attach(self, batch: RecordBatch) -> RecordBatch {
+        if self.is_empty() {
+            return batch;
+        }
+        let mut metadata = batch.schema_ref().metadata().clone();
+        Self::insert_json(&mut metadata, METADATA_KEY_EID_DATA, &self.eid_data);
+        Self::insert_json(
+            &mut metadata,
+            METADATA_KEY_SECURITY_ERRORS,
+            &self.security_errors,
+        );
+        Self::insert_json(
+            &mut metadata,
+            METADATA_KEY_FIELD_EXCEPTIONS,
+            &self.field_exceptions,
+        );
+        let schema = Arc::new(
+            batch
+                .schema_ref()
+                .as_ref()
+                .clone()
+                .with_metadata(metadata),
+        );
+        match batch.clone().with_schema(schema) {
+            Ok(with_meta) => with_meta,
+            Err(err) => {
+                xbbg_log::warn!(error = %err, "failed to attach response metadata to batch");
+                batch
+            }
+        }
+    }
+
+    fn insert_json<T: serde::Serialize>(
+        metadata: &mut HashMap<String, String>,
+        key: &str,
+        value: &T,
+    ) {
+        let is_empty = match serde_json::to_value(value) {
+            Ok(serde_json::Value::Object(map)) => map.is_empty(),
+            _ => false,
+        };
+        if is_empty {
+            return;
+        }
+        match serde_json::to_string(value) {
+            Ok(json) => {
+                metadata.insert(key.to_string(), json);
+            }
+            Err(err) => {
+                xbbg_log::warn!(key = key, error = %err, "failed to serialize response metadata");
+            }
+        }
+    }
+
+    /// Union response metadata across sharded result batches so shard
+    /// concatenation (which keeps only the first batch's schema) does not
+    /// silently drop diagnostics from later shards. Shards partition
+    /// securities, so per-ticker entries never conflict.
+    pub(crate) fn union_of(batches: &[RecordBatch]) -> Self {
+        let mut merged = Self::default();
+        for batch in batches {
+            let metadata = batch.schema_ref().metadata();
+            if let Some(map) = Self::parse_json::<BTreeMap<String, Vec<i64>>>(
+                metadata.get(METADATA_KEY_EID_DATA),
+            ) {
+                merged.eid_data.extend(map);
+            }
+            if let Some(map) = Self::parse_json::<BTreeMap<String, SecurityErrorMeta>>(
+                metadata.get(METADATA_KEY_SECURITY_ERRORS),
+            ) {
+                merged.security_errors.extend(map);
+            }
+            if let Some(map) = Self::parse_json::<BTreeMap<String, Vec<FieldExceptionMeta>>>(
+                metadata.get(METADATA_KEY_FIELD_EXCEPTIONS),
+            ) {
+                for (ticker, exceptions) in map {
+                    merged
+                        .field_exceptions
+                        .entry(ticker)
+                        .or_default()
+                        .extend(exceptions);
+                }
+            }
+        }
+        merged
+    }
+
+    fn parse_json<T: serde::de::DeserializeOwned>(value: Option<&String>) -> Option<T> {
+        let value = value?;
+        match serde_json::from_str(value) {
+            Ok(parsed) => Some(parsed),
+            Err(err) => {
+                xbbg_log::warn!(error = %err, "failed to parse response metadata JSON");
+                None
+            }
+        }
+    }
+}
 
 /// Extract a top-level Bloomberg `responseError` from a response message.
 ///
@@ -853,5 +1033,81 @@ mod tests {
         assert_eq!(dates.value(1), 20_001);
         assert_eq!(fields.value(1), "VOLUME");
         assert!(values.is_null(1));
+    }
+
+    fn tiny_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ticker",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]));
+        RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec!["IBM US Equity"]))],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn response_metadata_attach_and_union_round_trip() {
+        // Shard 1: entitled security with EIDs + a field exception.
+        let mut meta1 = ResponseMetadata::default();
+        meta1.eid_data.insert("IBM US Equity".to_string(), vec![14005, 35009]);
+        meta1.field_exceptions.insert(
+            "IBM US Equity".to_string(),
+            vec![FieldExceptionMeta {
+                field: "BAD_FIELD".to_string(),
+                category: "BAD_FLD".to_string(),
+                code: 9,
+                subcategory: "NOT_APPLICABLE_TO_REF_DATA".to_string(),
+                message: "Field not applicable".to_string(),
+            }],
+        );
+        let batch1 = meta1.attach(tiny_batch());
+        assert!(batch1
+            .schema_ref()
+            .metadata()
+            .contains_key(METADATA_KEY_EID_DATA));
+
+        // Shard 2: unentitled security — securityError AND eidData together
+        // (the SAPI/B-PIPE case: EIDs are reported for securities the
+        // identity cannot see).
+        let mut meta2 = ResponseMetadata::default();
+        meta2.eid_data.insert("PRIVATE US Equity".to_string(), vec![9999]);
+        meta2.security_errors.insert(
+            "PRIVATE US Equity".to_string(),
+            SecurityErrorMeta {
+                category: "AUTHORIZATION".to_string(),
+                code: 17,
+                subcategory: "NOT_ENTITLED".to_string(),
+                message: "Not entitled to security".to_string(),
+            },
+        );
+        let batch2 = meta2.attach(tiny_batch());
+
+        // Empty metadata attaches nothing.
+        let batch3 = ResponseMetadata::default().attach(tiny_batch());
+        assert!(batch3.schema_ref().metadata().is_empty());
+
+        // Union across shards preserves every entry from both sides.
+        let merged = ResponseMetadata::union_of(&[batch1, batch2, batch3]);
+        assert_eq!(
+            merged.eid_data.get("IBM US Equity"),
+            Some(&vec![14005, 35009])
+        );
+        assert_eq!(merged.eid_data.get("PRIVATE US Equity"), Some(&vec![9999]));
+        let err = merged.security_errors.get("PRIVATE US Equity").unwrap();
+        assert_eq!(err.code, 17);
+        assert_eq!(err.subcategory, "NOT_ENTITLED");
+        let excs = merged.field_exceptions.get("IBM US Equity").unwrap();
+        assert_eq!(excs.len(), 1);
+        assert_eq!(excs[0].field, "BAD_FIELD");
+
+        // Re-attach of the merged map keeps JSON parseable end to end.
+        let final_batch = merged.attach(tiny_batch());
+        let re_merged = ResponseMetadata::union_of(std::slice::from_ref(&final_batch));
+        assert_eq!(re_merged.eid_data.len(), 2);
+        assert_eq!(re_merged.security_errors.len(), 1);
+        assert_eq!(re_merged.field_exceptions.len(), 1);
     }
 }

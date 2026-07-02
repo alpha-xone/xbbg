@@ -87,6 +87,12 @@ BACKEND_EXPORTS = (
 PACKAGE_GENERIC_EXPORTS = (
     "arequest",
     "request",
+    "aseat_type",
+    "seat_type",
+    "acheck_entitlements",
+    "check_entitlements",
+    "aidentity_is_authorized",
+    "identity_is_authorized",
 )
 
 PACKAGE_SYNC_EXPORTS = (
@@ -226,6 +232,12 @@ BLP_MODULE_EXPORTS = (
     "Backend",
     "arequest",
     "request",
+    "aseat_type",
+    "seat_type",
+    "acheck_entitlements",
+    "check_entitlements",
+    "aidentity_is_authorized",
+    "identity_is_authorized",
     "abdp",
     "abdh",
     "abds",

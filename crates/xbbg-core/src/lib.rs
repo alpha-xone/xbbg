@@ -49,7 +49,7 @@ pub use datetime::HighPrecisionDatetime;
 pub use element::{ChildrenIter, Element, ValuesIter};
 pub use errors::{BlpError, Result};
 pub use event::{Event, EventType};
-pub use identity::{Identity, SeatType};
+pub use identity::{EntitlementCheck, Identity, SeatType};
 pub use message::Message;
 pub use name::{clear_name_cache, name_cache_size, Name};
 pub use request::Request;

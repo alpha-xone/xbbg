@@ -11,7 +11,7 @@ import pytest
 
 from xbbg import blp
 from xbbg._core import ArrowTable
-from xbbg.backend import check_backend, convert_backend_frame
+from xbbg.backend import _attach_xbbg_metadata_attrs, check_backend, convert_backend_frame
 from xbbg.blp import Backend
 
 
@@ -126,6 +126,27 @@ class TestConvertBackendPandas:
         assert isinstance(result, pd.DataFrame)
         assert list(result.columns) == arrow_table.column_names
         assert len(result) == arrow_table.num_rows
+
+    def test_attach_xbbg_metadata_attrs_copies_present_native_metadata(self):
+        pd = pytest.importorskip("pandas")
+
+        class FakeTable:
+            metadata = {
+                "xbbg.eid_data": '{"IBM US Equity":[101,202]}',
+                "xbbg.security_errors": '{"BAD Ticker":{"message":"bad security"}}',
+            }
+            eid_data = {"IBM US Equity": [101, 202]}
+            security_errors = {"BAD Ticker": {"message": "bad security"}}
+            field_exceptions = None
+
+        frame = pd.DataFrame({"ticker": ["IBM US Equity"]})
+
+        result = _attach_xbbg_metadata_attrs(frame, FakeTable())
+
+        assert result is frame
+        assert frame.attrs["xbbg_eid_data"] == {"IBM US Equity": [101, 202]}
+        assert frame.attrs["xbbg_security_errors"] == {"BAD Ticker": {"message": "bad security"}}
+        assert "xbbg_field_exceptions" not in frame.attrs
 
     def test_convert_pandas_does_not_require_pyarrow(self, arrow_table: Any, monkeypatch: pytest.MonkeyPatch):
         pd = pytest.importorskip("pandas")

@@ -326,6 +326,128 @@ impl AsyncSession {
 
         Ok(())
     }
+
+    /// Begin asynchronous authorization of an identity described by
+    /// `auth_options` (blpapi_abstractsession.h:540-560). One or more
+    /// `AUTHORIZATION_STATUS` events tagged with `cid` reach the handler:
+    /// `AuthorizationSuccess` when the identity is ready (retrieve it with
+    /// [`AsyncSession::authorized_identity`]), `AuthorizationFailure` on
+    /// rejection, and `AuthorizationRevoked` if entitlements are later
+    /// withdrawn.
+    pub fn generate_authorized_identity_async(
+        &self,
+        auth_options: &crate::auth::AuthOptions,
+        cid: &CorrelationId,
+    ) -> Result<()> {
+        let mut cid_ffi = cid.to_ffi();
+        // SAFETY: valid session pointer (getAbstractSession is a straight
+        // handle projection, never null for a live session —
+        // blpapi_session.h:1197); auth options pointer is valid for the call.
+        let rc = unsafe {
+            let abstract_session = crate::ffi::blpapi_Session_getAbstractSession(self.ptr);
+            crate::ffi::blpapi_AbstractSession_generateAuthorizedIdentityAsync(
+                abstract_session,
+                auth_options.as_ptr(),
+                &mut cid_ffi,
+            )
+        };
+        if rc != 0 {
+            return Err(BlpError::Internal {
+                detail: format!("generateAuthorizedIdentityAsync failed with rc={rc}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Retrieve the authorized identity produced by a completed
+    /// [`AsyncSession::generate_authorized_identity_async`] call.
+    ///
+    /// Returns an owned, reference-counted handle (the C++ wrapper adopts it
+    /// into `Identity(identity)`, single release — blpapi_abstractsession.h:749-753);
+    /// each call materializes a fresh handle, so use-and-drop on the calling
+    /// thread is safe. Errors until `AuthorizationSuccess` has been delivered
+    /// for `cid`.
+    pub fn authorized_identity(&self, cid: &CorrelationId) -> Result<crate::Identity> {
+        let cid_ffi = cid.to_ffi();
+        let mut identity_ptr: *mut crate::ffi::blpapi_Identity_t = std::ptr::null_mut();
+        // SAFETY: valid session pointer; cid and out-param are valid for the
+        // call; the returned handle is owned by the new `Identity` (released
+        // exactly once in its Drop).
+        let rc = unsafe {
+            let abstract_session = crate::ffi::blpapi_Session_getAbstractSession(self.ptr);
+            crate::ffi::blpapi_AbstractSession_getAuthorizedIdentity(
+                abstract_session,
+                &cid_ffi,
+                &mut identity_ptr,
+            )
+        };
+        if rc != 0 {
+            return Err(BlpError::Internal {
+                detail: format!("getAuthorizedIdentity failed with rc={rc}"),
+            });
+        }
+        crate::Identity::from_raw(identity_ptr)
+    }
+
+    /// Request a token for the session's effective authentication user
+    /// (default: OS logon). The outcome arrives at the handler as a
+    /// `TOKEN_STATUS` event tagged with `cid`: `TokenGenerationSuccess`
+    /// carries a `token` element, `TokenGenerationFailure` a `reason`.
+    pub fn generate_token(&self, cid: &CorrelationId) -> Result<()> {
+        let mut cid_ffi = cid.to_ffi();
+        // SAFETY: valid session pointer; null event queue routes the
+        // TOKEN_STATUS event to the session handler.
+        let rc = unsafe {
+            crate::ffi::blpapi_Session_generateToken(self.ptr, &mut cid_ffi, std::ptr::null_mut())
+        };
+        if rc != 0 {
+            return Err(BlpError::Internal {
+                detail: format!("blpapi_Session_generateToken failed with rc={rc}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Create a fresh, not-yet-authorized identity handle for this session.
+    /// Authorize it with [`AsyncSession::send_authorization_request`].
+    pub fn create_identity(&self) -> Result<crate::Identity> {
+        // SAFETY: valid session pointer; the returned handle is owned by the
+        // new `Identity` (released exactly once in its Drop).
+        let identity_ptr = unsafe { crate::ffi::blpapi_Session_createIdentity(self.ptr) };
+        crate::Identity::from_raw(identity_ptr)
+    }
+
+    /// Send an `AuthorizationRequest` (from `//blp/apiauth`) that authorizes
+    /// `identity` in place. The outcome reaches the handler tagged with
+    /// `cid`: an `AuthorizationSuccess` or `AuthorizationFailure` message
+    /// (RESPONSE / PARTIAL_RESPONSE / AUTHORIZATION_STATUS event).
+    pub fn send_authorization_request(
+        &self,
+        request: &Request,
+        identity: &mut crate::Identity,
+        cid: &CorrelationId,
+    ) -> Result<()> {
+        let mut cid_ffi = cid.to_ffi();
+        // SAFETY: valid session/request/identity pointers; null event queue
+        // routes the outcome to the session handler.
+        let rc = unsafe {
+            crate::ffi::blpapi_Session_sendAuthorizationRequest(
+                self.ptr,
+                request.as_ptr(),
+                identity.as_ptr(),
+                &mut cid_ffi,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        if rc != 0 {
+            return Err(BlpError::Internal {
+                detail: format!("blpapi_Session_sendAuthorizationRequest failed with rc={rc}"),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl Drop for AsyncSession {

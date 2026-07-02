@@ -6,6 +6,18 @@ use super::SlabKey;
 /// Dispatch CIDs never set this bit, keeping the two ID spaces disjoint.
 pub(super) const SERVICE_OPEN_CID_TAG: i64 = 1_i64 << 62;
 
+/// Fixed CorrelationId for the worker's authorized-identity request
+/// (`generateAuthorizedIdentityAsync`). Disjoint from every other CID space:
+/// bit 62 is clear (never a service-open CID) and the low 32 slot bits are
+/// zero, so `DispatchKey::from_correlation_id` rejects it (`SLOT_MASK` check)
+/// and it can never alias a request or subscription slot.
+pub(super) const IDENTITY_CID: i64 = 1_i64 << 61;
+
+/// Fixed CorrelationId for the worker's `generateToken` call (classic
+/// authorization flow). Same disjointness argument as [`IDENTITY_CID`]:
+/// bit 62 clear, low 32 slot bits zero.
+pub(super) const IDENTITY_TOKEN_CID: i64 = 0b11_i64 << 60;
+
 const SLOT_BITS: u32 = 32;
 const SLOT_MASK: i64 = (1_i64 << SLOT_BITS) - 1;
 const GENERATION_MASK: i64 = (1_i64 << 30) - 1;
@@ -144,5 +156,17 @@ mod tests {
         // dispatch rejects non-integer correlation IDs.
         let ptr_cid = unsafe { CorrelationId::new_ptr(std::ptr::null_mut()) };
         assert!(DispatchKey::from_correlation_id(&ptr_cid).is_none());
+    }
+
+    #[test]
+    fn identity_cid_is_disjoint_from_all_dispatch_spaces() {
+        for cid in [IDENTITY_CID, IDENTITY_TOKEN_CID] {
+            // Slot bits are zero → never decodes to a slab key.
+            assert!(DispatchKey::from_correlation_id(&CorrelationId::Int(cid)).is_none());
+            // Bit 62 clear → never matches a service-open CID.
+            assert_eq!(cid & SERVICE_OPEN_CID_TAG, 0);
+            assert!(cid > 0);
+        }
+        assert_ne!(IDENTITY_CID, IDENTITY_TOKEN_CID);
     }
 }

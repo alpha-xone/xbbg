@@ -114,6 +114,7 @@ if TYPE_CHECKING:
         format: Format | str | None = None,
         field_types: dict[str, str] | None = None,
         include_security_errors: bool = False,
+        return_eids: bool = False,
         validate_fields: bool | None = None,
         **kwargs: Any,
     ) -> DataFrameResult:
@@ -130,6 +131,7 @@ if TYPE_CHECKING:
         format: Format | str | None = None,
         field_types: dict[str, str] | None = None,
         validate_fields: bool | None = None,
+        return_eids: bool = False,
         **kwargs: Any,
     ) -> DataFrameResult:
         """Sync Bloomberg historical data (BDH). See ``abdh`` for details."""
@@ -449,6 +451,40 @@ def is_connected() -> bool:
     if _engine is None:
         return False
     return _engine.is_connected()
+
+
+async def aseat_type() -> str:
+    """Return the seat type for the lazily authorized Bloomberg identity.
+
+    The engine authorizes on first use: configured auth is used when present,
+    otherwise the Desktop terminal OS-logon user is used.  First use may take a
+    moment and timeout failures are retryable.
+    """
+    return await _get_engine().seat_type()
+
+
+async def acheck_entitlements(
+    eids: Sequence[int],
+    service: str = Service.REFDATA.value,
+):
+    """Check EID entitlements for the lazily authorized Bloomberg identity.
+
+    The engine authorizes on first use: configured auth is used when present,
+    otherwise the Desktop terminal OS-logon user is used.  First use may take a
+    moment and timeout failures are retryable.
+    """
+    return await _get_engine().check_entitlements(service, list(eids))
+
+
+async def aidentity_is_authorized(service: str = Service.REFDATA.value) -> bool:
+    """Return whether the lazily authorized identity is authorized for *service*.
+
+    The engine authorizes on first use: configured auth is used when present,
+    otherwise the Desktop terminal OS-logon user is used.  First use may take a
+    moment and timeout failures are retryable.
+    """
+    return await _get_engine().identity_is_authorized(service)
+
 
 
 _VALID_CONFIG_KEYS: frozenset[str] = frozenset(
@@ -1538,6 +1574,7 @@ async def arequest(
     extractor: ExtractorHint | str | None = None,
     format: Format | str | None = None,
     include_security_errors: bool = False,
+    return_eids: bool = False,
     validate_fields: bool | None = None,
     backend: Backend | str | None = None,
     request_tz: str | None = None,
@@ -1593,6 +1630,8 @@ async def arequest(
         format: Output format hint for result structure.
         include_security_errors: Include ``__SECURITY_ERROR__`` rows for
             failed securities on ReferenceData requests.
+        return_eids: Request EID entitlement metadata for ReferenceData and
+            HistoricalData requests.
         validate_fields: Optional per-request override for field validation.
             ``True`` forces strict validation, ``False`` disables it, and
             ``None`` follows engine-level validation mode.
@@ -1719,6 +1758,7 @@ async def arequest(
         extractor=extractor_hint,
         format=format_hint,
         include_security_errors=include_security_errors,
+        return_eids=return_eids,
         validate_fields=validate_fields,
         request_tz=request_tz,
         output_tz=output_tz,
@@ -1771,6 +1811,7 @@ async def abdp(
     format: Format | str | None = None,
     field_types: dict[str, str] | None = None,
     include_security_errors: bool = False,
+    return_eids: bool = False,
     validate_fields: bool | None = None,
     **kwargs,
 ):
@@ -1789,6 +1830,7 @@ async def abdp(
             If None, types are auto-resolved from Bloomberg field metadata.
         include_security_errors: Include ``__SECURITY_ERROR__`` rows for
             securities that Bloomberg rejected.
+        return_eids: Request EID entitlement metadata on the returned ArrowTable.
         validate_fields: Optional per-request override for field validation.
             ``True`` forces strict validation, ``False`` disables it, and
             ``None`` follows engine-level validation mode.
@@ -1822,6 +1864,7 @@ async def abdh(
     format: Format | str | None = None,
     field_types: dict[str, str] | None = None,
     validate_fields: bool | None = None,
+    return_eids: bool = False,
     **kwargs,
 ):
     """Async Bloomberg historical data (BDH).
@@ -1842,6 +1885,7 @@ async def abdh(
         validate_fields: Optional per-request override for field validation.
             ``True`` forces strict validation, ``False`` disables it, and
             ``None`` follows engine-level validation mode.
+        return_eids: Request EID entitlement metadata on the returned ArrowTable.
         **kwargs: Additional overrides and infrastructure options.
             adjust: Adjustment type ('all', 'dvd', 'split', '-', None).
 
@@ -4095,6 +4139,7 @@ async def _build_abdp_plan(args: dict[str, Any]) -> _EndpointPlan:
             "field_types": resolved_types,
             "format": fmt,
             "include_security_errors": args.get("include_security_errors", False),
+            "return_eids": args.get("return_eids", False),
             "validate_fields": args.get("validate_fields"),
         },
         backend=args.get("backend"),
@@ -4184,6 +4229,7 @@ async def _build_abdh_plan(args: dict[str, Any]) -> _EndpointPlan:
             "field_types": resolved_types,
             "format": fmt,
             "validate_fields": args.get("validate_fields"),
+            "return_eids": args.get("return_eids", False),
         },
         backend=backend,
         postprocess=postprocess if needs_presentation_postprocess else None,
@@ -4847,6 +4893,9 @@ async def abschema(
 def _install_manual_sync_wrappers() -> None:
     for sync_name, async_func in (
         ("request", arequest),
+        ("seat_type", aseat_type),
+        ("check_entitlements", acheck_entitlements),
+        ("identity_is_authorized", aidentity_is_authorized),
         ("subscribe", asubscribe),
         ("vwap", avwap),
         ("mktbar", amktbar),

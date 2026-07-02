@@ -12,7 +12,7 @@ use xbbg_log::trace;
 use super::typed_builder::{ArrowType, ColumnSet};
 use super::value_utils::{
     append_long_value_row, common_value_type, get_value_cached_datatype, top_level_response_error,
-    LongStringColumns, WideColumns,
+    FieldExceptionMeta, LongStringColumns, ResponseMetadata, SecurityErrorMeta, WideColumns,
 };
 use xbbg_core::{BlpError, DataType as BlpDataType, Element, Message, Name, Value};
 
@@ -50,6 +50,7 @@ struct RefDataElementNames {
     subcategory: Name,
     field_id: Name,
     error_info: Name,
+    eid_data: Name,
 }
 
 impl RefDataElementNames {
@@ -66,6 +67,7 @@ impl RefDataElementNames {
             subcategory: Name::get_or_intern("subcategory"),
             field_id: Name::get_or_intern("fieldId"),
             error_info: Name::get_or_intern("errorInfo"),
+            eid_data: Name::get_or_intern("eidData"),
         }
     }
 }
@@ -100,6 +102,9 @@ pub struct RefDataState {
     long_columns: Option<LongStringColumns>,
     /// Fixed wide-format builders for requested field columns
     wide_columns: Option<WideColumns>,
+    /// Response-level diagnostics (eidData / securityError / fieldExceptions)
+    /// attached to the result batch as schema metadata.
+    response_meta: ResponseMetadata,
     /// Reply channel
     pub reply: oneshot::Sender<Result<RecordBatch, BlpError>>,
 }
@@ -166,6 +171,7 @@ impl RefDataState {
             columns,
             long_columns: long_value_type.map(LongStringColumns::refdata),
             wide_columns,
+            response_meta: ResponseMetadata::default(),
             reply,
         }
     }
@@ -229,6 +235,7 @@ impl RefDataState {
         }
 
         let reply = self.reply;
+        let response_meta = std::mem::take(&mut self.response_meta);
         let result = match self.format {
             OutputFormat::Long => match self.long_mode {
                 LongMode::String => {
@@ -263,7 +270,8 @@ impl RefDataState {
                 }
             }
         };
-        if let Ok(ref batch) = result {
+        let result = result.map(|batch| response_meta.attach(batch));
+        if let Ok(batch) = &result {
             xbbg_log::debug!(
                 rows = batch.num_rows(),
                 cols = batch.num_columns(),
@@ -307,6 +315,13 @@ impl RefDataState {
                 .and_then(|e| e.get_str(0))
                 .unwrap_or("");
 
+            // eidData rides alongside fieldData when returnEids was requested;
+            // failed securities can still carry it, so record before the
+            // securityError skip.
+            if let Some(eids) = sec.get(&self.names.eid_data) {
+                self.response_meta.record_eid_data(ticker, &eids);
+            }
+
             // Check for security error
             if let Some(security_error) = sec.get(&self.names.security_error) {
                 let category = security_error
@@ -321,6 +336,10 @@ impl RefDataState {
                     .get(&self.names.message)
                     .and_then(|e| e.get_str(0))
                     .unwrap_or("");
+                let subcategory = security_error
+                    .get(&self.names.subcategory)
+                    .and_then(|e| e.get_str(0))
+                    .unwrap_or("");
 
                 xbbg_log::warn!(
                     ticker = ticker,
@@ -331,12 +350,17 @@ impl RefDataState {
                 );
 
                 self.failed_securities.push(ticker.to_string());
+                self.response_meta.record_security_error(
+                    ticker,
+                    SecurityErrorMeta {
+                        category: category.to_string(),
+                        code,
+                        subcategory: subcategory.to_string(),
+                        message: message.to_string(),
+                    },
+                );
 
                 if self.include_security_errors {
-                    let subcategory = security_error
-                        .get(&self.names.subcategory)
-                        .and_then(|e| e.get_str(0))
-                        .unwrap_or("");
                     self.append_security_error_row(ticker, code, category, subcategory, message);
                 }
                 continue;
@@ -358,6 +382,31 @@ impl RefDataState {
                             .and_then(|e| e.get(&self.names.message))
                             .and_then(|e| e.get_str(0))
                             .unwrap_or("");
+                        let category = err_info
+                            .as_ref()
+                            .and_then(|e| e.get(&self.names.category))
+                            .and_then(|e| e.get_str(0))
+                            .unwrap_or("");
+                        let code = err_info
+                            .as_ref()
+                            .and_then(|e| e.get(&self.names.code))
+                            .and_then(|e| e.get_i32(0))
+                            .unwrap_or_default();
+                        let subcategory = err_info
+                            .as_ref()
+                            .and_then(|e| e.get(&self.names.subcategory))
+                            .and_then(|e| e.get_str(0))
+                            .unwrap_or("");
+                        self.response_meta.record_field_exception(
+                            ticker,
+                            FieldExceptionMeta {
+                                field: field_id.to_string(),
+                                category: category.to_string(),
+                                code,
+                                subcategory: subcategory.to_string(),
+                                message: message.to_string(),
+                            },
+                        );
                         details.push(format!("{field_id}: {message}"));
                     }
                     self.field_exception_securities.insert(ticker.to_string());

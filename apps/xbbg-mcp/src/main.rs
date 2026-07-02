@@ -497,7 +497,17 @@ fn record_batch_to_json(batch: &RecordBatch, limits: &ResultLimits) -> Result<Va
         rows.push(Value::Object(row));
     }
 
-    Ok(json!({
+    // Response diagnostics (xbbg.eid_data / xbbg.security_errors /
+    // xbbg.field_exceptions) ride on the Arrow schema metadata as JSON;
+    // re-parse them into structured JSON so MCP clients see real objects.
+    let mut metadata = Map::new();
+    for (key, value) in schema.metadata() {
+        let parsed = serde_json::from_str::<Value>(value)
+            .unwrap_or_else(|_| Value::String(value.clone()));
+        metadata.insert(key.clone(), parsed);
+    }
+
+    let mut result = json!({
         "schema": schema_json,
         "row_count": total_rows,
         "returned_rows": returned_rows,
@@ -506,7 +516,11 @@ fn record_batch_to_json(batch: &RecordBatch, limits: &ResultLimits) -> Result<Va
             "values": value_truncated,
         },
         "rows": rows,
-    }))
+    });
+    if !metadata.is_empty() {
+        result["metadata"] = Value::Object(metadata);
+    }
+    Ok(result)
 }
 
 fn array_cell_to_json(

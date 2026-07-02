@@ -9,6 +9,7 @@ __all__ = [
     "ArrowRecordBatch",
     "ArrowSchema",
     "ArrowTable",
+    "EntitlementReport",
     "PyEngine",
     "PyEngineConfig",
     "PySubscription",
@@ -101,6 +102,17 @@ class ArrowTable:
     ...
 
 @typing.final
+class EntitlementReport:
+    r"""
+    Result of a Bloomberg entitlement check.
+    """
+    @property
+    def entitled(self) -> builtins.bool: ...
+    @property
+    def failed_eids(self) -> builtins.list[builtins.int]: ...
+    def __repr__(self) -> builtins.str: ...
+
+@typing.final
 class PyEngine:
     r"""
     Python wrapper for the xbbg Engine.
@@ -146,7 +158,7 @@ class PyEngine:
         - extractor: Extractor type hint (e.g., "refdata", "histdata", "intraday_bar")
           If omitted, Rust resolves a default from `operation`.
         - request_operation: Actual Bloomberg operation name when operation=""
-        
+
         Optional keys (depend on request type):
         - securities: List of security identifiers
         - security: Single security identifier
@@ -157,6 +169,30 @@ class PyEngine:
         - event_type: For intraday bars (TRADE, BID, ASK)
         - interval: Bar interval in minutes
         - options: Additional Bloomberg options
+        """
+    def seat_type(self) -> typing.Any:
+        r"""
+        Return the seat type for the lazily authorized identity.
+
+        Authorization is performed on first use: the configured auth identity is used when
+        EngineConfig has auth settings, otherwise the Desktop terminal OS-logon user is used.
+        First use may take a moment and authorization timeout failures are retryable.
+        """
+    def check_entitlements(self, service: builtins.str, eids: typing.Sequence[builtins.int]) -> typing.Any:
+        r"""
+        Check EID entitlements for the lazily authorized identity.
+
+        Authorization is performed on first use: the configured auth identity is used when
+        EngineConfig has auth settings, otherwise the Desktop terminal OS-logon user is used.
+        First use may take a moment and authorization timeout failures are retryable.
+        """
+    def identity_is_authorized(self, service: builtins.str) -> typing.Any:
+        r"""
+        Return whether the lazily authorized identity is authorized for a service.
+
+        Authorization is performed on first use: the configured auth identity is used when
+        EngineConfig has auth settings, otherwise the Desktop terminal OS-logon user is used.
+        First use may take a moment and authorization timeout failures are retryable.
         """
     def resolve_exchange(self, ticker: builtins.str) -> typing.Any:
         r"""

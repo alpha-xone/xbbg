@@ -14,8 +14,8 @@ use pyo3::exceptions::{
 };
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyAny, PyCapsule, PyDate, PyDateTime, PyDict, PyIterator, PyList, PyTime, PyTuple, PyType,
-    PyTzInfo,
+    PyAny, PyBool, PyCapsule, PyDate, PyDateTime, PyDict, PyIterator, PyList, PyTime, PyTuple,
+    PyType, PyTzInfo,
 };
 use pyo3::IntoPyObjectExt;
 use pyo3_arrow::ffi::{
@@ -27,6 +27,9 @@ use pyo3_stub_gen::derive::*;
 use xbbg_arrow::{
     build_array, cell_from_array, cell_has_value, cell_to_string, ArrowCoreError, CellValue,
     ColumnData, SortDirection, TableData,
+};
+use xbbg_async::engine::state::{
+    METADATA_KEY_EID_DATA, METADATA_KEY_FIELD_EXCEPTIONS, METADATA_KEY_SECURITY_ERRORS,
 };
 
 fn core_err_to_py(err: ArrowCoreError) -> PyErr {
@@ -45,6 +48,52 @@ fn core_err_to_py(err: ArrowCoreError) -> PyErr {
 
 fn map_core<T>(result: xbbg_arrow::Result<T>) -> PyResult<T> {
     result.map_err(core_err_to_py)
+}
+
+fn serde_json_value_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
+    match value {
+        serde_json::Value::Null => Ok(py.None()),
+        serde_json::Value::Bool(value) => Ok(PyBool::new(py, *value).to_owned().into_any().unbind()),
+        serde_json::Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ok(value.into_pyobject(py)?.into_any().unbind())
+            } else if let Some(value) = value.as_u64() {
+                Ok(value.into_pyobject(py)?.into_any().unbind())
+            } else if let Some(value) = value.as_f64() {
+                Ok(value.into_pyobject(py)?.into_any().unbind())
+            } else {
+                Err(PyValueError::new_err("unsupported JSON number"))
+            }
+        }
+        serde_json::Value::String(value) => Ok(value.into_pyobject(py)?.into_any().unbind()),
+        serde_json::Value::Array(values) => {
+            let list = PyList::empty(py);
+            for value in values {
+                list.append(serde_json_value_to_py(py, value)?)?;
+            }
+            Ok(list.into_any().unbind())
+        }
+        serde_json::Value::Object(values) => {
+            let dict = PyDict::new(py);
+            for (key, value) in values {
+                dict.set_item(key, serde_json_value_to_py(py, value)?)?;
+            }
+            Ok(dict.into_any().unbind())
+        }
+    }
+}
+
+fn parse_metadata_json(
+    py: Python<'_>,
+    metadata: &HashMap<String, String>,
+    key: &str,
+) -> PyResult<Py<PyAny>> {
+    let Some(raw) = metadata.get(key) else {
+        return Ok(py.None());
+    };
+    let value: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|err| PyValueError::new_err(format!("invalid JSON in {key}: {err}")))?;
+    serde_json_value_to_py(py, &value)
 }
 
 fn ensure_optional_module(
@@ -897,6 +946,26 @@ impl ArrowTable {
         }
     }
 
+    #[getter]
+    fn metadata(&self) -> HashMap<String, String> {
+        self.data.schema.metadata().clone()
+    }
+
+    #[getter]
+    fn eid_data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        parse_metadata_json(py, self.data.schema.metadata(), METADATA_KEY_EID_DATA)
+    }
+
+    #[getter]
+    fn security_errors(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        parse_metadata_json(py, self.data.schema.metadata(), METADATA_KEY_SECURITY_ERRORS)
+    }
+
+    #[getter]
+    fn field_exceptions(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        parse_metadata_json(py, self.data.schema.metadata(), METADATA_KEY_FIELD_EXCEPTIONS)
+    }
+
     #[pyo3(signature = (requested_schema=None))]
     fn __arrow_c_stream__<'py>(
         &self,
@@ -1226,6 +1295,7 @@ impl ArrowTable {
             out_arrays.push(array);
         }
 
+
         let batch = RecordBatch::try_new(Arc::new(Schema::new(out_fields)), out_arrays)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Self::try_new(vec![batch])
@@ -1292,6 +1362,58 @@ mod tests {
                 .expect("iso string");
 
             assert_eq!(iso, "1970-01-01T00:00:00+00:00");
+        });
+    }
+
+    #[test]
+    fn arrow_table_metadata_getters_parse_xbbg_json() {
+        Python::initialize();
+        Python::attach(|py| {
+            let schema = Schema::new(vec![Field::new("ticker", DataType::Utf8, false)])
+                .with_metadata(HashMap::from([
+                    (
+                        METADATA_KEY_EID_DATA.to_string(),
+                        r#"{"IBM US Equity":[101,202]}"#.to_string(),
+                    ),
+                    (
+                        METADATA_KEY_SECURITY_ERRORS.to_string(),
+                        r#"{"BAD Ticker":{"category":"BAD_SEC","code":1,"subcategory":"INVALID","message":"bad security"}}"#.to_string(),
+                    ),
+                    (
+                        METADATA_KEY_FIELD_EXCEPTIONS.to_string(),
+                        r#"{"IBM US Equity":[{"field":"PX_BAD","category":"BAD_FLD","code":2,"subcategory":"INVALID","message":"bad field"}]}"#.to_string(),
+                    ),
+                ]));
+            let batch = RecordBatch::try_new(
+                Arc::new(schema),
+                vec![Arc::new(StringArray::from(vec!["IBM US Equity"]))],
+            )
+            .expect("record batch");
+            let table = ArrowTable::try_new(vec![batch]).expect("table");
+
+            assert!(table.metadata().contains_key(METADATA_KEY_EID_DATA));
+            let eid_data = table.eid_data(py).expect("eid data");
+            let eid_dict = eid_data.bind(py);
+            let eids: Vec<i32> = eid_dict
+                .get_item("IBM US Equity")
+                .expect("ticker eids")
+                .extract()
+                .expect("eids");
+            assert_eq!(eids, vec![101, 202]);
+
+            let security_errors = table.security_errors(py).expect("security errors");
+            assert!(security_errors
+                .bind(py)
+                .get_item("BAD Ticker")
+                .expect("security error")
+                .is_instance_of::<PyDict>());
+
+            let field_exceptions = table.field_exceptions(py).expect("field exceptions");
+            assert!(field_exceptions
+                .bind(py)
+                .get_item("IBM US Equity")
+                .expect("field exception")
+                .is_instance_of::<PyList>());
         });
     }
 }

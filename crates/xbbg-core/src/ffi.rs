@@ -168,8 +168,10 @@ pub use xbbg_sys::blpapi_SessionOptions_setServerAddressWithProxy;
 
 // --- Identity functions ---
 pub use xbbg_sys::{
+    blpapi_AbstractSession_generateAuthorizedIdentityAsync,
+    blpapi_AbstractSession_getAuthorizedIdentity, blpapi_AbstractSession_t,
     blpapi_Identity_getSeatType, blpapi_Identity_hasEntitlements, blpapi_Identity_isAuthorized,
-    blpapi_Identity_release,
+    blpapi_Identity_release, blpapi_Session_getAbstractSession,
 };
 
 // --- Logging functions ---

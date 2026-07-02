@@ -509,6 +509,34 @@ def ensure_arrow_table(frame: Any) -> Any:
         return pa.Table.from_batches([frame])
     raise TypeError(f"Expected xbbg ArrowTable or ArrowRecordBatch, got {type(frame).__name__}")
 
+_XBBG_METADATA_ATTRS = {
+    "xbbg.eid_data": ("eid_data", "xbbg_eid_data"),
+    "xbbg.security_errors": ("security_errors", "xbbg_security_errors"),
+    "xbbg.field_exceptions": ("field_exceptions", "xbbg_field_exceptions"),
+}
+
+
+def _attach_xbbg_metadata_attrs(dataframe: Any, table: Any) -> Any:
+    """Attach native xbbg metadata to pandas ``DataFrame.attrs`` when present.
+
+    Only pandas frames expose ``attrs`` in the conversion path.  The polars
+    conversion intentionally skips this helper because polars frames do not
+    provide an equivalent stable metadata side channel.
+    """
+    attrs = getattr(dataframe, "attrs", None)
+    metadata = getattr(table, "metadata", None)
+    if attrs is None or not metadata:
+        return dataframe
+
+    for metadata_key, (source_attr, frame_attr) in _XBBG_METADATA_ATTRS.items():
+        if metadata_key not in metadata:
+            continue
+        value = getattr(table, source_attr, None)
+        if value is not None:
+            attrs[frame_attr] = value
+    return dataframe
+
+
 
 def _to_pyarrow_table(table: Any) -> Any:
     pa = _import_backend_module(Backend.PYARROW)
@@ -517,10 +545,12 @@ def _to_pyarrow_table(table: Any) -> Any:
 
 def _to_pandas_frame(table: Any) -> Any:
     pd = _import_backend_module(Backend.PANDAS)
-    return pd.DataFrame.from_records(table.to_pylist(), columns=table.column_names)
+    frame = pd.DataFrame.from_records(table.to_pylist(), columns=table.column_names)
+    return _attach_xbbg_metadata_attrs(frame, table)
 
 
 def _to_polars_frame(table: Any) -> Any:
+    """Convert to polars; xbbg Arrow metadata is not attached as frame attrs."""
     pl = _import_backend_module(Backend.POLARS)
 
     if is_backend_available(Backend.PYARROW) and check_backend(Backend.PYARROW, raise_on_error=False):

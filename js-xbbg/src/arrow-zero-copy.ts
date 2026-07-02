@@ -56,7 +56,7 @@ export function tableFromNativeArrowBatch(batch: NativeArrowZeroCopyBatch): Tabl
   });
   const children = batch.columns.map((column) => dataFromColumn(column, retainedBuffers));
 
-  const schema = new Schema(fields);
+  const schema = new Schema(fields, new Map(Object.entries(batch.metadata)));
   const structData = makeData({
     children,
     length: batch.numRows,

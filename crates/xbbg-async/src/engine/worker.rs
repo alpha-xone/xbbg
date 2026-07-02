@@ -33,15 +33,23 @@ use parking_lot::{Condvar, Mutex, RwLock};
 use slab::Slab;
 use tokio::sync::{mpsc, oneshot};
 
-use xbbg_core::{AsyncSession, BlpError, CorrelationId, EventType};
+use xbbg_core::{
+    AsyncSession, AuthConfig, BlpError, CorrelationId, EntitlementCheck, EventType, SeatType,
+};
 
 /// Max wall time we'll wait for an async open_service reply.
 const SERVICE_OPEN_TIMEOUT_MS: u64 = 10_000;
 
+/// Max wall time we'll wait for identity authorization to complete.
+const IDENTITY_AUTH_TIMEOUT_MS: u64 = 10_000;
+
+/// Authorization service used by the classic identity flow.
+const APIAUTH_SERVICE: &str = "//blp/apiauth";
+
 /// Threshold for warning about slow Bloomberg responses (30 seconds).
 const SLOW_REQUEST_WARN_THRESHOLD: Duration = Duration::from_secs(30);
 
-use super::dispatch::{DispatchKey, SERVICE_OPEN_CID_TAG};
+use super::dispatch::{DispatchKey, IDENTITY_CID, IDENTITY_TOKEN_CID, SERVICE_OPEN_CID_TAG};
 use super::state::{
     BqlState, BsrchState, BulkDataState, FieldInfoState, GenericState, HistDataState,
     HistDataStreamState, IntradayBarState, IntradayBarStreamState, IntradayTickState,
@@ -247,6 +255,32 @@ struct PendingServiceOpen {
     waiters: Vec<oneshot::Sender<Result<(), BlpError>>>,
 }
 
+/// Authorization state of this worker's on-demand session identity
+/// (`generateAuthorizedIdentityAsync` tagged with [`IDENTITY_CID`]; used
+/// when the engine has an [`AuthConfig`] — the SDK then owns the authorized
+/// identity and `authorized_identity(IDENTITY_CID)` hands out fresh
+/// refcounted handles per query, so no identity is ever stored or crosses
+/// threads).
+///
+/// Terminal outcomes never wedge: `Failed` is retryable (the next call
+/// re-issues the SDK call), and a waiter timeout fails the pending attempt
+/// rather than leaving zombie waiters accumulating (the lesson from the
+/// service-open latch).
+#[derive(Default)]
+enum IdentityAuthState {
+    /// No authorization attempted yet.
+    #[default]
+    NotRequested,
+    /// `generateAuthorizedIdentityAsync` issued; waiters await the
+    /// AUTHORIZATION_STATUS outcome.
+    Pending(Vec<oneshot::Sender<Result<(), BlpError>>>),
+    /// AuthorizationSuccess received; `authorized_identity(IDENTITY_CID)` is
+    /// ready to hand out fresh handles.
+    Ready,
+    /// Authorization failed, timed out, or was revoked; retry allowed.
+    Failed(String),
+}
+
 /// Session startup outcome latch, resolved exactly once by the first
 /// startup-relevant SESSION_STATUS message.
 #[derive(Default)]
@@ -273,6 +307,15 @@ pub(super) struct WorkerShared {
     next_service_open_id: AtomicI64,
     startup: Mutex<StartupLatch>,
     startup_cv: Condvar,
+    /// On-demand session-identity latch (auth-configured engines); see
+    /// [`IdentityAuthState`].
+    identity: Mutex<IdentityAuthState>,
+    /// In-flight `generateToken` waiter (classic per-call authorization on
+    /// engines without auth config; fulfilled from the dispatcher thread,
+    /// received with a timeout on the classic flow's blocking thread).
+    pending_token: Mutex<Option<std::sync::mpsc::SyncSender<Result<String, BlpError>>>>,
+    /// In-flight classic `AuthorizationRequest` waiter.
+    pending_identity_auth: Mutex<Option<std::sync::mpsc::SyncSender<Result<(), BlpError>>>>,
     health: Arc<AtomicU8>,
     /// Set before an intentional stop so terminal SDK status events are logged
     /// as normal teardown instead of unexpected worker death.
@@ -290,6 +333,9 @@ impl WorkerShared {
             next_service_open_id: AtomicI64::new(0),
             startup: Mutex::new(StartupLatch::default()),
             startup_cv: Condvar::new(),
+            identity: Mutex::new(IdentityAuthState::default()),
+            pending_token: Mutex::new(None),
+            pending_identity_auth: Mutex::new(None),
             health,
             shutting_down: AtomicBool::new(false),
         }
@@ -419,6 +465,188 @@ impl WorkerShared {
         }
     }
 
+    /// Resolve the identity latch to a terminal state and notify waiters.
+    /// `Ok(())` transitions to `Ready`; `Err` to retryable `Failed`.
+    fn resolve_identity(&self, outcome: Result<(), BlpError>) {
+        let detail = outcome.as_ref().err().map(ToString::to_string);
+        let waiters = {
+            let mut state = self.identity.lock();
+            let next = match &detail {
+                None => IdentityAuthState::Ready,
+                Some(e) => IdentityAuthState::Failed(e.clone()),
+            };
+            match std::mem::replace(&mut *state, next) {
+                IdentityAuthState::Pending(waiters) => waiters,
+                _ => Vec::new(),
+            }
+        };
+        for waiter in waiters {
+            // BlpError is not Clone; rebuild per waiter from the detail string.
+            let _ = waiter.send(match &detail {
+                None => Ok(()),
+                Some(e) => Err(BlpError::Internal { detail: e.clone() }),
+            });
+        }
+    }
+
+    /// Fail any in-flight identity authorization (session teardown paths) —
+    /// both the session-identity latch and the classic per-call waiters.
+    fn fail_pending_identity(&self, reason: &str) {
+        let is_pending = matches!(&*self.identity.lock(), IdentityAuthState::Pending(_));
+        if is_pending {
+            self.resolve_identity(Err(BlpError::Internal {
+                detail: format!("identity authorization aborted: {reason}"),
+            }));
+        }
+        if let Some(tx) = self.pending_token.lock().take() {
+            let _ = tx.send(Err(BlpError::Internal {
+                detail: format!("identity token generation aborted: {reason}"),
+            }));
+        }
+        if let Some(tx) = self.pending_identity_auth.lock().take() {
+            let _ = tx.send(Err(BlpError::Internal {
+                detail: format!("identity authorization aborted: {reason}"),
+            }));
+        }
+    }
+
+    /// Route an authorization outcome for [`IDENTITY_CID`] to whichever flow
+    /// is in flight: the session-identity latch (auth-configured engines,
+    /// `generateAuthorizedIdentityAsync`) or the classic per-call waiter
+    /// (`sendAuthorizationRequest`). Only one flow ever runs per worker —
+    /// selection is fixed by `EngineConfig.auth` — so fulfilling both is a
+    /// no-op for the idle one.
+    fn resolve_identity_outcome(&self, outcome: Result<(), BlpError>) {
+        let detail = outcome.as_ref().err().map(ToString::to_string);
+        if let Some(tx) = self.pending_identity_auth.lock().take() {
+            let _ = tx.send(match &detail {
+                None => Ok(()),
+                Some(e) => Err(BlpError::Internal { detail: e.clone() }),
+            });
+        }
+        self.resolve_identity(outcome);
+    }
+
+    /// TOKEN_STATUS handler for the classic authorization flow's
+    /// `generateToken` call ([`IDENTITY_TOKEN_CID`]).
+    fn handle_token_status(&self, msg: &xbbg_core::Message<'_>) {
+        let n = msg.num_correlation_ids();
+        let ours = (0..n).any(|i| {
+            matches!(
+                msg.correlation_id(i),
+                Some(CorrelationId::Int(value)) if value == IDENTITY_TOKEN_CID
+            )
+        });
+        if !ours {
+            return;
+        }
+        let msg_type_name = msg.message_type();
+        match msg_type_name.as_str() {
+            "TokenGenerationSuccess" => {
+                let token = msg
+                    .elements()
+                    .get_by_str("token")
+                    .and_then(|e| e.get_str(0))
+                    .map(str::to_string);
+                if let Some(tx) = self.pending_token.lock().take() {
+                    let _ = tx.send(token.ok_or_else(|| BlpError::Internal {
+                        detail: "TokenGenerationSuccess carried no token element".to_string(),
+                    }));
+                }
+            }
+            "TokenGenerationFailure" => {
+                let reason = extract_reason_description(msg)
+                    .unwrap_or_else(|| "TokenGenerationFailure".to_string());
+                xbbg_log::warn!(
+                    worker_id = self.id,
+                    reason = reason.as_str(),
+                    "identity token generation failed"
+                );
+                if let Some(tx) = self.pending_token.lock().take() {
+                    let _ = tx.send(Err(BlpError::Internal {
+                        detail: format!("identity token generation failed: {reason}"),
+                    }));
+                }
+            }
+            other => {
+                xbbg_log::debug!(
+                    worker_id = self.id,
+                    message_type = other,
+                    "unhandled token status message"
+                );
+            }
+        }
+    }
+
+    /// Authorization outcome for [`IDENTITY_CID`], regardless of which event
+    /// type carried it (`AUTHORIZATION_STATUS` for the session-identity flow;
+    /// classic `sendAuthorizationRequest` replies arrive as RESPONSE /
+    /// PARTIAL_RESPONSE). Session-identity authorization messages from
+    /// `setSessionIdentityOptions` arrive as SESSION_STATUS and are handled
+    /// in `handle_session_status`.
+    fn handle_identity_authorization_message(&self, msg: &xbbg_core::Message<'_>) {
+        let msg_type_name = msg.message_type();
+        match msg_type_name.as_str() {
+            "AuthorizationSuccess" => {
+                xbbg_log::info!(worker_id = self.id, "identity authorized");
+                self.resolve_identity_outcome(Ok(()));
+            }
+            "AuthorizationFailure" => {
+                let reason = extract_reason_description(msg);
+                xbbg_log::warn!(
+                    worker_id = self.id,
+                    reason = %reason.as_deref().unwrap_or(""),
+                    "identity authorization failed"
+                );
+                self.resolve_identity_outcome(Err(BlpError::Internal {
+                    detail: format!(
+                        "identity authorization failed: {}",
+                        reason.unwrap_or_else(|| "AuthorizationFailure".to_string())
+                    ),
+                }));
+            }
+            "AuthorizationRevoked" => {
+                let reason = extract_reason_description(msg);
+                xbbg_log::warn!(
+                    worker_id = self.id,
+                    reason = %reason.as_deref().unwrap_or(""),
+                    "identity authorization revoked"
+                );
+                // Mark Failed so the next identity op re-authorizes instead of
+                // serving entitlement answers from a revoked identity.
+                *self.identity.lock() = IdentityAuthState::Failed(format!(
+                    "identity authorization revoked: {}",
+                    reason.unwrap_or_default()
+                ));
+            }
+            other => {
+                xbbg_log::debug!(
+                    worker_id = self.id,
+                    message_type = other,
+                    "unhandled authorization message"
+                );
+            }
+        }
+    }
+
+    /// True when `msg` is tagged with the identity authorization CID.
+    fn is_identity_auth_message(msg: &xbbg_core::Message<'_>) -> bool {
+        let n = msg.num_correlation_ids();
+        (0..n).any(|i| {
+            matches!(
+                msg.correlation_id(i),
+                Some(CorrelationId::Int(value)) if value == IDENTITY_CID
+            )
+        })
+    }
+
+    /// AUTHORIZATION_STATUS handler: identity outcomes for [`IDENTITY_CID`].
+    fn handle_authorization_status(&self, msg: &xbbg_core::Message<'_>) {
+        if Self::is_identity_auth_message(msg) {
+            self.handle_identity_authorization_message(msg);
+        }
+    }
+
     /// SDK dispatcher entry point: route every message of `ev`.
     pub(super) fn dispatch_event(&self, ev: xbbg_core::Event) {
         let et = ev.event_type();
@@ -441,12 +669,25 @@ impl WorkerShared {
                 EventType::ServiceStatus => {
                     self.handle_service_status(&msg);
                 }
+                EventType::AuthorizationStatus => {
+                    self.handle_authorization_status(&msg);
+                }
+                EventType::TokenStatus => {
+                    self.handle_token_status(&msg);
+                }
                 _ => {}
             }
         }
     }
 
     fn handle_partial_response(&self, msg: &xbbg_core::Message<'_>) {
+        // Classic-flow authorization replies arrive as ordinary responses
+        // tagged with IDENTITY_CID (rejected by DispatchKey, so they can
+        // never alias a request slot).
+        if Self::is_identity_auth_message(msg) {
+            self.handle_identity_authorization_message(msg);
+            return;
+        }
         let n = msg.num_correlation_ids();
         for i in 0..n {
             if let Some(correlation_id) = msg.correlation_id(i) {
@@ -475,6 +716,10 @@ impl WorkerShared {
     }
 
     fn handle_response(&self, msg: &xbbg_core::Message<'_>) {
+        if Self::is_identity_auth_message(msg) {
+            self.handle_identity_authorization_message(msg);
+            return;
+        }
         let n = msg.num_correlation_ids();
         for i in 0..n {
             if let Some(correlation_id) = msg.correlation_id(i) {
@@ -502,6 +747,15 @@ impl WorkerShared {
         let msg_type_name = msg.message_type();
         let msg_type = msg_type_name.as_str();
         if msg_type != "RequestFailure" {
+            return;
+        }
+        // A failed classic AuthorizationRequest resolves the identity waiter.
+        if Self::is_identity_auth_message(msg) {
+            let reason = extract_reason_description(msg)
+                .unwrap_or_else(|| "RequestFailure".to_string());
+            self.resolve_identity_outcome(Err(BlpError::Internal {
+                detail: format!("identity authorization request failed: {reason}"),
+            }));
             return;
         }
         let n = msg.num_correlation_ids();
@@ -556,6 +810,7 @@ impl WorkerShared {
                 )));
                 self.drain_in_flight(reason.as_deref().unwrap_or("Bloomberg session terminated"));
                 self.fail_pending_service_opens("Bloomberg session terminated");
+                self.fail_pending_identity("Bloomberg session terminated");
                 self.health.store(2, Ordering::Release);
                 if self.shutting_down.load(Ordering::Acquire) {
                     xbbg_log::info!(
@@ -593,6 +848,7 @@ impl WorkerShared {
                         .unwrap_or("Bloomberg session identity revoked"),
                 );
                 self.fail_pending_service_opens("Bloomberg session identity revoked");
+                self.fail_pending_identity("Bloomberg session identity revoked");
                 self.health.store(2, Ordering::Release);
                 xbbg_log::error!(
                     worker_id = self.id,
@@ -703,6 +959,21 @@ fn session_start_error(context: &str, reason: Option<String>) -> BlpError {
     }
 }
 
+/// Append configuration guidance to classic-flow authorization failures so
+/// the vendor reason (e.g. "User not in emrs userid=...") arrives with the
+/// remedy attached.
+fn hint_entitlement_requirements(err: BlpError) -> BlpError {
+    match err {
+        BlpError::Internal { detail } => BlpError::Internal {
+            detail: format!(
+                "{detail} (identity/entitlement checks require EMRS enrollment for \
+                 Desktop API terminals, or SAPI/B-PIPE authorization via EngineConfig.auth)"
+            ),
+        },
+        other => other,
+    }
+}
+
 /// A request worker backed by an asynchronous Bloomberg session.
 ///
 /// All methods take `&self`; submissions, cancellations, and SDK callback
@@ -712,6 +983,9 @@ pub(crate) struct AsyncRequestWorker {
     session: AsyncSession,
     shared: Arc<WorkerShared>,
     config: Arc<EngineConfig>,
+    /// Serializes classic per-call identity authorization: WorkerShared's
+    /// pending-waiter slots hold exactly one in-flight sender each.
+    identity_flow_lock: tokio::sync::Mutex<()>,
 }
 
 impl AsyncRequestWorker {
@@ -739,6 +1013,7 @@ impl AsyncRequestWorker {
             session,
             shared,
             config,
+            identity_flow_lock: tokio::sync::Mutex::new(()),
         };
         worker.warmup();
         xbbg_log::info!(worker_id = id, "AsyncRequestWorker started");
@@ -826,6 +1101,224 @@ impl AsyncRequestWorker {
             }),
             Err(_) => Err(BlpError::Timeout),
         }
+    }
+
+    /// Ensure the SDK-owned session identity is authorized, lazily issuing
+    /// `generateAuthorizedIdentityAsync` with the engine's configured auth on
+    /// first use. Auth-configured engines only.
+    ///
+    /// Concurrent callers coalesce onto one in-flight authorization; a
+    /// timeout fails the attempt (draining all waiters) so the next call
+    /// re-issues rather than piling waiters onto a zombie attempt.
+    async fn ensure_identity(&self, auth_config: &AuthConfig) -> Result<(), BlpError> {
+        let rx = {
+            let mut state = self.shared.identity.lock();
+            match &mut *state {
+                IdentityAuthState::Ready => return Ok(()),
+                IdentityAuthState::Pending(waiters) => {
+                    let (tx, rx) = oneshot::channel();
+                    waiters.push(tx);
+                    rx
+                }
+                state @ (IdentityAuthState::NotRequested | IdentityAuthState::Failed(_)) => {
+                    if let IdentityAuthState::Failed(prior) = state {
+                        xbbg_log::debug!(
+                            worker_id = self.id,
+                            prior_failure = prior.as_str(),
+                            "retrying identity authorization"
+                        );
+                    }
+                    let auth_options = auth_config.build_auth_options()?;
+                    // Enqueue-only FFI call; holding the lock across it closes
+                    // the issue/resolve race with the dispatcher thread.
+                    self.session.generate_authorized_identity_async(
+                        &auth_options,
+                        &CorrelationId::Int(IDENTITY_CID),
+                    )?;
+                    let (tx, rx) = oneshot::channel();
+                    *state = IdentityAuthState::Pending(vec![tx]);
+                    xbbg_log::debug!(
+                        worker_id = self.id,
+                        auth_method = auth_config.method_name(),
+                        "identity authorization started"
+                    );
+                    rx
+                }
+            }
+        };
+
+        match tokio::time::timeout(Duration::from_millis(IDENTITY_AUTH_TIMEOUT_MS), rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(BlpError::Internal {
+                detail: "identity authorization dropped without resolution".to_string(),
+            }),
+            Err(_) => {
+                // Fail the whole attempt so later calls re-issue instead of
+                // waiting on an authorization the SDK may never answer.
+                self.shared
+                    .fail_pending_identity("identity authorization timed out");
+                Err(BlpError::Timeout)
+            }
+        }
+    }
+
+    /// Blocking receive for a classic-flow waiter, clearing the pending slot
+    /// on timeout so a late dispatcher fulfillment becomes a no-op and the
+    /// next call retries. Runs on the classic flow's dedicated blocking
+    /// thread, never on a runtime thread.
+    fn recv_classic_step<T>(
+        &self,
+        rx: &std::sync::mpsc::Receiver<Result<T, BlpError>>,
+        pending: &Mutex<Option<std::sync::mpsc::SyncSender<Result<T, BlpError>>>>,
+        step: &str,
+    ) -> Result<T, BlpError> {
+        match rx.recv_timeout(Duration::from_millis(IDENTITY_AUTH_TIMEOUT_MS)) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                pending.lock().take();
+                Err(BlpError::Timeout)
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(BlpError::Internal {
+                detail: format!("identity {step} dropped without resolution"),
+            }),
+        }
+    }
+
+    /// Classic per-call authorization for engines WITHOUT auth config:
+    /// `generateToken` (OS logon) → `//blp/apiauth` `AuthorizationRequest` →
+    /// authorized [`xbbg_core::Identity`], then `op` — all on ONE blocking
+    /// thread. Verified live: this is the flow a plain Desktop endpoint
+    /// actually answers — EMRS-enrolled users get an authorized identity;
+    /// others get Bloomberg's precise reason (e.g. "User not in emrs
+    /// userid=...").
+    ///
+    /// Thread confinement keeps every `!Send` SDK handle (`Identity`,
+    /// `Request`, `Service`) on the thread that created it, matching
+    /// xbbg-core's sourced threading contract, and keeps the async future
+    /// `Send` for the binding layers. `//blp/apiauth` must already be open.
+    fn classic_authorize_blocking<T>(
+        &self,
+        op: impl FnOnce(&Self, &xbbg_core::Identity) -> Result<T, BlpError>,
+    ) -> Result<T, BlpError> {
+        // Step 1: token for the logged-in user.
+        let token_rx = {
+            let mut pending = self.shared.pending_token.lock();
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            *pending = Some(tx);
+            if let Err(err) = self
+                .session
+                .generate_token(&CorrelationId::Int(IDENTITY_TOKEN_CID))
+            {
+                pending.take();
+                return Err(err);
+            }
+            rx
+        };
+        let token = self
+            .recv_classic_step(&token_rx, &self.shared.pending_token, "token generation")
+            .map_err(hint_entitlement_requirements)?;
+
+        // Step 2: authorization request against //blp/apiauth.
+        let auth_service = self.session.get_service(APIAUTH_SERVICE)?;
+        let mut request = auth_service.create_request("AuthorizationRequest")?;
+        request.set_str("token", &token)?;
+        let mut identity = self.session.create_identity()?;
+
+        let auth_rx = {
+            let mut pending = self.shared.pending_identity_auth.lock();
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            *pending = Some(tx);
+            if let Err(err) = self.session.send_authorization_request(
+                &request,
+                &mut identity,
+                &CorrelationId::Int(IDENTITY_CID),
+            ) {
+                pending.take();
+                return Err(err);
+            }
+            rx
+        };
+        self.recv_classic_step(
+            &auth_rx,
+            &self.shared.pending_identity_auth,
+            "authorization",
+        )
+        .map_err(hint_entitlement_requirements)?;
+
+        op(self, &identity)
+    }
+
+    /// Run `op` with an authorized identity.
+    ///
+    /// Auth-configured engines authorize the SDK-owned session identity once
+    /// and then materialize a fresh refcounted handle per call
+    /// (`authorized_identity`), inline after the last await — no `!Send`
+    /// value ever lives across an await, so the future stays `Send` for the
+    /// binding layers. Engines without auth run the classic token flow on a
+    /// dedicated blocking thread per call; only the `Send` result crosses
+    /// back.
+    async fn with_identity<T: Send + 'static>(
+        self: &Arc<Self>,
+        op: impl FnOnce(&Self, &xbbg_core::Identity) -> Result<T, BlpError> + Send + 'static,
+    ) -> Result<T, BlpError> {
+        match &self.config.auth {
+            Some(auth_config) => {
+                self.ensure_identity(auth_config).await?;
+                let identity = self
+                    .session
+                    .authorized_identity(&CorrelationId::Int(IDENTITY_CID))?;
+                op(self, &identity)
+            }
+            None => {
+                // The blocking thread cannot await; open the auth service
+                // here first.
+                self.ensure_service(APIAUTH_SERVICE).await?;
+                // Serialize classic attempts: the pending-waiter slots hold
+                // exactly one in-flight sender each.
+                let _flow = self.identity_flow_lock.lock().await;
+                let this = Arc::clone(self);
+                tokio::task::spawn_blocking(move || this.classic_authorize_blocking(op))
+                    .await
+                    .map_err(|err| BlpError::Internal {
+                        detail: format!("identity task failed to complete: {err}"),
+                    })?
+            }
+        }
+    }
+
+    /// Seat type of the authorized identity (BPS / NONBPS / INVALID).
+    pub(crate) async fn identity_seat_type(self: &Arc<Self>) -> Result<SeatType, BlpError> {
+        self.with_identity(|_, identity| identity.seat_type()).await
+    }
+
+    /// Entitlement check against `service`, reporting failed EIDs.
+    pub(crate) async fn identity_check_entitlements(
+        self: &Arc<Self>,
+        service: &str,
+        eids: &[i32],
+    ) -> Result<EntitlementCheck, BlpError> {
+        self.ensure_service(service).await?;
+        let service = service.to_string();
+        let eids = eids.to_vec();
+        self.with_identity(move |worker, identity| {
+            let service = worker.session.get_service(&service)?;
+            identity.check_entitlements(&service, &eids)
+        })
+        .await
+    }
+
+    /// Whether the authorized identity may access `service` at all.
+    pub(crate) async fn identity_is_authorized(
+        self: &Arc<Self>,
+        service: &str,
+    ) -> Result<bool, BlpError> {
+        self.ensure_service(service).await?;
+        let service = service.to_string();
+        self.with_identity(move |worker, identity| {
+            let service = worker.session.get_service(&service)?;
+            Ok(identity.is_authorized(&service))
+        })
+        .await
     }
 
     /// Submit a unified request. Failures are delivered through `reply`;
@@ -1073,6 +1566,7 @@ impl AsyncRequestWorker {
         xbbg_log::info!(worker_id = self.id, "AsyncRequestWorker shutting down");
         self.session.stop();
         self.shared.fail_pending_service_opens("worker shutdown");
+        self.shared.fail_pending_identity("worker shutdown");
         self.shared.drain_in_flight("worker shutdown");
     }
 }
@@ -1216,6 +1710,14 @@ fn build_request_from_params(
     // - Non-dotted names try scalar set first, fall back to append for arrays
     for (name, value) in iter_named_request_parameters(params) {
         apply_named_request_parameter(&mut request, name, value)?;
+    }
+
+    // First-class returnEids flag (validated to ReferenceData/HistoricalData
+    // in request_plan). Same wire form as the element spelling, so an explicit
+    // ("returnEids", "true") element stays consistent with this overwrite.
+    if params.return_eids {
+        xbbg_log::trace!(element = "returnEids", "setting");
+        apply_named_request_parameter(&mut request, "returnEids", "true")?;
     }
 
     // Set apiflds field IDs

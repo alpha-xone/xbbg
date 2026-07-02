@@ -187,6 +187,12 @@ impl RequestWorkerPool {
         Err(BlpAsyncError::AllWorkersDown { pool_size: len })
     }
 
+    /// A healthy worker for out-of-band session operations (identity /
+    /// entitlement queries). Same round-robin selection as request dispatch.
+    pub(crate) fn any_healthy_worker(&self) -> Result<Arc<AsyncRequestWorker>, BlpAsyncError> {
+        self.next_healthy_worker().map(Arc::clone)
+    }
+
     fn retry_delay(&self, attempt: usize) -> u64 {
         if attempt == 0 {
             return 0;

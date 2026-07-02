@@ -14,6 +14,10 @@ pub use errors::BlpAsyncError;
 // Worker-pool Engine — the primary API
 pub use engine::{Engine, EngineConfig, OverflowPolicy, SlabKey, ValidationMode};
 
+// Identity / entitlement types surfaced by Engine::seat_type and
+// Engine::check_entitlements.
+pub use xbbg_core::{EntitlementCheck, SeatType};
+
 // Request building and validation
 pub use request_builder::{RequestBuilder, RoutedParams};
 

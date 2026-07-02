@@ -41,6 +41,8 @@ import type {
   BeqsOptions,
   BfldsOptions,
   BlkpOptions,
+  BloombergFieldException,
+  BloombergMetadataError,
   BqlOptions,
   BqrOptions,
   BsrchOptions,
@@ -53,6 +55,7 @@ import type {
   DividendOptions,
   DividendYieldOptions,
   EngineConfig,
+  EntitlementReport,
   EtfHoldingsOptions,
   ExchangeInfoResult,
   ExchangeOverrideInput,
@@ -77,6 +80,8 @@ import type {
   RecipeBackendOptions,
   RequestInput,
   RequestOptions,
+  ResultMetadata,
+  SeatType,
   ServerAddress,
   SecurityOverrideSpec,
   SessionWindowsInfo,
@@ -328,8 +333,107 @@ const MKTDATA_SERVICE = '//blp/mktdata';
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-function toArrowTableFromNative(batch: NativeArrowZeroCopyBatch): Table {
-  return tableFromNativeArrowBatch(batch);
+function toArrowTableFromNative(batch: NativeArrowZeroCopyBatch): Table & ResultMetadata {
+  return attachResultMetadata(tableFromNativeArrowBatch(batch), batch.metadata);
+}
+
+const METADATA_KEY_EID_DATA = 'xbbg.eid_data';
+const METADATA_KEY_SECURITY_ERRORS = 'xbbg.security_errors';
+const METADATA_KEY_FIELD_EXCEPTIONS = 'xbbg.field_exceptions';
+
+function metadataRecordFromMap(metadata: ReadonlyMap<string, string>): Record<string, string> {
+  return Object.fromEntries(metadata.entries());
+}
+
+function parseJsonMetadata<T>(
+  metadata: Record<string, string>,
+  key: string,
+  guard: (value: unknown) => value is T,
+): T | undefined {
+  const raw = metadata[key];
+  if (raw === undefined) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return guard(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isNumberArrayRecord(value: unknown): value is Record<string, number[]> {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  return Object.values(value).every(
+    (entry) => Array.isArray(entry) && entry.every((eid) => typeof eid === 'number'),
+  );
+}
+
+function isMetadataError(value: unknown): value is BloombergMetadataError {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  const { category, code, message, subcategory } = value;
+  return (
+    (category === undefined || typeof category === 'string') &&
+    (code === undefined || typeof code === 'string' || typeof code === 'number') &&
+    (message === undefined || typeof message === 'string') &&
+    (subcategory === undefined || typeof subcategory === 'string')
+  );
+}
+
+function isMetadataErrorRecord(value: unknown): value is Record<string, BloombergMetadataError> {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  return Object.values(value).every(isMetadataError);
+}
+
+function isFieldException(value: unknown): value is BloombergFieldException {
+  if (!isMetadataError(value)) {
+    return false;
+  }
+  if (!('field' in value)) {
+    return true;
+  }
+  return typeof value.field === 'string';
+}
+
+function isFieldExceptionRecord(
+  value: unknown,
+): value is Record<string, BloombergFieldException[]> {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  return Object.values(value).every(
+    (entry) => Array.isArray(entry) && entry.every(isFieldException),
+  );
+}
+
+function attachResultMetadata<T extends object>(
+  result: T,
+  metadata: Record<string, string>,
+): T & ResultMetadata {
+  const eidData = parseJsonMetadata(metadata, METADATA_KEY_EID_DATA, isNumberArrayRecord);
+  const securityErrors = parseJsonMetadata(
+    metadata,
+    METADATA_KEY_SECURITY_ERRORS,
+    isMetadataErrorRecord,
+  );
+  const fieldExceptions = parseJsonMetadata(
+    metadata,
+    METADATA_KEY_FIELD_EXCEPTIONS,
+    isFieldExceptionRecord,
+  );
+  Object.defineProperties(result, {
+    eidData: { enumerable: true, value: eidData },
+    fieldExceptions: { enumerable: true, value: fieldExceptions },
+    metadata: { enumerable: true, value: { ...metadata } },
+    securityErrors: { enumerable: true, value: securityErrors },
+  });
+  return result as T & ResultMetadata;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -338,6 +442,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function toRequestString(value: unknown): string {
   return String(value);
+}
+
+function getLegacySecurityOverrides(params: RequestInput): unknown {
+  if ('securityOverrides' in params) {
+    return params.securityOverrides;
+  }
+  return undefined;
 }
 
 function mapObjectToPairs(obj: OverridesMap | undefined): StringPair[] | undefined {
@@ -952,13 +1063,15 @@ function normalizeBackend(backend: BackendKind | undefined): BackendKind {
 
 function ipcToBackend(buffer: Buffer, backend: BackendKind | undefined): unknown {
   const selected = normalizeBackend(backend);
+  const table = tableFromIPC(buffer);
+  const metadata = metadataRecordFromMap(table.schema.metadata);
   if (selected === Backend.JSON) {
-    return [...tableFromIPC(buffer)];
+    return attachResultMetadata([...table], metadata);
   }
   if (selected === Backend.POLARS) {
     return loadPolars().readIPC(buffer);
   }
-  return tableFromIPC(buffer);
+  return attachResultMetadata(table, metadata);
 }
 
 // ── Configured engine state ─────────────────────────────────────────────
@@ -1235,14 +1348,62 @@ export class Engine {
     }
   }
 
+  /**
+   * Return the Bloomberg identity seat type: "BPS", "NONBPS", or "INVALID".
+   *
+   * Identity operations authorize lazily using the engine auth config when
+   * configured, otherwise the Desktop terminal OS-logon user. The first call
+   * may block for a few seconds and transient failures are retryable.
+   */
+  public async seatType(): Promise<SeatType> {
+    try {
+      return await this.inner.seatType();
+    } catch (error) {
+      throw wrapError(error);
+    }
+  }
+
+  /**
+   * Check whether the authorized identity is entitled to all supplied EIDs.
+   *
+   * Identity operations authorize lazily using the engine auth config when
+   * configured, otherwise the Desktop terminal OS-logon user. The first call
+   * may block for a few seconds and transient failures are retryable.
+   */
+  public async checkEntitlements(
+    service: string,
+    eids: readonly number[],
+  ): Promise<EntitlementReport> {
+    try {
+      return await this.inner.checkEntitlements(service, eids);
+    } catch (error) {
+      throw wrapError(error);
+    }
+  }
+
+  /**
+   * Return whether the authorized identity may use the Bloomberg service.
+   *
+   * Identity operations authorize lazily using the engine auth config when
+   * configured, otherwise the Desktop terminal OS-logon user. The first call
+   * may block for a few seconds and transient failures are retryable.
+   */
+  public async identityIsAuthorized(service: string): Promise<boolean> {
+    try {
+      return await this.inner.identityIsAuthorized(service);
+    } catch (error) {
+      throw wrapError(error);
+    }
+  }
+
   public async request(params: RequestInput): Promise<unknown> {
     const backend = normalizeBackend(params.backend);
     const {
       backend: _discarded,
       overrides,
-      securityOverrides: legacySecurityOverrides,
       ...rest
-    } = params as RequestInput & { readonly securityOverrides?: unknown };
+    } = params;
+    const legacySecurityOverrides = getLegacySecurityOverrides(params);
     if (legacySecurityOverrides !== undefined) {
       throw new TypeError(
         'Use overrides: ovr({ "<SECURITY>": { ... } }) for per-security overrides',
@@ -1260,9 +1421,9 @@ export class Engine {
   public async requestRaw(params: RequestInput): Promise<Buffer> {
     const {
       overrides,
-      securityOverrides: legacySecurityOverrides,
       ...rest
-    } = params as RequestInput & { readonly securityOverrides?: unknown };
+    } = params;
+    const legacySecurityOverrides = getLegacySecurityOverrides(params);
     if (legacySecurityOverrides !== undefined) {
       throw new TypeError(
         'Use overrides: ovr({ "<SECURITY>": { ... } }) for per-security overrides',
@@ -1286,6 +1447,7 @@ export class Engine {
       fields,
       format: options.format,
       includeSecurityErrors: Boolean(options.includeSecurityErrors),
+      returnEids: options.returnEids,
       kwargs: mapObjectToPairs(options.kwargs),
       operation: 'ReferenceDataRequest',
       overrides: options.overrides,
@@ -1305,6 +1467,7 @@ export class Engine {
       extractor: 'bulk',
       fields,
       format: options.format,
+      returnEids: options.returnEids,
       kwargs: mapObjectToPairs(options.kwargs),
       operation: 'ReferenceDataRequest',
       overrides: options.overrides,
@@ -1325,6 +1488,7 @@ export class Engine {
       extractor: 'histdata',
       fields,
       format: options.format,
+      returnEids: options.returnEids,
       kwargs: mapObjectToPairs(options.kwargs),
       operation: 'HistoricalDataRequest',
       overrides: options.overrides,
@@ -2360,6 +2524,8 @@ export type {
   BeqsOptions,
   BfldsOptions,
   BlkpOptions,
+  BloombergFieldException,
+  BloombergMetadataError,
   BqlOptions,
   BqrOptions,
   BsrchOptions,
@@ -2372,6 +2538,7 @@ export type {
   DividendOptions,
   DividendYieldOptions,
   EngineConfig,
+  EntitlementReport,
   EtfHoldingsOptions,
   ExchangeInfoResult,
   ExchangeOverrideInput,
@@ -2396,6 +2563,8 @@ export type {
   RecipeBackendOptions,
   RequestInput,
   RequestOptions,
+  ResultMetadata,
+  SeatType,
   ServerAddress,
   SecurityOverrideSpec,
   SessionWindowsInfo,

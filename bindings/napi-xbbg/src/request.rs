@@ -48,6 +48,7 @@ impl TryFrom<RequestInput> for RequestParams {
             options: pairs_to_tuples(input.options),
             field_types: pairs_to_map(input.field_types),
             include_security_errors: input.include_security_errors,
+            return_eids: input.return_eids,
             validate_fields: input.validate_fields,
             search_spec: input.search_spec,
             field_ids: input.field_ids,

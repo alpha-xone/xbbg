@@ -69,6 +69,45 @@ impl Identity {
         Ok(rc != 0)
     }
 
+    /// Check entitlements for `service`, reporting which EIDs failed.
+    ///
+    /// Same FFI contract as [`Identity::has_entitlements`], but supplies the
+    /// optional `failedEntitlements` out-array (capacity = `eids.len()`; the
+    /// count parameter is in/out: capacity on input, failures written on
+    /// output — blpapi_identity.h:196-216). When the identity is entitled to
+    /// every EID the array is untouched and `failed_eids` is empty.
+    pub fn check_entitlements(
+        &self,
+        service: &crate::Service<'_>,
+        eids: &[i32],
+    ) -> Result<EntitlementCheck> {
+        let mut failed = vec![0_i32; eids.len()];
+        let mut failed_count: i32 = eids.len() as i32;
+        let rc = unsafe {
+            crate::ffi::blpapi_Identity_hasEntitlements(
+                self.ptr,
+                service.as_ptr(),
+                std::ptr::null(),
+                eids.as_ptr(),
+                eids.len(),
+                failed.as_mut_ptr(),
+                &mut failed_count,
+            )
+        };
+        let entitled = rc != 0;
+        let failed_eids = if entitled {
+            Vec::new()
+        } else {
+            let count = usize::try_from(failed_count).unwrap_or(0).min(failed.len());
+            failed.truncate(count);
+            failed
+        };
+        Ok(EntitlementCheck {
+            entitled,
+            failed_eids,
+        })
+    }
+
     pub fn seat_type(&self) -> Result<SeatType> {
         let mut raw: i32 = -1;
         let rc = unsafe { crate::ffi::blpapi_Identity_getSeatType(self.ptr, &mut raw) };
@@ -104,6 +143,16 @@ impl SeatType {
             Self::Invalid => "INVALID",
         }
     }
+}
+
+/// Result of an entitlement check against a service.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EntitlementCheck {
+    /// Whether the identity is entitled to every requested EID.
+    pub entitled: bool,
+    /// The subset of requested EIDs the identity is NOT entitled to.
+    /// Empty when `entitled` is true.
+    pub failed_eids: Vec<i32>,
 }
 
 impl Drop for Identity {

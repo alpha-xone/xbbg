@@ -26,6 +26,31 @@ export interface StringPair {
   value: string;
 }
 
+export type SeatType = 'BPS' | 'NONBPS' | 'INVALID';
+
+export interface EntitlementReport {
+  entitled: boolean;
+  failedEids: number[];
+}
+
+export interface BloombergMetadataError {
+  category?: string;
+  code?: string | number;
+  subcategory?: string;
+  message?: string;
+}
+
+export interface BloombergFieldException extends BloombergMetadataError {
+  field?: string;
+}
+
+export interface ResultMetadata {
+  metadata: Record<string, string>;
+  eidData?: Record<string, number[]>;
+  securityErrors?: Record<string, BloombergMetadataError>;
+  fieldExceptions?: Record<string, BloombergFieldException[]>;
+}
+
 export interface ServerAddress {
   host: string;
   port: number;
@@ -130,6 +155,7 @@ export interface RequestInput {
   options?: readonly StringPair[];
   fieldTypes?: readonly StringPair[];
   includeSecurityErrors?: boolean;
+  returnEids?: boolean;
   validateFields?: boolean;
   searchSpec?: string;
   fieldIds?: readonly string[];
@@ -183,6 +209,7 @@ export interface BdpOptions {
   format?: string;
   backend?: BackendKind;
   includeSecurityErrors?: boolean;
+  returnEids?: boolean;
   validateFields?: boolean;
 }
 
@@ -193,6 +220,7 @@ export interface BdhOptions {
   kwargs?: OverridesMap;
   format?: string;
   backend?: BackendKind;
+  returnEids?: boolean;
   validateFields?: boolean;
 }
 

@@ -1,6 +1,7 @@
 import type {
   CdxTickerInfo,
   EngineConfig,
+  EntitlementReport,
   ExchangeInfoResult,
   ExchangeOverrideInput,
   FieldInfo,
@@ -8,13 +9,13 @@ import type {
   FxPairInfo,
   MarketRule,
   RequestInput,
+  SeatType,
   SessionWindowsInfo,
   StringPair,
   SubscriptionStats,
   TickerParts,
   TimeRange,
 } from './types';
-
 export type NativeArrowColumnType =
   | 'bool'
   | 'binary'
@@ -59,6 +60,7 @@ export interface NativeArrowZeroCopyBatch {
   readonly kind: 'zeroCopy';
   readonly numRows: number;
   readonly columns: NativeArrowColumn[];
+  readonly metadata: Record<string, string>;
 }
 
 export type NativeUpdateValue = null | boolean | number | string;
@@ -89,6 +91,9 @@ export interface NativeSubscription {
 
 export interface NativeEngine {
   request(params: RequestInput): Promise<Buffer>;
+  seatType(): Promise<SeatType>;
+  checkEntitlements(service: string, eids: readonly number[]): Promise<EntitlementReport>;
+  identityIsAuthorized(service: string): Promise<boolean>;
   resolveFieldTypes(
     fields: readonly string[],
     overrides: readonly StringPair[] | undefined,

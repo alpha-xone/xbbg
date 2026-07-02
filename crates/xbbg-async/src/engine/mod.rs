@@ -882,6 +882,10 @@ pub struct RequestParams {
     pub field_types: Option<HashMap<String, String>>,
     /// Include security error rows in RefData long output when present.
     pub include_security_errors: bool,
+    /// Request entitlement IDs (`returnEids`) on reference/historical/bulk
+    /// requests; per-security EIDs surface in the batch metadata under
+    /// `xbbg.eid_data`.
+    pub return_eids: bool,
     /// Optional per-request field validation override.
     ///
     /// - Some(true): force strict field validation for this request
@@ -957,6 +961,7 @@ pub struct RequestParamsInput {
     pub options: Option<Vec<(String, String)>>,
     pub field_types: Option<HashMap<String, String>>,
     pub include_security_errors: Option<bool>,
+    pub return_eids: Option<bool>,
     pub validate_fields: Option<bool>,
     pub search_spec: Option<String>,
     pub field_ids: Option<Vec<String>>,
@@ -1027,6 +1032,7 @@ impl RequestParamsInput {
             options: self.options,
             field_types: self.field_types,
             include_security_errors: self.include_security_errors.unwrap_or(false),
+            return_eids: self.return_eids.unwrap_or(false),
             validate_fields: self.validate_fields,
             search_spec: self.search_spec,
             field_ids: self.field_ids,
@@ -1422,15 +1428,22 @@ fn concat_sharded_batches(batches: Vec<RecordBatch>) -> Result<RecordBatch, BlpA
         return Ok(first.clone());
     }
 
+    // Concatenation keeps only `target_schema`'s metadata; union the
+    // response diagnostics (eidData / securityError / fieldExceptions)
+    // across shards so later shards' entries are not silently dropped.
+    let merged_meta = state::ResponseMetadata::union_of(&batches);
+
     let target_schema = first.schema_ref().clone();
     let mut normalized = Vec::with_capacity(batches.len());
     normalized.push(first.clone());
     for batch in rest {
         normalized.push(normalize_batch_to_schema(batch.clone(), &target_schema)?);
     }
-    arrow_select::concat::concat_batches(&target_schema, normalized.iter()).map_err(|err| {
-        BlpAsyncError::Internal(format!("concatenate sharded request batches: {err}"))
-    })
+    arrow_select::concat::concat_batches(&target_schema, normalized.iter())
+        .map(|batch| merged_meta.attach(batch))
+        .map_err(|err| {
+            BlpAsyncError::Internal(format!("concatenate sharded request batches: {err}"))
+        })
 }
 
 fn normalize_batch_to_schema(
@@ -2240,6 +2253,45 @@ impl Engine {
 
     pub fn request_pool_health(&self) -> Vec<(usize, WorkerHealth)> {
         self.request_pool.worker_health()
+    }
+
+    /// Seat type of the session's authorized identity (`BPS` / `NONBPS` /
+    /// `INVALID`).
+    ///
+    /// With [`AuthConfig`] set (SAPI/B-PIPE), the SDK session identity is
+    /// authorized once and reused. Without it, each call runs the classic
+    /// flow (`generateToken` for the OS logon user → `//blp/apiauth`
+    /// authorization) — this succeeds on Desktop API terminals whose user is
+    /// EMRS-enrolled; otherwise Bloomberg's precise reason (e.g. "User not
+    /// in emrs userid=...") is surfaced with configuration guidance.
+    pub async fn seat_type(&self) -> Result<xbbg_core::SeatType, BlpAsyncError> {
+        let worker = self.request_pool.any_healthy_worker()?;
+        worker.identity_seat_type().await.map_err(Into::into)
+    }
+
+    /// Check the authorized identity's entitlements for `service`,
+    /// reporting exactly which EIDs failed (empty when fully entitled).
+    /// Pair with `return_eids` request metadata (`xbbg.eid_data`) to gate
+    /// redistribution per security.
+    pub async fn check_entitlements(
+        &self,
+        service: &str,
+        eids: &[i32],
+    ) -> Result<xbbg_core::EntitlementCheck, BlpAsyncError> {
+        let worker = self.request_pool.any_healthy_worker()?;
+        worker
+            .identity_check_entitlements(service, eids)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Whether the authorized identity is authorized for `service` at all.
+    pub async fn identity_is_authorized(&self, service: &str) -> Result<bool, BlpAsyncError> {
+        let worker = self.request_pool.any_healthy_worker()?;
+        worker
+            .identity_is_authorized(service)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -3119,6 +3171,52 @@ mod tests {
         assert!(params.securities.is_none());
         assert!(params.kwargs.is_none());
         assert!(params.format.is_none());
+    }
+
+    #[test]
+    fn request_params_input_maps_return_eids() {
+        let base = RequestParamsInput {
+            service: Service::RefData.to_string(),
+            operation: Some(Operation::ReferenceData.to_string()),
+            securities: Some(vec!["AAPL US Equity".to_string()]),
+            fields: Some(vec!["PX_LAST".to_string()]),
+            ..Default::default()
+        };
+
+        let defaulted = base.clone().into_request_params().unwrap();
+        assert!(!defaulted.return_eids);
+
+        let enabled = RequestParamsInput {
+            return_eids: Some(true),
+            ..base
+        }
+        .into_request_params()
+        .unwrap();
+        assert!(enabled.return_eids);
+        enabled.validate().expect("returnEids valid for refdata");
+    }
+
+    #[test]
+    fn return_eids_rejected_for_unsupported_operations() {
+        let params = RequestParamsInput {
+            service: Service::RefData.to_string(),
+            operation: Some(Operation::IntradayBar.to_string()),
+            security: Some("AAPL US Equity".to_string()),
+            start_datetime: Some("2024-01-02T00:00:00".to_string()),
+            end_datetime: Some("2024-01-03T00:00:00".to_string()),
+            interval: Some(1),
+            event_type: Some("TRADE".to_string()),
+            return_eids: Some(true),
+            ..Default::default()
+        }
+        .into_request_params()
+        .unwrap();
+
+        let err = params.validate().expect_err("returnEids invalid for bdib");
+        assert!(
+            err.to_string().contains("return_eids"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

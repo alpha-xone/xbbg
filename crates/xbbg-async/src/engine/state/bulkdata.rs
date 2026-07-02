@@ -10,7 +10,8 @@ use xbbg_log::trace;
 
 use super::typed_builder::ColumnSet;
 use super::value_utils::{
-    arrow_type_for_element, should_emit_scalar_field, top_level_response_error,
+    arrow_type_for_element, should_emit_scalar_field, top_level_response_error, ResponseMetadata,
+    SecurityErrorMeta,
 };
 use xbbg_core::{BlpError, Element, Message};
 
@@ -24,6 +25,9 @@ pub struct BulkDataState {
     subfield_names: Vec<String>,
     /// Membership set for O(1) duplicate checks while preserving `subfield_names` order.
     subfield_name_set: HashSet<String>,
+    /// Response-level diagnostics (eidData / securityError) attached to the
+    /// result batch as schema metadata.
+    response_meta: ResponseMetadata,
     /// Reply channel
     pub reply: oneshot::Sender<Result<RecordBatch, BlpError>>,
 }
@@ -36,6 +40,7 @@ impl BulkDataState {
             columns: ColumnSet::new(),
             subfield_names: Vec::new(),
             subfield_name_set: HashSet::new(),
+            response_meta: ResponseMetadata::default(),
             reply,
         }
     }
@@ -55,11 +60,15 @@ impl BulkDataState {
 
         self.process_message(msg);
         let reply = self.reply;
+        let response_meta = std::mem::take(&mut self.response_meta);
         // Include "field" column to identify which bulk field was queried
         let mut order = vec!["ticker", "field"];
         order.extend(self.subfield_names.iter().map(|s| s.as_str()));
-        let result = self.columns.finish_with_order(&order);
-        if let Ok(ref batch) = result {
+        let result = self
+            .columns
+            .finish_with_order(&order)
+            .map(|batch| response_meta.attach(batch));
+        if let Ok(batch) = &result {
             xbbg_log::debug!(
                 rows = batch.num_rows(),
                 cols = batch.num_columns(),
@@ -108,9 +117,37 @@ impl BulkDataState {
                 .and_then(|e| e.get_str(0))
                 .unwrap_or("");
 
+            // eidData rides alongside fieldData when returnEids was requested.
+            if let Some(eids) = sec.get_by_str("eidData") {
+                self.response_meta.record_eid_data(ticker, &eids);
+            }
+
             // Check for security error
-            if sec.get_by_str("securityError").is_some() {
-                trace!(ticker = ticker, "Security has error, skipping");
+            if let Some(security_error) = sec.get_by_str("securityError") {
+                let read_str = |name: &str| {
+                    security_error
+                        .get_by_str(name)
+                        .and_then(|e| e.get_str(0))
+                        .map(str::to_string)
+                        .unwrap_or_default()
+                };
+                let error = SecurityErrorMeta {
+                    category: read_str("category"),
+                    code: security_error
+                        .get_by_str("code")
+                        .and_then(|e| e.get_i32(0))
+                        .unwrap_or_default(),
+                    subcategory: read_str("subcategory"),
+                    message: read_str("message"),
+                };
+                xbbg_log::warn!(
+                    ticker = ticker,
+                    category = error.category.as_str(),
+                    code = error.code,
+                    message = error.message.as_str(),
+                    "BulkData securityError; skipping security"
+                );
+                self.response_meta.record_security_error(ticker, error);
                 continue;
             }
 

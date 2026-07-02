@@ -46,6 +46,18 @@ fn init_tracing() {
     });
 }
 
+/// Optional auth for identity/entitlement tests: XBBG_TEST_AUTH=user enables
+/// OS-logon auth (SAPI/B-PIPE runners). Desktop API terminals must leave it
+/// unset — Desktop rejects any authorization (verified live: session startup
+/// fails NOT_AUTHORIZED "Failed to generate token" with auth=user configured).
+fn auth_from_env() -> Option<xbbg_core::AuthConfig> {
+    match std::env::var("XBBG_TEST_AUTH").ok().as_deref() {
+        Some("user") => Some(xbbg_core::AuthConfig::User),
+        Some(other) => panic!("unsupported XBBG_TEST_AUTH value: {other}"),
+        None => None,
+    }
+}
+
 fn create_engine() -> Engine {
     let host = std::env::var("BLP_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let port: u16 = std::env::var("BLP_PORT")
@@ -55,6 +67,7 @@ fn create_engine() -> Engine {
 
     let config = EngineConfig {
         transport: Transport::Direct(vec![ServerAddr::new(host, port)]),
+        auth: auth_from_env(),
         ..Default::default()
     };
 
@@ -715,6 +728,256 @@ async fn test_tracing_captures_request() {
     let batch = engine.request(params).await.expect("request");
 
     tracing::info!(num_rows = batch.num_rows(), "Request completed");
+
+    std::mem::forget(engine);
+}
+
+// =============================================================================
+// Identity / Entitlement (EID) Tests
+// =============================================================================
+
+fn parse_meta_map<T: serde::de::DeserializeOwned>(batch: &RecordBatch, key: &str) -> Option<T> {
+    batch
+        .schema_ref()
+        .metadata()
+        .get(key)
+        .map(|json| serde_json::from_str(json).expect("metadata JSON should parse"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_identity_seat_type_and_authorization() {
+    init_tracing();
+    let engine = create_engine();
+
+    match engine.seat_type().await {
+        // Auth-capable endpoint (XBBG_TEST_AUTH set on SAPI/B-PIPE).
+        Ok(seat) => {
+            println!("\n=== Seat type: {} ===", seat.as_str());
+            assert_ne!(seat.as_str(), "INVALID", "identity should be authorized");
+
+            let authorized = engine
+                .identity_is_authorized("//blp/refdata")
+                .await
+                .expect("identity_is_authorized");
+            assert!(authorized, "identity should access //blp/refdata");
+
+            // Second call exercises the Ready fast path (no re-authorization).
+            let seat2 = engine.seat_type().await.expect("seat_type (cached)");
+            assert_eq!(seat.as_str(), seat2.as_str());
+
+            // Failed-EID out-array contract against the real SDK: no identity
+            // is entitled to a made-up EID, so the else branch (in/out count +
+            // truncate) must report exactly that EID back.
+            let bogus = engine
+                .check_entitlements("//blp/refdata", &[999_999_999])
+                .await
+                .expect("bogus-EID check");
+            println!(
+                "bogus EID entitled={} failed={:?}",
+                bogus.entitled, bogus.failed_eids
+            );
+            assert!(!bogus.entitled, "made-up EID cannot be entitled");
+            assert_eq!(bogus.failed_eids, vec![999_999_999]);
+        }
+        // No-auth engine on a non-EMRS Desktop terminal: the classic token
+        // flow runs and Bloomberg's precise reason must surface with the
+        // configuration hint attached (EMRS-enrolled desktops succeed via
+        // the Ok arm above instead).
+        Err(e) => {
+            let msg = e.to_string();
+            println!("\n=== seat_type error (expected on non-EMRS Desktop): {msg} ===");
+            assert!(
+                msg.contains("EMRS") || msg.contains("SAPI/B-PIPE"),
+                "error should carry configuration guidance, got: {msg}"
+            );
+        }
+    }
+
+    std::mem::forget(engine);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_return_eids_roundtrip_with_entitlement_check() {
+    init_tracing();
+    let engine = create_engine();
+
+    let params = RequestParams {
+        service: "//blp/refdata".to_string(),
+        operation: "ReferenceDataRequest".to_string(),
+        extractor: ExtractorType::RefData,
+        securities: Some(vec!["IBM US Equity".to_string()]),
+        fields: Some(vec!["PX_LAST".to_string()]),
+        return_eids: true,
+        ..Default::default()
+    };
+
+    let batch = engine.request(params).await.expect("bdp with returnEids");
+    print_batch_summary("BDP returnEids", &batch);
+
+    let eid_data: std::collections::BTreeMap<String, Vec<i64>> =
+        parse_meta_map(&batch, "xbbg.eid_data").expect("xbbg.eid_data metadata present");
+    println!("eid_data: {eid_data:?}");
+    let eids = eid_data
+        .get("IBM US Equity")
+        .expect("EIDs reported for requested security");
+    assert!(!eids.is_empty(), "at least one EID expected");
+
+    // The identity that just received this data must be entitled to its EIDs
+    // (auth-capable runs). On Desktop (no auth configured) the check must
+    // fail fast with configuration guidance instead.
+    let eids_i32: Vec<i32> = eids.iter().map(|&e| e as i32).collect();
+    match engine.check_entitlements("//blp/refdata", &eids_i32).await {
+        Ok(check) => {
+            println!("entitled={} failed={:?}", check.entitled, check.failed_eids);
+            assert!(check.entitled, "identity must hold EIDs of data it received");
+            assert!(check.failed_eids.is_empty());
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            println!("check_entitlements (expected on non-EMRS Desktop): {msg}");
+            assert!(
+                msg.contains("EMRS") || msg.contains("SAPI/B-PIPE"),
+                "error should carry configuration guidance, got: {msg}"
+            );
+        }
+    }
+
+    std::mem::forget(engine);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_return_eids_historical() {
+    init_tracing();
+    let engine = create_engine();
+
+    let params = RequestParams {
+        service: "//blp/refdata".to_string(),
+        operation: "HistoricalDataRequest".to_string(),
+        extractor: ExtractorType::HistData,
+        securities: Some(vec!["IBM US Equity".to_string()]),
+        fields: Some(vec!["PX_LAST".to_string()]),
+        start_date: Some("20240102".to_string()),
+        end_date: Some("20240105".to_string()),
+        return_eids: true,
+        ..Default::default()
+    };
+
+    let batch = engine.request(params).await.expect("bdh with returnEids");
+    print_batch_summary("BDH returnEids", &batch);
+
+    let eid_data: std::collections::BTreeMap<String, Vec<i64>> =
+        parse_meta_map(&batch, "xbbg.eid_data").expect("xbbg.eid_data metadata present");
+    assert!(
+        eid_data.contains_key("IBM US Equity"),
+        "historical eidData expected: {eid_data:?}"
+    );
+
+    std::mem::forget(engine);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_security_error_and_field_exception_metadata() {
+    init_tracing();
+    let engine = create_engine();
+
+    let params = RequestParams {
+        service: "//blp/refdata".to_string(),
+        operation: "ReferenceDataRequest".to_string(),
+        extractor: ExtractorType::RefData,
+        securities: Some(vec![
+            "IBM US Equity".to_string(),
+            "XXNOTREAL FAKE Equity".to_string(),
+        ]),
+        fields: Some(vec!["PX_LAST".to_string(), "NOT_A_REAL_FIELD_XX".to_string()]),
+        ..Default::default()
+    };
+
+    let batch = engine.request(params).await.expect("bdp mixed request");
+    print_batch_summary("BDP error metadata", &batch);
+
+    #[derive(serde::Deserialize, Debug)]
+    struct SecErr {
+        category: String,
+        #[allow(dead_code)]
+        code: i32,
+        #[allow(dead_code)]
+        subcategory: String,
+        message: String,
+    }
+    let sec_errors: std::collections::BTreeMap<String, SecErr> =
+        parse_meta_map(&batch, "xbbg.security_errors")
+            .expect("xbbg.security_errors metadata present");
+    println!("security_errors: {sec_errors:?}");
+    let bad = sec_errors
+        .get("XXNOTREAL FAKE Equity")
+        .expect("bogus ticker recorded");
+    assert!(!bad.category.is_empty() || !bad.message.is_empty());
+
+    #[derive(serde::Deserialize, Debug)]
+    struct FieldExc {
+        field: String,
+        #[allow(dead_code)]
+        category: String,
+        #[allow(dead_code)]
+        code: i32,
+        #[allow(dead_code)]
+        subcategory: String,
+        #[allow(dead_code)]
+        message: String,
+    }
+    let field_excs: std::collections::BTreeMap<String, Vec<FieldExc>> =
+        parse_meta_map(&batch, "xbbg.field_exceptions")
+            .expect("xbbg.field_exceptions metadata present");
+    println!("field_exceptions: {field_excs:?}");
+    let ibm_excs = field_excs
+        .get("IBM US Equity")
+        .expect("bad field recorded for valid ticker");
+    assert!(ibm_excs.iter().any(|e| e.field == "NOT_A_REAL_FIELD_XX"));
+
+    std::mem::forget(engine);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_raw_generic_preserves_error_and_eid_elements() {
+    init_tracing();
+    let engine = create_engine();
+
+    // Raw mode + Generic extractor: the flattened element paths must retain
+    // securityError / eidData verbatim rather than dropping them.
+    let params = RequestParams {
+        service: "//blp/refdata".to_string(),
+        operation: String::new(),
+        request_operation: Some("ReferenceDataRequest".to_string()),
+        extractor: ExtractorType::Generic,
+        extractor_set: true,
+        securities: Some(vec![
+            "IBM US Equity".to_string(),
+            "XXNOTREAL FAKE Equity".to_string(),
+        ]),
+        fields: Some(vec!["PX_LAST".to_string()]),
+        elements: Some(vec![("returnEids".to_string(), "true".to_string())]),
+        ..Default::default()
+    };
+
+    let batch = engine.request(params).await.expect("raw generic request");
+    print_batch_summary("RAW generic returnEids", &batch);
+
+    let paths = batch
+        .column_by_name("path")
+        .expect("generic path column")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("path column is strings");
+    let all_paths: Vec<&str> = (0..paths.len()).map(|i| paths.value(i)).collect();
+
+    assert!(
+        all_paths.iter().any(|p| p.contains("eidData")),
+        "raw flatten should retain eidData"
+    );
+    assert!(
+        all_paths.iter().any(|p| p.contains("securityError")),
+        "raw flatten should retain securityError"
+    );
 
     std::mem::forget(engine);
 }

@@ -343,6 +343,7 @@ fn validate_request_params_with_operation(
 
     validate_field_metadata_aliases(params, operation)?;
     validate_security_overrides(params, operation, raw)?;
+    validate_return_eids(params, operation, raw)?;
     PlannedRequestShape::from_params(operation, raw, params)?;
 
     if raw {
@@ -368,6 +369,28 @@ fn validate_request_params_with_operation(
         | Operation::Custom(_) => {}
     }
     Ok(())
+}
+
+/// `returnEids` is a ReferenceDataRequest / HistoricalDataRequest element
+/// (bdp/bds/bdh). Reject it elsewhere instead of silently dropping the
+/// parameter; raw requests are power-user mode and pass through.
+fn validate_return_eids(
+    params: &RequestParams,
+    operation: &Operation,
+    raw: bool,
+) -> Result<(), BlpAsyncError> {
+    if !params.return_eids || raw {
+        return Ok(());
+    }
+    match operation {
+        Operation::ReferenceData | Operation::HistoricalData => Ok(()),
+        other => Err(BlpAsyncError::ConfigError {
+            detail: format!(
+                "return_eids is only supported for ReferenceData and HistoricalData requests \
+                 (got {other}); pass the returnEids element explicitly for raw requests"
+            ),
+        }),
+    }
 }
 
 fn route_request_params(
