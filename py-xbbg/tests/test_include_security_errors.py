@@ -76,7 +76,6 @@ def test_request_params_to_dict_includes_return_eids_when_true():
     assert result["return_eids"] is True
 
 
-
 @pytest.mark.asyncio
 async def test_arequest_passes_include_security_errors_to_engine(monkeypatch):
     """arequest() should pass include_security_errors=True to engine.request()."""
@@ -181,7 +180,6 @@ async def test_arequest_omits_return_eids_when_false(monkeypatch):
     assert "return_eids" not in captured
     assert isinstance(result, Sized)
     assert len(result) == 1
-
 
 
 @pytest.mark.asyncio

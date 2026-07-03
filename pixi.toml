@@ -3,8 +3,12 @@ name = "xbbg"
 description = "Independent client for Bloomberg-connected data workflows"
 # Conda packages below resolve from conda-forge only (see `channels`).
 channels = ["conda-forge"]
-platforms = ["linux-64", "osx-arm64", "win-64"]
-requires-pixi = ">=0.40"
+platforms = [
+  { name = "linux-64-generic", platform = "linux-64", linux = "4.18", glibc = "2.28" },
+  "osx-arm64",
+  "win-64",
+]
+requires-pixi = ">=0.71"
 
 [dependencies]
 python = ">=3.10,<3.15"
@@ -20,8 +24,6 @@ pip = "*"
 [pypi-dependencies]
 narwhals = ">=2.0"
 
-[pypi-options]
-extra-index-urls = ["https://blpapi.bloomberg.com/repository/releases/python/simple/"]
 
 [activation.env]
 BLPAPI_ROOT = "$PIXI_PROJECT_ROOT/vendor/blpapi-sdk"
@@ -29,9 +31,6 @@ LIBCLANG_PATH = "$CONDA_PREFIX/lib"
 CARGO_TERM_COLOR = "always"
 RUST_BACKTRACE = "1"
 
-[system-requirements]
-linux = "4.18"
-libc = { version = "2.28", family = "glibc" }
 
 [target.win.activation.env]
 BLPAPI_ROOT = "%PIXI_PROJECT_ROOT%\\vendor\\blpapi-sdk"

@@ -509,6 +509,7 @@ def ensure_arrow_table(frame: Any) -> Any:
         return pa.Table.from_batches([frame])
     raise TypeError(f"Expected xbbg ArrowTable or ArrowRecordBatch, got {type(frame).__name__}")
 
+
 _XBBG_METADATA_ATTRS = {
     "xbbg.eid_data": ("eid_data", "xbbg_eid_data"),
     "xbbg.security_errors": ("security_errors", "xbbg_security_errors"),
@@ -535,7 +536,6 @@ def _attach_xbbg_metadata_attrs(dataframe: Any, table: Any) -> Any:
         if value is not None:
             attrs[frame_attr] = value
     return dataframe
-
 
 
 def _to_pyarrow_table(table: Any) -> Any:

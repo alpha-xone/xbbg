@@ -486,7 +486,6 @@ async def aidentity_is_authorized(service: str = Service.REFDATA.value) -> bool:
     return await _get_engine().identity_is_authorized(service)
 
 
-
 _VALID_CONFIG_KEYS: frozenset[str] = frozenset(
     {
         "host",
