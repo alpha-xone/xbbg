@@ -1,5 +1,5 @@
-import { expectTypeOf } from 'vitest';
 import { Field, Int32, Schema, Table, tableToIPC } from 'apache-arrow';
+import { expectTypeOf } from 'vitest';
 
 import { tableFromNativeArrowBatch } from '../src/arrow-zero-copy';
 import * as api from '../src/index';
@@ -640,7 +640,7 @@ describe('native Arrow zero-copy table construction', () => {
       service: '//blp/refdata',
     });
     const validMetadata = valid as ResultMetadata;
-    expect(Array.isArray(valid)).toBe(true);
+    expect(Array.isArray(valid)).toBeTruthy();
     expect(validMetadata.eidData).toStrictEqual({ 'IBM US Equity': [101, 202] });
     expect(validMetadata.securityErrors).toStrictEqual({
       'MSFT US Equity': {
@@ -870,9 +870,7 @@ describe('engine wrapper request plumbing', () => {
       start: '2024-01-01',
     });
 
-    expect(engine.calls[0]?.returnEids).toBe(true);
-    expect(engine.calls[1]?.returnEids).toBe(true);
-    expect(engine.calls[2]?.returnEids).toBe(true);
+    expect(engine.calls.map((call) => call.returnEids)).toStrictEqual([true, true, true]);
   });
 
   it('wraps native errors from entitlement methods', async () => {

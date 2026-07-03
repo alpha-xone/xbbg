@@ -433,6 +433,7 @@ function attachResultMetadata<T extends object>(
     metadata: { enumerable: true, value: { ...metadata } },
     securityErrors: { enumerable: true, value: securityErrors },
   });
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Object.defineProperties attaches the ResultMetadata fields above.
   return result as T & ResultMetadata;
 }
 
@@ -1398,11 +1399,7 @@ export class Engine {
 
   public async request(params: RequestInput): Promise<unknown> {
     const backend = normalizeBackend(params.backend);
-    const {
-      backend: _discarded,
-      overrides,
-      ...rest
-    } = params;
+    const { backend: _discarded, overrides, ...rest } = params;
     const legacySecurityOverrides = getLegacySecurityOverrides(params);
     if (legacySecurityOverrides !== undefined) {
       throw new TypeError(
@@ -1419,10 +1416,7 @@ export class Engine {
   }
 
   public async requestRaw(params: RequestInput): Promise<Buffer> {
-    const {
-      overrides,
-      ...rest
-    } = params;
+    const { overrides, ...rest } = params;
     const legacySecurityOverrides = getLegacySecurityOverrides(params);
     if (legacySecurityOverrides !== undefined) {
       throw new TypeError(

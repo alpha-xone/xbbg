@@ -16,13 +16,13 @@ chrono = { version = "0.4", default-features = false, features = ["std", "serde"
 chrono-tz = "0.10"
 
 # Compile-time perfect hash maps for constants
-phf = { version = "0.11", features = ["macros"] }
+phf = { version = "0.14.0", features = ["macros"] }
 
 # Error handling
 thiserror = "2"
 
 # Market rules loading
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.1.2"
 
 # Benchmarks have been consolidated into crates/xbbg-bench.

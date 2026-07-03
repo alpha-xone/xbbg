@@ -24,7 +24,7 @@ tokio = { version = "1.48", features = ["rt-multi-thread", "time"] }
 
 # Existing experimental benchmark dependencies kept for unregistered local benches.
 arc-swap = "1"
-criterion = "0.5"
+criterion = "0.8.2"
 dhat = "0.3"
 hdrhistogram = "7.5"
 tempfile = "3.15"

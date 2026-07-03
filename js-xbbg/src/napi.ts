@@ -16,6 +16,7 @@ import type {
   TickerParts,
   TimeRange,
 } from './types';
+
 export type NativeArrowColumnType =
   | 'bool'
   | 'binary'
