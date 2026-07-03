@@ -624,7 +624,10 @@ fn live_probe_classic_token_authorization() {
 
     // Step 3: the identity is real — exercise seat type + entitlements.
     let seat = identity.seat_type().expect("seat_type");
-    println!("=== PROBE RESULT: AUTHORIZED; seat_type={} ===", seat.as_str());
+    println!(
+        "=== PROBE RESULT: AUTHORIZED; seat_type={} ===",
+        seat.as_str()
+    );
 
     sess.open_service("//blp/refdata").expect("open refdata");
     let refdata = sess.get_service("//blp/refdata").expect("get refdata");

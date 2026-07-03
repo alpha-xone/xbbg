@@ -116,7 +116,6 @@ pub(crate) fn dict_to_request_params(dict: &Bound<'_, PyDict>) -> PyResult<Reque
         .map(|v| v.extract())
         .transpose()?;
 
-
     let validate_fields: Option<bool> = dict
         .get_item("validate_fields")?
         .map(|v| v.extract())

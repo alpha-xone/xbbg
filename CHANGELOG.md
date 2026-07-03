@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Changed
 
-- **Dependency stack refreshed across Rust, Python, and JavaScript**: Updated Rust direct dependencies for MCP, extension TOML parsing, PHF maps, and benchmarks; refreshed Cargo, uv, Pixi, and npm locks to current compatible releases; moved JavaScript development tooling to current Node types, oxfmt, and oxlint-tsgolint releases; and migrated Pixi's Linux/glibc requirements onto the platform entry while removing the unused Bloomberg PyPI extra index.
+- **Dependency stack refreshed across Rust, Python, and JavaScript**: Updated Rust direct dependencies for MCP, extension TOML parsing, PHF maps, and benchmarks; refreshed Cargo, uv, Pixi, and npm locks to current compatible releases; moved JavaScript development tooling to current Node types, oxfmt, and oxlint-tsgolint releases; adjusted oxlint configuration for newly promoted rules in generated, test, benchmark, and native-loading paths; and migrated Pixi's Linux/glibc requirements plus npm's local platform package resolution onto declarative entries while removing the unused Bloomberg PyPI extra index.
 
 ### Fixed
 

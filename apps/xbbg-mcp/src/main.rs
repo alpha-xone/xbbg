@@ -502,8 +502,8 @@ fn record_batch_to_json(batch: &RecordBatch, limits: &ResultLimits) -> Result<Va
     // re-parse them into structured JSON so MCP clients see real objects.
     let mut metadata = Map::new();
     for (key, value) in schema.metadata() {
-        let parsed = serde_json::from_str::<Value>(value)
-            .unwrap_or_else(|_| Value::String(value.clone()));
+        let parsed =
+            serde_json::from_str::<Value>(value).unwrap_or_else(|_| Value::String(value.clone()));
         metadata.insert(key.clone(), parsed);
     }
 

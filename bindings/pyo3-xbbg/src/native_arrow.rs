@@ -53,7 +53,9 @@ fn map_core<T>(result: xbbg_arrow::Result<T>) -> PyResult<T> {
 fn serde_json_value_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
     match value {
         serde_json::Value::Null => Ok(py.None()),
-        serde_json::Value::Bool(value) => Ok(PyBool::new(py, *value).to_owned().into_any().unbind()),
+        serde_json::Value::Bool(value) => {
+            Ok(PyBool::new(py, *value).to_owned().into_any().unbind())
+        }
         serde_json::Value::Number(value) => {
             if let Some(value) = value.as_i64() {
                 Ok(value.into_pyobject(py)?.into_any().unbind())
@@ -958,12 +960,20 @@ impl ArrowTable {
 
     #[getter]
     fn security_errors(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        parse_metadata_json(py, self.data.schema.metadata(), METADATA_KEY_SECURITY_ERRORS)
+        parse_metadata_json(
+            py,
+            self.data.schema.metadata(),
+            METADATA_KEY_SECURITY_ERRORS,
+        )
     }
 
     #[getter]
     fn field_exceptions(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        parse_metadata_json(py, self.data.schema.metadata(), METADATA_KEY_FIELD_EXCEPTIONS)
+        parse_metadata_json(
+            py,
+            self.data.schema.metadata(),
+            METADATA_KEY_FIELD_EXCEPTIONS,
+        )
     }
 
     #[pyo3(signature = (requested_schema=None))]
@@ -1294,7 +1304,6 @@ impl ArrowTable {
             out_fields.push(field);
             out_arrays.push(array);
         }
-
 
         let batch = RecordBatch::try_new(Arc::new(Schema::new(out_fields)), out_arrays)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;

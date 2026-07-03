@@ -107,13 +107,7 @@ impl ResponseMetadata {
             METADATA_KEY_FIELD_EXCEPTIONS,
             &self.field_exceptions,
         );
-        let schema = Arc::new(
-            batch
-                .schema_ref()
-                .as_ref()
-                .clone()
-                .with_metadata(metadata),
-        );
+        let schema = Arc::new(batch.schema_ref().as_ref().clone().with_metadata(metadata));
         match batch.clone().with_schema(schema) {
             Ok(with_meta) => with_meta,
             Err(err) => {
@@ -153,9 +147,9 @@ impl ResponseMetadata {
         let mut merged = Self::default();
         for batch in batches {
             let metadata = batch.schema_ref().metadata();
-            if let Some(map) = Self::parse_json::<BTreeMap<String, Vec<i64>>>(
-                metadata.get(METADATA_KEY_EID_DATA),
-            ) {
+            if let Some(map) =
+                Self::parse_json::<BTreeMap<String, Vec<i64>>>(metadata.get(METADATA_KEY_EID_DATA))
+            {
                 merged.eid_data.extend(map);
             }
             if let Some(map) = Self::parse_json::<BTreeMap<String, SecurityErrorMeta>>(
@@ -1052,7 +1046,9 @@ mod tests {
     fn response_metadata_attach_and_union_round_trip() {
         // Shard 1: entitled security with EIDs + a field exception.
         let mut meta1 = ResponseMetadata::default();
-        meta1.eid_data.insert("IBM US Equity".to_string(), vec![14005, 35009]);
+        meta1
+            .eid_data
+            .insert("IBM US Equity".to_string(), vec![14005, 35009]);
         meta1.field_exceptions.insert(
             "IBM US Equity".to_string(),
             vec![FieldExceptionMeta {
@@ -1073,7 +1069,9 @@ mod tests {
         // (the SAPI/B-PIPE case: EIDs are reported for securities the
         // identity cannot see).
         let mut meta2 = ResponseMetadata::default();
-        meta2.eid_data.insert("PRIVATE US Equity".to_string(), vec![9999]);
+        meta2
+            .eid_data
+            .insert("PRIVATE US Equity".to_string(), vec![9999]);
         meta2.security_errors.insert(
             "PRIVATE US Equity".to_string(),
             SecurityErrorMeta {

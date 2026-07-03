@@ -1184,10 +1184,7 @@ impl PyEngine {
     fn seat_type<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
         shutdown_safe_future(py, &self.engine, async move {
-            let seat_type = engine
-                .seat_type()
-                .await
-                .map_err(blp_async_error_to_pyerr)?;
+            let seat_type = engine.seat_type().await.map_err(blp_async_error_to_pyerr)?;
             Python::attach(|py| Ok(seat_type.as_str().into_pyobject(py)?.into_any().unbind()))
         })
     }

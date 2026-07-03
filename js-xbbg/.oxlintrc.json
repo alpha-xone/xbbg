@@ -140,6 +140,7 @@
     "typescript/prefer-for-of": "off",
     "typescript/prefer-promise-reject-errors": "off",
     "typescript/return-await": "off",
+    "typescript/method-signature-style": "off",
     "typescript/restrict-template-expressions": [
       "error",
       {
@@ -161,6 +162,33 @@
         "typescript/strict-boolean-expressions": "off",
         "typescript/restrict-template-expressions": "off",
         "typescript/use-unknown-in-catch-callback-variable": "off"
+      }
+    },
+    {
+      "files": ["scripts/**/*.ts", "test/**/*.ts", "benchmarks/**/*.ts"],
+      "rules": {
+        "node/callback-return": "off",
+        "node/no-sync": "off",
+        "unicorn/import-style": "off",
+        "unicorn/max-nested-calls": "off"
+      }
+    },
+    {
+      "files": ["src/native/resolve-native.ts", "src/index.ts", "src/runtime-search-path.ts"],
+      "rules": {
+        "node/no-sync": "off"
+      }
+    },
+    {
+      "files": ["src/errors.ts", "src/dates.ts", "scripts/build-native.ts"],
+      "rules": {
+        "eslint/prefer-named-capture-group": "off"
+      }
+    },
+    {
+      "files": ["src/index.ts"],
+      "rules": {
+        "unicorn/prefer-export-from": "off"
       }
     },
     {

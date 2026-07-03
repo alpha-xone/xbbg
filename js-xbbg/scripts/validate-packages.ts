@@ -197,7 +197,7 @@ function parsePackJson(raw: string, spec: PackageSpec): PackResult {
   if (!Array.isArray(parsed) || parsed.length !== 1 || !isRecord(parsed[0])) {
     fail(`${spec.name}: npm pack --json returned an unexpected shape`);
   }
-  return parsed[0] as PackResult;
+  return parsed[0];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

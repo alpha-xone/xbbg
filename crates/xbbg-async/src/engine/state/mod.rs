@@ -36,8 +36,8 @@ pub use update::{
     UpdateValue,
 };
 pub use update_arrow::subscription_update_to_record_batch;
+pub(crate) use value_utils::ResponseMetadata;
 pub use value_utils::{
     FieldExceptionMeta, SecurityErrorMeta, METADATA_KEY_EID_DATA, METADATA_KEY_FIELD_EXCEPTIONS,
     METADATA_KEY_SECURITY_ERRORS,
 };
-pub(crate) use value_utils::ResponseMetadata;

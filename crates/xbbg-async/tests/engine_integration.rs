@@ -829,7 +829,10 @@ async fn test_return_eids_roundtrip_with_entitlement_check() {
     match engine.check_entitlements("//blp/refdata", &eids_i32).await {
         Ok(check) => {
             println!("entitled={} failed={:?}", check.entitled, check.failed_eids);
-            assert!(check.entitled, "identity must hold EIDs of data it received");
+            assert!(
+                check.entitled,
+                "identity must hold EIDs of data it received"
+            );
             assert!(check.failed_eids.is_empty());
         }
         Err(e) => {
@@ -888,7 +891,10 @@ async fn test_security_error_and_field_exception_metadata() {
             "IBM US Equity".to_string(),
             "XXNOTREAL FAKE Equity".to_string(),
         ]),
-        fields: Some(vec!["PX_LAST".to_string(), "NOT_A_REAL_FIELD_XX".to_string()]),
+        fields: Some(vec![
+            "PX_LAST".to_string(),
+            "NOT_A_REAL_FIELD_XX".to_string(),
+        ]),
         ..Default::default()
     };
 

@@ -751,8 +751,8 @@ impl WorkerShared {
         }
         // A failed classic AuthorizationRequest resolves the identity waiter.
         if Self::is_identity_auth_message(msg) {
-            let reason = extract_reason_description(msg)
-                .unwrap_or_else(|| "RequestFailure".to_string());
+            let reason =
+                extract_reason_description(msg).unwrap_or_else(|| "RequestFailure".to_string());
             self.resolve_identity_outcome(Err(BlpError::Internal {
                 detail: format!("identity authorization request failed: {reason}"),
             }));
