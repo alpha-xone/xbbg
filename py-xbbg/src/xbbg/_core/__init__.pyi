@@ -158,7 +158,7 @@ class PyEngine:
         - extractor: Extractor type hint (e.g., "refdata", "histdata", "intraday_bar")
           If omitted, Rust resolves a default from `operation`.
         - request_operation: Actual Bloomberg operation name when operation=""
-
+        
         Optional keys (depend on request type):
         - securities: List of security identifiers
         - security: Single security identifier
@@ -173,7 +173,7 @@ class PyEngine:
     def seat_type(self) -> typing.Any:
         r"""
         Return the seat type for the lazily authorized identity.
-
+        
         Authorization is performed on first use: the configured auth identity is used when
         EngineConfig has auth settings, otherwise the Desktop terminal OS-logon user is used.
         First use may take a moment and authorization timeout failures are retryable.
@@ -181,7 +181,7 @@ class PyEngine:
     def check_entitlements(self, service: builtins.str, eids: typing.Sequence[builtins.int]) -> typing.Any:
         r"""
         Check EID entitlements for the lazily authorized identity.
-
+        
         Authorization is performed on first use: the configured auth identity is used when
         EngineConfig has auth settings, otherwise the Desktop terminal OS-logon user is used.
         First use may take a moment and authorization timeout failures are retryable.
@@ -189,7 +189,7 @@ class PyEngine:
     def identity_is_authorized(self, service: builtins.str) -> typing.Any:
         r"""
         Return whether the lazily authorized identity is authorized for a service.
-
+        
         Authorization is performed on first use: the configured auth identity is used when
         EngineConfig has auth settings, otherwise the Desktop terminal OS-logon user is used.
         First use may take a moment and authorization timeout failures are retryable.
