@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-07-04
+
 ### Added
 
 - **Bloomberg entitlement IDs and identity checks across bindings**: Rust, Python, JavaScript, and MCP request paths now accept opt-in `returnEids` / `return_eids` for reference and historical data. Results expose `eidData` plus structured Bloomberg `securityError` and `fieldExceptions` metadata; Python adds `seat_type()`, `check_entitlements()`, and `identity_is_authorized()` helpers, and `@xbbg/core` adds matching `engine.seatType()`, `engine.checkEntitlements()`, and `engine.identityIsAuthorized()` APIs.
@@ -1463,7 +1465,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ---
 
-[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.2...HEAD
+[1.4.2]: https://github.com/xbbg-org/xbbg/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/xbbg-org/xbbg/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/xbbg-org/xbbg/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/xbbg-org/xbbg/compare/v1.3.0...v1.3.1
