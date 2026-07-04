@@ -33,8 +33,8 @@ podman run --rm \
   bash -lc '
     BLPAPI_VERSION=${BLPAPI_VERSION:-3.26.2.1}
     bash ./scripts/sdktool.sh --version "$BLPAPI_VERSION" --no-set-active
-    export BLPAPI_ROOT=/work/crates/blpapi-sys/vendor/blpapi-sdk/$BLPAPI_VERSION
-    export LD_LIBRARY_PATH=/work/crates/blpapi-sys/vendor/blpapi-sdk/$BLPAPI_VERSION/Linux:$LD_LIBRARY_PATH
+    export BLPAPI_ROOT=/work/vendor/blpapi-sdk/$BLPAPI_VERSION
+    export LD_LIBRARY_PATH=/work/vendor/blpapi-sdk/$BLPAPI_VERSION/Linux:$LD_LIBRARY_PATH
     cargo build -p blpapi-sys
   '
 ```
@@ -49,8 +49,8 @@ podman run --rm \
   bash -lc '
     BLPAPI_VERSION=${BLPAPI_VERSION:-3.26.2.1}
     bash ./scripts/sdktool.sh --version "$BLPAPI_VERSION" --no-set-active
-    export BLPAPI_ROOT=/work/crates/blpapi-sys/vendor/blpapi-sdk/$BLPAPI_VERSION
-    export LD_LIBRARY_PATH=/work/crates/blpapi-sys/vendor/blpapi-sdk/$BLPAPI_VERSION/Linux:$LD_LIBRARY_PATH
+    export BLPAPI_ROOT=/work/vendor/blpapi-sdk/$BLPAPI_VERSION
+    export LD_LIBRARY_PATH=/work/vendor/blpapi-sdk/$BLPAPI_VERSION/Linux:$LD_LIBRARY_PATH
     cargo clippy --workspace --all-targets -- -D warnings
   '
 ```

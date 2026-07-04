@@ -40,12 +40,14 @@ The installer places two files in `~/.local/bin/` by default:
 
 GitHub release assets include only the launcher wrapper and compiled xbbg binary. They do **not** include Bloomberg SDK files or the Bloomberg runtime. You must provide those locally from a source you are authorized to use under your Bloomberg agreements and entitlements.
 
+GitHub Release tar/zip assets remain the raw binary channel. The MCPB asset is the directory and one-click local connector channel for MCPB-aware clients and registries.
+
 The wrapper locates the Bloomberg runtime in this order:
 
 1. `XBBG_MCP_LIB_DIR`
 2. `BLPAPI_LIB_DIR`
 3. `BLPAPI_ROOT`
-4. locally staged authorized SDK under `crates/blpapi-sys/vendor/blpapi-sdk/`
+4. locally staged authorized SDK under `vendor/blpapi-sdk/`
 5. the official Python `blpapi` package
 
 If you install Bloomberg's Python package, the wrapper can usually run without any extra shell configuration:
@@ -55,6 +57,12 @@ pip install blpapi --index-url https://blpapi.bloomberg.com/repository/releases/
 ```
 
 Windows release assets are attached as `.zip` files, but the convenience installer currently targets macOS/Linux only.
+
+## Install MCPB
+
+Claude Desktop and MCPB-aware registries can use the `xbbg-mcp-v<VERSION>.mcpb` asset attached to GitHub Releases. The MCPB currently supports macOS arm64, Linux amd64, and Windows amd64. The raw platform tar/zip assets remain available for manual installs and troubleshooting.
+
+The MCPB does not include Bloomberg SDK files, Bloomberg runtime libraries, credentials, or market data. Configure `XBBG_MCP_LIB_DIR`, `BLPAPI_LIB_DIR`, `BLPAPI_ROOT`, or install Bloomberg's official Python `blpapi` package so the launcher can find the authorized Bloomberg runtime locally. On Windows, the MCPB PowerShell launcher prepends the resolved Bloomberg runtime directory to `PATH` before starting `xbbg-mcp.exe`.
 
 ## Build from source
 
@@ -85,6 +93,22 @@ claude mcp add --transport stdio xbbg -- ~/.local/bin/xbbg-mcp
 }
 ```
 
+## Directory and registry publishing
+
+Official MCP Registry: publish the generated `server.json` after the release contains the `.mcpb` asset.
+
+GitHub MCP Registry: verify the server appears after official registry ingestion.
+
+Claude Connectors Directory: submit the MCPB as a desktop extension; remote connector submission is not the default for Bloomberg-local workflows.
+
+Smithery: publish the MCPB bundle.
+
+Glama: verify indexing after official registry publication; if automated sandbox build cannot run without Bloomberg runtime, keep the listing metadata-focused.
+
+PulseMCP: wait for official registry ingestion or use the Pulse submit page.
+
+MCP.so: submit the GitHub repo/release after canonical registry metadata is live.
+
 ## Runtime environment
 
 `xbbg-mcp` accepts the same engine-oriented connection settings as the Rust core, with MCP-prefixed names taking precedence where available.
@@ -112,6 +136,14 @@ Supported auth methods:
 - `dir`
 - `manual`
 - `token`
+
+## Privacy Policy
+
+`xbbg-mcp` runs locally as a stdio MCP server. It does not send telemetry or usage data to xbbg-org, GitHub, Anthropic, Smithery, Glama, or any other third party.
+
+Tool calls are handled on the user's machine and forwarded only to the Bloomberg runtime/API endpoint configured by the user (`XBBG_MCP_HOST` / `XBBG_HOST`, default `localhost:8194`) under that user's Bloomberg agreements and entitlements. Results are returned only to the MCP client process that launched the server.
+
+The server reads configuration from environment variables and does not persist request data, credentials, or Bloomberg responses to disk.
 
 ## Smoke test
 

@@ -85,7 +85,14 @@ impl XbbgMcpServer {
 #[tool_router]
 impl XbbgMcpServer {
     #[tool(
-        description = "Bloomberg reference data request (bdp). Returns structured JSON with schema metadata and bounded rows."
+        description = "Bloomberg reference data request (bdp). Returns structured JSON with schema metadata and bounded rows.",
+        annotations(
+            title = "Bloomberg Reference Data",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn bdp(
         &self,
@@ -95,7 +102,14 @@ impl XbbgMcpServer {
     }
 
     #[tool(
-        description = "Bloomberg historical data request (bdh). Dates must be YYYYMMDD or YYYY-MM-DD."
+        description = "Bloomberg historical data request (bdh). Dates must be YYYYMMDD or YYYY-MM-DD.",
+        annotations(
+            title = "Bloomberg Historical Data",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn bdh(
         &self,
@@ -105,7 +119,14 @@ impl XbbgMcpServer {
     }
 
     #[tool(
-        description = "Bloomberg bulk data request (bds). Uses the bulk extractor and requires exactly one bulk field."
+        description = "Bloomberg bulk data request (bds). Uses the bulk extractor and requires exactly one bulk field.",
+        annotations(
+            title = "Bloomberg Bulk Data",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn bds(
         &self,
@@ -115,7 +136,14 @@ impl XbbgMcpServer {
     }
 
     #[tool(
-        description = "Bloomberg intraday bar request (bdib). Datetimes must be ISO-8601 strings and interval must be positive."
+        description = "Bloomberg intraday bar request (bdib). Datetimes must be ISO-8601 strings and interval must be positive.",
+        annotations(
+            title = "Bloomberg Intraday Bars",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn bdib(
         &self,
@@ -124,7 +152,16 @@ impl XbbgMcpServer {
         self.execute_request(bdib_request_params(args)?).await
     }
 
-    #[tool(description = "Bloomberg Query Language request (bql).")]
+    #[tool(
+        description = "Bloomberg Query Language request (bql).",
+        annotations(
+            title = "Bloomberg Query Language",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
     async fn bql(
         &self,
         Parameters(args): Parameters<BqlArgs>,
@@ -133,7 +170,14 @@ impl XbbgMcpServer {
     }
 
     #[tool(
-        description = "Bloomberg search request (bsrch). The domain selects the saved Bloomberg search, extra parameters are passed through as named request elements."
+        description = "Bloomberg search request (bsrch). The domain selects the saved Bloomberg search, extra parameters are passed through as named request elements.",
+        annotations(
+            title = "Bloomberg Search",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn bsrch(
         &self,
@@ -143,7 +187,14 @@ impl XbbgMcpServer {
     }
 
     #[tool(
-        description = "Bloomberg field metadata lookup (bflds). Supply either concrete field ids or a search_spec, but not both."
+        description = "Bloomberg field metadata lookup (bflds). Supply either concrete field ids or a search_spec, but not both.",
+        annotations(
+            title = "Bloomberg Field Metadata",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn bflds(
         &self,
@@ -153,7 +204,14 @@ impl XbbgMcpServer {
     }
 
     #[tool(
-        description = "Generic Bloomberg request. Supports raw/custom service and operation strings, including RawRequest via request_operation."
+        description = "Generic Bloomberg request. Supports raw/custom service and operation strings, including RawRequest via request_operation.",
+        annotations(
+            title = "Bloomberg Raw Request",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn request(
         &self,
@@ -163,6 +221,10 @@ impl XbbgMcpServer {
     }
 }
 
+fn server_version() -> &'static str {
+    option_env!("XBBG_MCP_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
 #[tool_handler]
 impl ServerHandler for XbbgMcpServer {
     fn get_info(&self) -> ServerInfo {
@@ -170,7 +232,7 @@ impl ServerHandler for XbbgMcpServer {
         // does not require a live Bloomberg session before the client can initialize.
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(
-                Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+                Implementation::new(env!("CARGO_PKG_NAME"), server_version())
                     .with_title("xbbg MCP")
                     .with_description(
                         "Request/response Bloomberg tools backed directly by xbbg-async. Current env configuration supports single-host connectivity, core auth modes, and request-pool tuning.",

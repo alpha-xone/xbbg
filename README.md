@@ -388,7 +388,7 @@ In Node, pass `{ allFields: true }` to `stream()` / `subscribe()` helpers for th
 
 The repository also includes a local MCP server for coding-agent workflows. It wraps selected xbbg request/response operations and returns bounded JSON results with schema metadata.
 
-See [`apps/xbbg-mcp/README.md`](apps/xbbg-mcp/README.md) for installation, supported environment variables, and release asset notes. The MCP release assets do not include Bloomberg SDK files or runtime components.
+See [`apps/xbbg-mcp/README.md`](apps/xbbg-mcp/README.md) for installation, supported environment variables, raw GitHub Release tar/zip assets, and the `xbbg-mcp-v<VERSION>.mcpb` local connector artifact. Official MCP Registry publication uses the generated `server.json` metadata after the matching GitHub Release contains the `.mcpb`; no MCP release asset includes Bloomberg SDK files or runtime components.
 
 ## Troubleshooting
 

@@ -4,11 +4,11 @@
 
 .DESCRIPTION
     Downloads the Bloomberg C++ SDK zip from Bloomberg's release URL, extracts it
-    into crates/blpapi-sys/vendor/blpapi-sdk/<version>/, and optionally updates the .env file with
+    into vendor/blpapi-sdk/<version>/, and optionally updates the .env file with
     BLPAPI_ROOT so the build system (blpapi-sys/build.rs) can locate the SDK.
 
     Supports multiple SDK versions side-by-side. Downloaded zips are cached in
-    crates/blpapi-sys/vendor/blpapi-sdk/.cache/ to avoid redundant downloads.
+    vendor/blpapi-sdk/.cache/ to avoid redundant downloads.
 
     When -Version is omitted, the script automatically resolves the latest available
     version by querying Bloomberg's Python Simple Index (PEP 503).
@@ -193,8 +193,8 @@ function Get-ActiveSdkVersion {
             Where-Object { $_ -match '^\s*BLPAPI_ROOT\s*=' }
 
     if ($line) {
-        # Extract version from path like crates/blpapi-sys/vendor/blpapi-sdk/3.25.12.1
-        if ($line -match 'crates/blpapi-sys/vendor/blpapi-sdk/([0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)') {
+        # Extract version from path like vendor/blpapi-sdk/3.25.12.1
+        if ($line -match 'vendor/blpapi-sdk/([0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)') {
             return $Matches[1]
         }
     }
@@ -205,7 +205,7 @@ function Get-ActiveSdkVersion {
 # Helper: write/update BLPAPI_ROOT in .env
 # ---------------------------------------------------------------------------
 function Set-ActiveSdkVersion {
-    $relativePath = "crates/blpapi-sys/vendor/blpapi-sdk/$Version"
+    $relativePath = "vendor/blpapi-sdk/$Version"
     $envLine      = "BLPAPI_ROOT=$relativePath"
 
     if (Test-Path $EnvFile) {

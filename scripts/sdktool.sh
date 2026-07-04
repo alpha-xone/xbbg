@@ -34,7 +34,7 @@ resolve_python() {
 
 PYTHON_BIN=$(resolve_python)
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-VENDOR_BASE="$REPO_ROOT/crates/blpapi-sys/vendor/blpapi-sdk"
+VENDOR_BASE="$REPO_ROOT/vendor/blpapi-sdk"
 CACHE_DIR="$VENDOR_BASE/.cache"
 ENV_FILE="$REPO_ROOT/.env"
 INDEX_URL="https://blpapi.bloomberg.com/repository/releases/python/simple/blpapi/"
@@ -141,13 +141,13 @@ get_active_sdk_version() {
 }
 
 set_active_sdk_version() {
-    "$PYTHON_BIN" -c "from pathlib import Path; import sys; env_file=Path(sys.argv[1]); version=sys.argv[2]; env_line=f'BLPAPI_ROOT=crates/blpapi-sys/vendor/blpapi-sdk/{version}'; content=env_file.read_text() if env_file.exists() else ''; lines=[line for line in content.splitlines() if not line.lstrip().startswith('BLPAPI_ROOT=')]; lines.append(env_line); env_file.write_text('\\n'.join(lines) + '\\n')" "$ENV_FILE" "$VERSION"
-    note "[OK] .env updated: BLPAPI_ROOT=crates/blpapi-sys/vendor/blpapi-sdk/$VERSION"
+    "$PYTHON_BIN" -c "from pathlib import Path; import sys; env_file=Path(sys.argv[1]); version=sys.argv[2]; env_line=f'BLPAPI_ROOT=vendor/blpapi-sdk/{version}'; content=env_file.read_text() if env_file.exists() else ''; lines=[line for line in content.splitlines() if not line.lstrip().startswith('BLPAPI_ROOT=')]; lines.append(env_line); env_file.write_text('\\n'.join(lines) + '\\n')" "$ENV_FILE" "$VERSION"
+    note "[OK] .env updated: BLPAPI_ROOT=vendor/blpapi-sdk/$VERSION"
 }
 
 clear_active_sdk_version() {
     [ -f "$ENV_FILE" ] || return 0
-    "$PYTHON_BIN" -c "from pathlib import Path; import sys; env_file=Path(sys.argv[1]); version=sys.argv[2]; target=f'crates/blpapi-sys/vendor/blpapi-sdk/{version}'; lines=env_file.read_text().splitlines(); kept=[line for line in lines if not (line.lstrip().startswith('BLPAPI_ROOT=') and target in line)]; env_file.write_text('\\n'.join(kept) + '\\n') if kept else env_file.unlink(missing_ok=True)" "$ENV_FILE" "$VERSION"
+    "$PYTHON_BIN" -c "from pathlib import Path; import sys; env_file=Path(sys.argv[1]); version=sys.argv[2]; target=f'vendor/blpapi-sdk/{version}'; lines=env_file.read_text().splitlines(); kept=[line for line in lines if not (line.lstrip().startswith('BLPAPI_ROOT=') and target in line)]; env_file.write_text('\\n'.join(kept) + '\\n') if kept else env_file.unlink(missing_ok=True)" "$ENV_FILE" "$VERSION"
 }
 
 platform_info() {

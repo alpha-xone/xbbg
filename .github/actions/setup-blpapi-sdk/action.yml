@@ -26,7 +26,7 @@ runs:
     - id: paths
       shell: bash
       run: |
-        sdk_rel_root="crates/blpapi-sys/vendor/blpapi-sdk/${{ inputs.version }}"
+        sdk_rel_root="vendor/blpapi-sdk/${{ inputs.version }}"
         case "${{ inputs.os }}" in
           Linux)
             lib_rel_dir="$sdk_rel_root/Linux"
@@ -58,7 +58,7 @@ runs:
     - id: cache-sdk
       uses: actions/cache@v5
       with:
-        path: crates/blpapi-sys/vendor/blpapi-sdk/${{ inputs.version }}
+        path: vendor/blpapi-sdk/${{ inputs.version }}
         key: blpapi-${{ inputs.os }}-${{ runner.arch }}-${{ inputs.version }}
 
     - if: inputs.os != 'Windows' && steps.cache-sdk.outputs.cache-hit != 'true'

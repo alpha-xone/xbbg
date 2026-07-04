@@ -1,5 +1,5 @@
 [env]
-BLPAPI_ROOT = { value = "crates/blpapi-sys/vendor/blpapi-sdk", relative = true }
+BLPAPI_ROOT = { value = "vendor/blpapi-sdk", relative = true }
 # Note: LIBCLANG_PATH is NOT set here — it varies per machine.
 # Pixi users get it automatically via [activation.env].
 # Non-pixi users: set LIBCLANG_PATH in your shell environment.

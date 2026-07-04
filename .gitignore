@@ -129,9 +129,8 @@ venv.bak/
 .ruff_cache/
 
 # Bloomberg BLPAPI SDK (local development only; do not commit)
-# README.md is tracked for setup instructions; everything else is ignored.
+# README.md under vendor/blpapi-sdk is tracked for setup instructions; everything else is ignored.
 crates/blpapi-sys/vendor/blpapi-sdk/*
-!crates/blpapi-sys/vendor/blpapi-sdk/README.md
 crates/blpapi-sys/vendor/*.zip
 vendor/blpapi-sdk/*
 !vendor/blpapi-sdk/README.md

@@ -363,12 +363,24 @@ jobs:
 
       - name: Build xbbg-mcp (Unix)
         if: runner.os != 'Windows'
-        run: cargo build --release -p xbbg-mcp --locked
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) VERSION=${GITHUB_REF#refs/tags/v} ;;
+            *) VERSION="0.0.0-dev-$(printf '%.7s' "$GITHUB_SHA")" ;;
+          esac
+          XBBG_MCP_VERSION="$VERSION" cargo build --release -p xbbg-mcp --locked
 
       - name: Build xbbg-mcp (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: cargo build --release -p xbbg-mcp --locked
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $version = $env:GITHUB_REF.Substring(11)
+          } else {
+            $version = "0.0.0-dev-$($env:GITHUB_SHA.Substring(0, 7))"
+          }
+          $env:XBBG_MCP_VERSION = $version
+          cargo build --release -p xbbg-mcp --locked
 
       - name: Package xbbg-mcp (Unix)
         if: runner.os != 'Windows'
@@ -422,6 +434,85 @@ jobs:
           retention-days: 7
 
   # ════════════════════════════════════════════════════════════════════════════
+  # Build xbbg-mcp MCPB bundle and registry metadata
+  # ════════════════════════════════════════════════════════════════════════════
+  mcpb-bundle:
+    name: Build xbbg-mcp MCPB bundle
+    needs: [mcp-binary]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download darwin xbbg-mcp asset
+        uses: actions/download-artifact@v8
+        with:
+          name: mcp-darwin-arm64
+          path: ${{ runner.temp }}/mcp-assets/darwin
+
+      - name: Download linux xbbg-mcp asset
+        uses: actions/download-artifact@v8
+        with:
+          name: mcp-linux-amd64
+          path: ${{ runner.temp }}/mcp-assets/linux
+
+      - name: Download windows xbbg-mcp asset
+        uses: actions/download-artifact@v8
+        with:
+          name: mcp-windows-amd64
+          path: ${{ runner.temp }}/mcp-assets/windows
+
+      - name: Build MCPB and registry metadata
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) VERSION=${GITHUB_REF#refs/tags/v} ;;
+            *) VERSION="0.0.0-dev-$(printf '%.7s' "$GITHUB_SHA")" ;;
+          esac
+
+          DIST_DIR="$GITHUB_WORKSPACE/dist"
+          EXTRACT_DIR="$RUNNER_TEMP/mcpb-extracted"
+          DARWIN_ARCHIVE="$RUNNER_TEMP/mcp-assets/darwin/xbbg-mcp-v${VERSION}-darwin-arm64.tar.gz"
+          LINUX_ARCHIVE="$RUNNER_TEMP/mcp-assets/linux/xbbg-mcp-v${VERSION}-linux-amd64.tar.gz"
+          WINDOWS_ARCHIVE="$RUNNER_TEMP/mcp-assets/windows/xbbg-mcp-v${VERSION}-windows-amd64.zip"
+
+          mkdir -p "$DIST_DIR" "$EXTRACT_DIR/darwin" "$EXTRACT_DIR/linux" "$EXTRACT_DIR/windows"
+          tar -xzf "$DARWIN_ARCHIVE" -C "$EXTRACT_DIR/darwin" xbbg-mcp-real
+          tar -xzf "$LINUX_ARCHIVE" -C "$EXTRACT_DIR/linux" xbbg-mcp-real
+          unzip -q "$WINDOWS_ARCHIVE" xbbg-mcp.exe -d "$EXTRACT_DIR/windows"
+
+          DARWIN_BIN="$EXTRACT_DIR/darwin/xbbg-mcp-real"
+          LINUX_BIN="$EXTRACT_DIR/linux/xbbg-mcp-real"
+          WINDOWS_BIN="$EXTRACT_DIR/windows/xbbg-mcp.exe"
+          chmod 755 "$DARWIN_BIN" "$LINUX_BIN" "$WINDOWS_BIN"
+
+          python scripts/package_xbbg_mcpb.py \
+            --version "$VERSION" \
+            --darwin-arm64-bin "$DARWIN_BIN" \
+            --linux-amd64-bin "$LINUX_BIN" \
+            --windows-amd64-bin "$WINDOWS_BIN" \
+            --output-dir "$RUNNER_TEMP/mcpb"
+          npx -y @anthropic-ai/mcpb validate "$RUNNER_TEMP/mcpb/xbbg-mcp-mcpb/manifest.json"
+          npx -y @anthropic-ai/mcpb pack "$RUNNER_TEMP/mcpb/xbbg-mcp-mcpb" "$DIST_DIR/xbbg-mcp-v${VERSION}.mcpb"
+
+          MCPB_SHA256="$(shasum -a 256 "$DIST_DIR/xbbg-mcp-v${VERSION}.mcpb" | cut -d ' ' -f 1)"
+          python scripts/render_mcp_registry_server.py \
+            --version "$VERSION" \
+            --mcpb-url "https://github.com/xbbg-org/xbbg/releases/download/v${VERSION}/xbbg-mcp-v${VERSION}.mcpb" \
+            --sha256 "$MCPB_SHA256" \
+            --output "$DIST_DIR/server.json"
+
+      - name: Upload MCPB asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcpb
+          path: |
+            dist/xbbg-mcp-v*.mcpb
+            dist/server.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════════════════════
   # Build source distribution
   # ════════════════════════════════════════════════════════════════════════════
   sdist:
@@ -450,14 +541,14 @@ jobs:
   # ════════════════════════════════════════════════════════════════════════════
   validate-release-payload:
     name: Validate release payloads
-    needs: [build, mcp-binary, sdist]
+    needs: [build, mcp-binary, mcpb-bundle, sdist]
     runs-on: ubuntu-latest
     steps:
-      - name: Download wheels, sdist, and xbbg-mcp assets
+      - name: Download wheels, sdist, xbbg-mcp assets, and MCPB
         uses: actions/download-artifact@v8
         with:
           path: dist
-          pattern: "{wheel-*,sdist,mcp-*}"
+          pattern: "{wheel-*,sdist,mcp-*,mcpb}"
           merge-multiple: true
 
       - name: Reject Bloomberg SDK files in release artifacts
@@ -496,7 +587,7 @@ jobs:
                       for member in archive.getmembers():
                           if is_forbidden(member.name):
                               violations.append(f"{archive_path}: {member.name}")
-              elif archive_name.endswith(('.zip', '.whl')):
+              elif archive_name.endswith(('.zip', '.whl', '.mcpb')):
                   with zipfile.ZipFile(archive_path) as archive:
                       for member in archive.namelist():
                           if is_forbidden(member):
@@ -542,18 +633,18 @@ jobs:
   # ════════════════════════════════════════════════════════════════════════════
   release-assets:
     name: Attach Release Assets
-    needs: [build, mcp-binary, sdist, validate-release-payload, publish]
+    needs: [build, mcp-binary, mcpb-bundle, sdist, validate-release-payload, publish]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') && !inputs.dry-run
     permissions:
       contents: write
 
     steps:
-      - name: Download wheels, sdist, and xbbg-mcp assets
+      - name: Download wheels, sdist, xbbg-mcp assets, and MCPB
         uses: actions/download-artifact@v8
         with:
           path: dist
-          pattern: "{wheel-*,sdist,mcp-*}"
+          pattern: "{wheel-*,sdist,mcp-*,mcpb}"
           merge-multiple: true
 
       - name: Upload to GitHub Release
