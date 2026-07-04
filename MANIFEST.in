@@ -63,8 +63,10 @@ prune py-xbbg/benchmarks
 prune py-xbbg/docker
 prune py-xbbg/examples
 prune scripts
+prune vendor
 prune crates/blpapi-sys/vendor
 prune js-xbbg
+prune js-xbbg-langgraph
 prune py-xbbg/tests
 
 # Build artifacts
