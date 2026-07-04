@@ -65,20 +65,16 @@ export function createBloombergStructuredTool<Input>(
   };
 
   const guarded = async (
-    input: unknown,
+    input: Input,
     config?: ToolInvocationConfig,
   ): Promise<ToolContentAndArtifact> => {
     try {
       // Refuse to start Bloomberg work for calls that are already cancelled.
       config?.signal?.throwIfAborted();
-      const parsed = fields.schema.safeParse(input);
-      if (!parsed.success) {
-        throw parsed.error;
-      }
-      return await func(parsed.data, config);
     } catch (error) {
       throwWithToolContext(fields.name, error);
     }
+    return await func(input, config);
   };
 
   return tool(
