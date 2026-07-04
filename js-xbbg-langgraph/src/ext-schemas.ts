@@ -713,7 +713,7 @@ export function calculateSchema(
         .array(z.number().nullable())
         .min(1)
         .max(options.maxFields)
-        .describe("Reference level values."),
+        .describe("Hierarchy level values; supported levels are 1, 2, or null."),
       operation: z
         .literal("calculate_level_percentages")
         .describe("Numeric helper operation to run."),
@@ -725,6 +725,15 @@ export function calculateSchema(
     })
     .strict()
     .superRefine((input, ctx) => {
+      input.levels.forEach((level, index) => {
+        if (level !== null && level !== 1 && level !== 2) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "levels must contain only 1, 2, or null",
+            path: ["levels", index],
+          });
+        }
+      });
       if (input.values.length !== input.levels.length) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

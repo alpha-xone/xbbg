@@ -341,20 +341,27 @@ fn get_value_for_datatype<'a>(
         | BlpDataType::CorrelationId => Some(Value::Null),
     }
 }
-/// Compute the common Arrow type for the "value" column from field type hints.
+/// Compute the common Arrow type for the "value" column from requested fields
+/// and field type hints.
 ///
-/// If all fields resolve to the same numeric type family, returns that type
-/// (promoting mixed int/float to Float64). If any field is non-numeric or no
-/// hints are provided, falls back to String.
-pub(crate) fn common_value_type(field_types: &HashMap<String, ArrowType>) -> ArrowType {
-    if field_types.is_empty() {
+/// If every requested field has a numeric hint, returns Float64 (promoting mixed
+/// ints/floats). If any requested field is missing a hint, any hint is
+/// non-numeric, or no hints are provided, falls back to String.
+pub(crate) fn common_value_type(
+    field_names: &[String],
+    field_types: &HashMap<String, ArrowType>,
+) -> ArrowType {
+    if field_names.is_empty() || field_types.is_empty() {
         return ArrowType::String;
     }
 
     let mut has_float = false;
     let mut has_int = false;
 
-    for arrow_type in field_types.values() {
+    for field_name in field_names {
+        let Some(arrow_type) = field_types.get(field_name) else {
+            return ArrowType::String;
+        };
         match arrow_type {
             ArrowType::Float64 => has_float = true,
             ArrowType::Int64 | ArrowType::Int32 => has_int = true,
@@ -948,6 +955,35 @@ mod tests {
             "2024-05-02T08:40:34.567890Z"
         );
         assert_eq!(format_time64_micros(37_234_005_006), "10:20:34.005006");
+    }
+
+    #[test]
+    fn common_value_type_partial_hints_missing_requested_fields_returns_string() {
+        let requested_fields = vec![
+            "NAME".to_string(),
+            "PX_LAST".to_string(),
+            "CRNCY".to_string(),
+        ];
+        let field_types = HashMap::from([("PX_LAST".to_string(), ArrowType::Float64)]);
+
+        assert_eq!(
+            common_value_type(&requested_fields, &field_types),
+            ArrowType::String
+        );
+    }
+
+    #[test]
+    fn common_value_type_all_requested_fields_hinted_numeric_returns_float64() {
+        let requested_fields = vec!["PX_LAST".to_string(), "VOLUME".to_string()];
+        let field_types = HashMap::from([
+            ("PX_LAST".to_string(), ArrowType::Float64),
+            ("VOLUME".to_string(), ArrowType::Int64),
+        ]);
+
+        assert_eq!(
+            common_value_type(&requested_fields, &field_types),
+            ArrowType::Float64
+        );
     }
 
     #[test]

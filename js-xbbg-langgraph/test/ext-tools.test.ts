@@ -303,7 +303,7 @@ describe("Bloomberg extension tools", () => {
     });
 
     const calculate = await invokeJson(byName(tools, "xbbg_ext_calculate"), {
-      levels: [10, null],
+      levels: [1, null],
       operation: "calculate_level_percentages",
       values: [11, null],
     });
@@ -408,11 +408,39 @@ describe("Bloomberg extension tools", () => {
 
     await expect(
       byName(tools, "xbbg_ext_calculate").invoke({
-        levels: [10],
+        levels: [1],
         operation: "calculate_level_percentages",
         values: [11, 12],
       }),
     ).rejects.toThrow(/same length/);
+  });
+
+  it("rejects unknown calculate operations before invoking the numeric helper", async () => {
+    const fakeCore = core(engine());
+    const tools = createBloombergExtTools({ core: fakeCore });
+
+    await expect(
+      byName(tools, "xbbg_ext_calculate").invoke({
+        levels: [1],
+        operation: "unknown_operation",
+        values: [11],
+      }),
+    ).rejects.toThrow();
+    expect(fakeCore.ext.calculateLevelPercentages).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported calculate hierarchy levels", async () => {
+    const fakeCore = core(engine());
+    const tools = createBloombergExtTools({ core: fakeCore });
+
+    await expect(
+      byName(tools, "xbbg_ext_calculate").invoke({
+        levels: [100, 102],
+        operation: "calculate_level_percentages",
+        values: [11, 12],
+      }),
+    ).rejects.toThrow();
+    expect(fakeCore.ext.calculateLevelPercentages).not.toHaveBeenCalled();
   });
 
   it("honors disabledTools and rejects mutating operation names", async () => {

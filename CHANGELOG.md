@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 ### Fixed
 
 - **Bloomberg response diagnostics survive every result backend**: Reference, historical, bulk, raw/generic, Arrow IPC, NAPI zero-copy, pandas, JavaScript JSON, and MCP JSON paths now preserve entitlement IDs and Bloomberg security/field diagnostics instead of dropping them during format conversion or shard merging.
+- **Reference-data long output keeps mixed string/numeric values with partial field caches (#342)**: The Rust long-format value-column type now treats cached field-type hints as authoritative only when every requested field has a hint, so a cache containing only numeric fields no longer coerces mixed `bdp` responses to `Float64` and nulls string fields.
+- **`@xbbg/langgraph` calculate tool rejects unsupported level inputs (#343)**: Tool calls now validate `calculate_level_percentages` hierarchy levels before invoking core helpers, preventing out-of-domain values such as `100`/`102` from silently returning null rows while direct invocation still rejects unknown operations.
 
 ## [1.4.1] - 2026-06-26
 

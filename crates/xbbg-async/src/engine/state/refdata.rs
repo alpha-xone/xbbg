@@ -146,7 +146,7 @@ impl RefDataState {
         // Fixed long-string output bypasses ColumnSet entirely; keep ColumnSet hints only
         // for wide/metadata/typed paths that actually append through ColumnSet.
         let long_value_type = (format == OutputFormat::Long && long_mode == LongMode::String)
-            .then(|| common_value_type(&arrow_types));
+            .then(|| common_value_type(&fields, &arrow_types));
         let wide_columns =
             (format == OutputFormat::Wide).then(|| WideColumns::refdata(&fields, &arrow_types));
         let mut columns = ColumnSet::new();
