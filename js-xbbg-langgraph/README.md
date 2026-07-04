@@ -4,9 +4,15 @@ LangChain/LangGraph-compatible Bloomberg tools backed by [`@xbbg/core`](../js-xb
 
 This package is a reusable tool adapter. It is not a chat app, HTTP server, MCP server, browser package, or agent framework.
 
+## Status
+
+Supported server-side LangChain/LangGraph adapter for Bloomberg-connected Node.js 24+ environments. `@xbbg/langgraph` is published alongside `@xbbg/core`, uses the same semver release cadence, and keeps Bloomberg connectivity in the core Node binding while exposing bounded tools, structured artifacts, and model-facing guidance for agent runtimes.
+
 ## Prerequisites
 
 Bloomberg connectivity is still provided by `@xbbg/core`: an installed Bloomberg Terminal/Desktop API, B-PIPE, SAPI, or ZFP setup plus Bloomberg SDK runtime libraries must be available on the server running the tools.
+
+The package targets Node.js 24+ and runs on the server side. It is not a browser package; frontends should call an application backend that owns Bloomberg connectivity.
 
 ## Install
 

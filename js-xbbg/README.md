@@ -4,7 +4,7 @@ Independent Node.js bindings for Bloomberg-connected environments, backed by the
 
 ## Status
 
-**Experimental alpha** — native N-API bindings are implemented, and the high-level API is still in active development. Expect API changes before production-stable releases.
+Supported Node.js 24+ bindings for Bloomberg-connected server environments. `@xbbg/core` ships TypeScript definitions, prebuilt native addons for supported platforms, and the same Rust request engine used by the Python package; API changes follow normal semver release notes.
 
 ## Install
 
@@ -15,6 +15,8 @@ npm install @xbbg/core
 # or
 bun add @xbbg/core
 ```
+
+`@xbbg/core` targets Node.js 24+ server runtimes. It is not a browser package and still requires a local Bloomberg runtime at execution time.
 
 `@xbbg/core` uses optional dependencies to load a packaged native `napi_xbbg.node` addon for supported targets:
 
@@ -34,7 +36,7 @@ On Windows, `@xbbg/core` prepends the first detected Bloomberg runtime DLL direc
 
 ## Release integrity
 
-Packages are intended to be published from GitHub Actions using npm trusted publishing with provenance, backed by GitHub OIDC at publish time. No npm token or local `.npmrc` credential is required in this repository.
+Release packages are published from GitHub Actions using npm trusted publishing with provenance, backed by GitHub OIDC at publish time. No npm token or local `.npmrc` credential is required in this repository.
 
 ## Local Development
 
@@ -100,7 +102,7 @@ npm run bench:subscription-replay -- --capture-live "XBTUSD Curncy" --capture-ms
 npm run bench:subscription-replay -- --fixture tmp/xbtusd-ticks.jsonl --iterations 10 --warmup-iterations 1 --consume schema
 ```
 
-## Planned Usage
+## Usage
 
 ```typescript
 import * as xbbg from '@xbbg/core';
@@ -180,7 +182,6 @@ const cdxInfo = await xbbg.ext.cdx.acdx_info('CDX IG CDSI GEN 5Y Corp');
 const cdxPricing = await xbbg.ext.cdx.acdx_pricing('CDX IG CDSI GEN 5Y Corp');
 const cdxRisk = await xbbg.ext.cdx.acdx_risk('CDX IG CDSI GEN 5Y Corp');
 
-engine.signalShutdown();
 ```
 
 ## Recipes
@@ -188,6 +189,10 @@ engine.signalShutdown();
 High-level workflows that wrap common Bloomberg request patterns. Each recipe returns an Arrow `Table` by default (or a JSON/Polars result when `backend` is set) and errors are mapped to the standard `BlpError` hierarchy.
 
 ```javascript
+import * as xbbg from '@xbbg/core';
+
+const engine = await xbbg.connect({ host: 'localhost', port: 8194 });
+
 // Fixed income
 const yas = await engine.yas(['US912810TM69 Govt'], ['YAS_BOND_YLD'], {
   settleDt: '20240115',
@@ -248,7 +253,7 @@ const px = await engine.currencyConversion('700 HK Equity', 'USD', '20240101', '
 
 The JS binding forwards these fields directly to the Rust engine, so Node can configure the same auth and transport features already available in the core runtime. Invalid transport combinations such as `zfpRemote` plus direct hosts fail during configuration instead of silently connecting to `localhost:8194`.
 
-## Features (planned)
+## Features
 
 - Native N-API bindings (no HTTP overhead)
 - Zero-copy Arrow buffers via `apache-arrow`

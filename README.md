@@ -182,7 +182,7 @@ For longer walkthroughs and example output shapes, use the [examples notebook](p
 
 ## JavaScript and Node
 
-xbbg also ships experimental Node bindings in [`@xbbg/core`](js-xbbg/README.md). The JS layer uses the same Rust engine through a native N-API addon, so Node can use the same Bloomberg connection modes and request surfaces as Python.
+xbbg also ships supported Node bindings in [`@xbbg/core`](js-xbbg/README.md). The JS layer uses the same Rust engine through a native N-API addon, so Node can use the same Bloomberg connection modes and request surfaces as Python.
 
 ```bash
 npm install @xbbg/core
@@ -190,7 +190,7 @@ npm install @xbbg/core
 bun add @xbbg/core
 ```
 
-Packaged native addons are currently provided for macOS arm64, Linux x64, and Windows x64. You still need Bloomberg access plus Bloomberg SDK runtime libraries on the target system.
+The packages target Node.js 24+ server runtimes. Packaged native addons are provided for macOS arm64, Linux x64, and Windows x64. You still need Bloomberg access plus Bloomberg SDK runtime libraries on the target system.
 
 ```ts
 import * as xbbg from '@xbbg/core';
@@ -201,9 +201,9 @@ const hist = await xbbg.blp.abdh(['AAPL US Equity'], ['PX_LAST'], '2024-01-01', 
 const ref = await xbbg.blp.abdp(['AAPL US Equity'], ['PX_LAST', 'SECURITY_NAME']);
 ```
 
-See [`js-xbbg/README.md`](js-xbbg/README.md) for platform packaging, runtime prerequisites, and the current alpha API surface.
+See [`js-xbbg/README.md`](js-xbbg/README.md) for platform packaging, runtime prerequisites, and the supported JavaScript API surface.
 
-For LangChain and LangGraph agents, use [`@xbbg/langgraph`](js-xbbg-langgraph/README.md). It exposes reusable server-side Bloomberg tools backed by `@xbbg/core` without making MCP, a chat app, or a browser integration the core path:
+For LangChain and LangGraph agents, use the supported [`@xbbg/langgraph`](js-xbbg-langgraph/README.md) adapter. It exposes reusable server-side Bloomberg tools backed by `@xbbg/core` without making MCP, a chat app, or a browser integration the core path:
 
 ```bash
 npm install @xbbg/langgraph @xbbg/core @langchain/core
