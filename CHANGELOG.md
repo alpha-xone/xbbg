@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Official MCP Registry publish workflow**: Added a manual GitHub Actions workflow that publishes release `server.json` metadata through `mcp-publisher` with GitHub Actions OIDC, so the xbbg-org namespace can publish without relying on a maintainer's local public organization membership.
+
+## [1.4.3] - 2026-07-04
+
+### Added
+
+- **Installable xbbg MCP bundle and registry metadata**: Release builds now create the cross-platform `xbbg-mcp-v<VERSION>.mcpb` local connector bundle, generate matching `server.json` metadata for official MCP Registry publication, and attach both assets to GitHub releases alongside the existing platform `xbbg-mcp` archives.
+- **Supported JavaScript package documentation**: Clarified the supported JavaScript package paths and formatted the package README for the current release docs.
+
+### Fixed
+
+- **Release artifact hygiene for Bloomberg SDK paths**: Source distributions now prune placeholder vendored Bloomberg SDK directories and unrelated JavaScript side-project files so public release artifacts pass the Bloomberg SDK/runtime exclusion guard.
+
 ## [1.4.2] - 2026-07-04
 
 ### Added
@@ -1465,7 +1480,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ---
 
-[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.2...HEAD
+[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.3...HEAD
+[1.4.3]: https://github.com/xbbg-org/xbbg/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/xbbg-org/xbbg/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/xbbg-org/xbbg/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/xbbg-org/xbbg/compare/v1.3.1...v1.4.0
