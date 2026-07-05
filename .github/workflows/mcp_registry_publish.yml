@@ -1,0 +1,47 @@
+name: Publish MCP Registry
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "GitHub release tag containing server.json and xbbg-mcp MCPB asset"
+        required: true
+        default: "v1.4.3"
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish xbbg MCP to registry
+    runs-on: macos-latest
+
+    steps:
+      - name: Install mcp-publisher
+        run: brew install mcp-publisher
+
+      - name: Download server metadata from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.version }}
+        run: |
+          mkdir -p registry-publish
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern server.json \
+            --dir registry-publish \
+            --clobber
+          test -s registry-publish/server.json
+
+      - name: Authenticate with MCP Registry
+        run: mcp-publisher login github-oidc
+
+      - name: Validate server metadata
+        run: mcp-publisher validate registry-publish/server.json
+
+      - name: Publish server metadata
+        run: mcp-publisher publish registry-publish/server.json
