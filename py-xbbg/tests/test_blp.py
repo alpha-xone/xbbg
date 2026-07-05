@@ -203,3 +203,130 @@ class TestBdtick:
         _CASE.assertIn("bdtick as bdtick", text)
         _CASE.assertIn('"bdtick"', text)
         _CASE.assertNotIn("__all__ = []", text)
+
+
+class TestGeneratedEndpointFieldTypeCache:
+    """Generated endpoint plans reuse resolved field metadata without leaking overrides."""
+
+    @pytest.mark.parametrize(
+        ("builder_name", "default_type", "extra_args"),
+        [
+            ("_build_abdp_plan", "string", {}),
+            (
+                "_build_abdh_plan",
+                "float64",
+                {"start_date": "20240101", "end_date": "20240102"},
+            ),
+        ],
+    )
+    def test_repeated_fields_resolve_types_once(self, monkeypatch, builder_name, default_type, extra_args):
+        from xbbg import blp
+
+        class FakeEngine:
+            def __init__(self):
+                self.calls = []
+
+            async def resolve_field_types(self, fields, overrides, resolved_default_type):
+                self.calls.append((list(fields), overrides, resolved_default_type))
+                return {field: f"{resolved_default_type}:{field}" for field in fields}
+
+        async def route_kwargs(_service, _operation, _kwargs):
+            return [], []
+
+        fake_engine = FakeEngine()
+        monkeypatch.setattr(blp, "_get_engine", lambda: fake_engine)
+        monkeypatch.setattr(blp, "_aroute_kwargs", route_kwargs)
+        blp._clear_field_type_resolution_cache()
+        args = {
+            "tickers": ["IBM US Equity"],
+            "flds": ["PX_LAST", "VOLUME"],
+            "backend": None,
+            "format": None,
+            "field_types": None,
+            "kwargs": {},
+            "include_security_errors": False,
+            "return_eids": False,
+            "validate_fields": None,
+            **extra_args,
+        }
+
+        try:
+            first = asyncio.run(getattr(blp, builder_name)(args))
+            second = asyncio.run(getattr(blp, builder_name)(args))
+        finally:
+            blp._clear_field_type_resolution_cache()
+
+        expected_types = {
+            "PX_LAST": f"{default_type}:PX_LAST",
+            "VOLUME": f"{default_type}:VOLUME",
+        }
+        _CASE.assertEqual(first.request_kwargs["field_types"], expected_types)
+        _CASE.assertEqual(second.request_kwargs["field_types"], expected_types)
+        _CASE.assertEqual(fake_engine.calls, [(["PX_LAST", "VOLUME"], None, default_type)])
+
+    @pytest.mark.parametrize(
+        ("builder_name", "default_type", "extra_args"),
+        [
+            ("_build_abdp_plan", "string", {}),
+            (
+                "_build_abdh_plan",
+                "float64",
+                {"start_date": "20240101", "end_date": "20240102"},
+            ),
+        ],
+    )
+    def test_per_call_field_type_overrides_do_not_poison_cached_resolution(
+        self, monkeypatch, builder_name, default_type, extra_args
+    ):
+        from xbbg import blp
+
+        class FakeEngine:
+            def __init__(self):
+                self.calls = []
+
+            async def resolve_field_types(self, fields, overrides, resolved_default_type):
+                self.calls.append((list(fields), overrides, resolved_default_type))
+                return {field: f"{resolved_default_type}:{field}" for field in fields}
+
+        async def route_kwargs(_service, _operation, _kwargs):
+            return [], []
+
+        fake_engine = FakeEngine()
+        monkeypatch.setattr(blp, "_get_engine", lambda: fake_engine)
+        monkeypatch.setattr(blp, "_aroute_kwargs", route_kwargs)
+        blp._clear_field_type_resolution_cache()
+
+        def plan_args(field_types):
+            return {
+                "tickers": ["IBM US Equity"],
+                "flds": ["PX_LAST", "VOLUME"],
+                "backend": None,
+                "format": None,
+                "field_types": field_types,
+                "kwargs": {},
+                "include_security_errors": False,
+                "return_eids": False,
+                "validate_fields": None,
+                **extra_args,
+            }
+
+        try:
+            override_plan = asyncio.run(
+                getattr(blp, builder_name)(plan_args({"PX_LAST": "decimal128", "VOLUME": "int64"}))
+            )
+            base_plan = asyncio.run(getattr(blp, builder_name)(plan_args(None)))
+        finally:
+            blp._clear_field_type_resolution_cache()
+
+        _CASE.assertEqual(
+            override_plan.request_kwargs["field_types"],
+            {"PX_LAST": "decimal128", "VOLUME": "int64"},
+        )
+        _CASE.assertEqual(
+            base_plan.request_kwargs["field_types"],
+            {
+                "PX_LAST": f"{default_type}:PX_LAST",
+                "VOLUME": f"{default_type}:VOLUME",
+            },
+        )
+        _CASE.assertEqual(fake_engine.calls, [(["PX_LAST", "VOLUME"], None, default_type)])

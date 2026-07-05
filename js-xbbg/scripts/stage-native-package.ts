@@ -41,7 +41,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseArgs(argv: readonly string[]): StageOptions {
-  const parsed: StageOptions = { build: false, release: false, version: null };
+  // Release by default: staged packages must not silently carry debug addons.
+  const parsed: StageOptions = { build: false, release: true, version: null };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === undefined) {
@@ -54,6 +55,10 @@ function parseArgs(argv: readonly string[]): StageOptions {
       }
       case '--release': {
         parsed.release = true;
+        break;
+      }
+      case '--debug': {
+        parsed.release = false;
         break;
       }
       case '--version': {
@@ -162,7 +167,23 @@ function writePackageJsonSafely(
   }
 }
 
-function stagePackage(version: string | null = null): StagePackageResult {
+function assertReleaseProvenance(release: boolean): void {
+  if (!release) {
+    return;
+  }
+  const provenancePath = path.join(packageDir, '.native-build-profile');
+  const profile = fs.existsSync(provenancePath)
+    ? fs.readFileSync(provenancePath, 'utf8').trim()
+    : null;
+  if (profile !== 'release') {
+    fail(
+      `refusing to stage a non-release native addon (build profile: ${profile ?? 'unknown'}); ` +
+        'rebuild with `npm --prefix js-xbbg run build:native` or pass --debug to stage a debug addon deliberately',
+    );
+  }
+}
+
+function stagePackage(release: boolean, version: string | null = null): StagePackageResult {
   const key = platformKey();
   const spec: NativePackageSpec | null = nativePackageSpecForKey(key);
   if (spec === null) {
@@ -181,6 +202,7 @@ function stagePackage(version: string | null = null): StagePackageResult {
     );
   }
 
+  assertReleaseProvenance(release);
   const destBinary = path.join(localPackageDir, spec.binaryName);
   copyBinarySafely(sourceBinary, destBinary);
 
@@ -218,10 +240,10 @@ function maybeBuild({ build, release }: StageOptions): void {
   runNpm(
     release
       ? ['--prefix', packageDir, 'run', 'build:native', '--', '--release']
-      : ['--prefix', packageDir, 'run', 'build:native'],
+      : ['--prefix', packageDir, 'run', 'build:native', '--', '--debug'],
   );
 }
 
 const options = parseArgs(process.argv.slice(2));
 maybeBuild(options);
-stagePackage(options.version);
+stagePackage(options.release, options.version);

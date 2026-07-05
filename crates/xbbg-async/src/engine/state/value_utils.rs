@@ -4,10 +4,13 @@ use std::sync::Arc;
 
 use super::refdata::LongMode;
 use super::typed_builder::{ArrowType, ColumnSet, TypedBuilder};
-use arrow_array::builder::{Date32Builder, StringBuilder};
+use arrow_array::builder::{
+    BooleanBuilder, Date32Builder, Float64Builder, Int64Builder, StringBuilder,
+    TimestampMicrosecondBuilder,
+};
 use arrow_array::ArrayRef;
 use arrow_array::RecordBatch;
-use arrow_schema::{Field, Schema};
+use arrow_schema::{Field, Schema, SchemaRef};
 use xbbg_core::{BlpError, DataType as BlpDataType, Element, Message, Name, Value};
 
 /// Schema-metadata key carrying per-security entitlement IDs
@@ -497,6 +500,247 @@ fn append_date32_value(builder: &mut Date32Builder, value: Option<Value<'_>>) {
     }
 }
 
+pub(crate) struct TypedLongColumns {
+    ticker: StringBuilder,
+    date: Option<Date32Builder>,
+    field: StringBuilder,
+    value_f64: Float64Builder,
+    value_i64: Int64Builder,
+    value_str: StringBuilder,
+    value_bool: BooleanBuilder,
+    value_date: Date32Builder,
+    value_ts: TimestampMicrosecondBuilder,
+    row_count: usize,
+    schema: SchemaRef,
+}
+
+impl TypedLongColumns {
+    pub(crate) fn refdata() -> Self {
+        Self::new(false, 0)
+    }
+
+    pub(crate) fn histdata() -> Self {
+        Self::new(true, 0)
+    }
+
+    pub(crate) fn reserve_if_empty(&mut self, row_capacity: usize) {
+        if self.row_count == 0 {
+            *self = Self::new(self.date.is_some(), row_capacity);
+        }
+    }
+
+    fn new(include_date: bool, row_capacity: usize) -> Self {
+        let string_bytes = row_capacity.saturating_mul(24).max(1);
+        Self {
+            ticker: StringBuilder::with_capacity(row_capacity, string_bytes),
+            date: include_date.then(|| Date32Builder::with_capacity(row_capacity)),
+            field: StringBuilder::with_capacity(row_capacity, string_bytes),
+            value_f64: Float64Builder::with_capacity(row_capacity),
+            value_i64: Int64Builder::with_capacity(row_capacity),
+            value_str: StringBuilder::with_capacity(row_capacity, string_bytes),
+            value_bool: BooleanBuilder::with_capacity(row_capacity),
+            value_date: Date32Builder::with_capacity(row_capacity),
+            value_ts: TimestampMicrosecondBuilder::with_capacity(row_capacity),
+            row_count: 0,
+            schema: Self::schema(include_date),
+        }
+    }
+
+    fn schema(include_date: bool) -> SchemaRef {
+        let mut fields = Vec::with_capacity(if include_date { 9 } else { 8 });
+        fields.push(Field::new(
+            "ticker",
+            ArrowType::String.to_arrow_datatype(),
+            true,
+        ));
+        if include_date {
+            fields.push(Field::new(
+                "date",
+                ArrowType::Date32.to_arrow_datatype(),
+                true,
+            ));
+        }
+        fields.push(Field::new(
+            "field",
+            ArrowType::String.to_arrow_datatype(),
+            true,
+        ));
+        fields.push(Field::new(
+            "value_f64",
+            ArrowType::Float64.to_arrow_datatype(),
+            true,
+        ));
+        fields.push(Field::new(
+            "value_i64",
+            ArrowType::Int64.to_arrow_datatype(),
+            true,
+        ));
+        fields.push(Field::new(
+            "value_str",
+            ArrowType::String.to_arrow_datatype(),
+            true,
+        ));
+        fields.push(Field::new(
+            "value_bool",
+            ArrowType::Bool.to_arrow_datatype(),
+            true,
+        ));
+        fields.push(Field::new(
+            "value_date",
+            ArrowType::Date32.to_arrow_datatype(),
+            true,
+        ));
+        fields.push(Field::new(
+            "value_ts",
+            ArrowType::TimestampMicros.to_arrow_datatype(),
+            true,
+        ));
+        Arc::new(Schema::new(fields))
+    }
+
+    pub(crate) fn row_count(&self) -> usize {
+        self.row_count
+    }
+
+    pub(crate) fn append_row(
+        &mut self,
+        ticker: &str,
+        date_value: Option<&Value<'_>>,
+        field_name: &str,
+        value: Option<Value<'_>>,
+    ) {
+        self.ticker.append_value(ticker);
+        if let Some(date) = self.date.as_mut() {
+            append_date32_value_ref(date, date_value);
+        }
+        self.field.append_value(field_name);
+        self.append_typed_value(value);
+        self.row_count += 1;
+    }
+
+    fn append_typed_value(&mut self, value: Option<Value<'_>>) {
+        match value {
+            Some(Value::Float64(v)) => {
+                self.value_f64.append_value(v);
+                self.value_i64.append_null();
+                self.value_str.append_null();
+                self.value_bool.append_null();
+                self.value_date.append_null();
+                self.value_ts.append_null();
+            }
+            Some(Value::Int64(v)) => {
+                self.value_f64.append_null();
+                self.value_i64.append_value(v);
+                self.value_str.append_null();
+                self.value_bool.append_null();
+                self.value_date.append_null();
+                self.value_ts.append_null();
+            }
+            Some(Value::Int32(v)) => {
+                self.value_f64.append_null();
+                self.value_i64.append_value(i64::from(v));
+                self.value_str.append_null();
+                self.value_bool.append_null();
+                self.value_date.append_null();
+                self.value_ts.append_null();
+            }
+            Some(Value::String(s)) | Some(Value::Enum(s)) => {
+                self.value_f64.append_null();
+                self.value_i64.append_null();
+                self.value_str.append_value(s);
+                self.value_bool.append_null();
+                self.value_date.append_null();
+                self.value_ts.append_null();
+            }
+            Some(Value::Bool(v)) => {
+                self.value_f64.append_null();
+                self.value_i64.append_null();
+                self.value_str.append_null();
+                self.value_bool.append_value(v);
+                self.value_date.append_null();
+                self.value_ts.append_null();
+            }
+            Some(Value::Date32(days)) => {
+                self.value_f64.append_null();
+                self.value_i64.append_null();
+                self.value_str.append_null();
+                self.value_bool.append_null();
+                self.value_date.append_value(days);
+                self.value_ts.append_null();
+            }
+            Some(Value::TimestampMicros(micros)) => {
+                self.value_f64.append_null();
+                self.value_i64.append_null();
+                self.value_str.append_null();
+                self.value_bool.append_null();
+                self.value_date.append_null();
+                self.value_ts.append_value(micros);
+            }
+            Some(Value::Datetime(dt)) => {
+                self.value_f64.append_null();
+                self.value_i64.append_null();
+                self.value_str.append_null();
+                self.value_bool.append_null();
+                self.value_date.append_null();
+                self.value_ts.append_value(dt.to_micros());
+            }
+            Some(Value::Time64Micros(micros)) => {
+                self.value_f64.append_null();
+                self.value_i64.append_null();
+                self.value_str.append_null();
+                self.value_bool.append_null();
+                self.value_date.append_null();
+                self.value_ts.append_value(micros);
+            }
+            Some(Value::Byte(v)) => {
+                self.value_f64.append_null();
+                self.value_i64.append_value(i64::from(v));
+                self.value_str.append_null();
+                self.value_bool.append_null();
+                self.value_date.append_null();
+                self.value_ts.append_null();
+            }
+            Some(Value::Null) | None => {
+                self.value_f64.append_null();
+                self.value_i64.append_null();
+                self.value_str.append_null();
+                self.value_bool.append_null();
+                self.value_date.append_null();
+                self.value_ts.append_null();
+            }
+        }
+    }
+
+    pub(crate) fn finish(mut self) -> Result<RecordBatch, BlpError> {
+        let mut arrays: Vec<ArrayRef> = Vec::with_capacity(if self.date.is_some() { 9 } else { 8 });
+        arrays.push(Arc::new(self.ticker.finish()));
+        if let Some(mut date) = self.date.take() {
+            arrays.push(Arc::new(date.finish()));
+        }
+        arrays.push(Arc::new(self.field.finish()));
+        arrays.push(Arc::new(self.value_f64.finish()));
+        arrays.push(Arc::new(self.value_i64.finish()));
+        arrays.push(Arc::new(self.value_str.finish()));
+        arrays.push(Arc::new(self.value_bool.finish()));
+        arrays.push(Arc::new(self.value_date.finish()));
+        arrays.push(Arc::new(self.value_ts.finish().with_timezone("UTC")));
+
+        RecordBatch::try_new(self.schema, arrays).map_err(|e| BlpError::Internal {
+            detail: format!("build typed long RecordBatch: {e}"),
+        })
+    }
+}
+
+fn append_date32_value_ref(builder: &mut Date32Builder, value: Option<&Value<'_>>) {
+    match value {
+        Some(Value::Date32(days)) => builder.append_value(*days),
+        Some(Value::TimestampMicros(micros)) => {
+            builder.append_value((micros / 86_400_000_000) as i32)
+        }
+        _ => builder.append_null(),
+    }
+}
+
 struct WideFieldColumn {
     name: String,
     type_hint: Option<ArrowType>,
@@ -714,104 +958,12 @@ pub(crate) fn append_long_value_row<F>(
                 columns.append_str("dtype", "null");
             }
         }
-        LongMode::Typed => append_typed_value(columns, value.as_ref()),
+        LongMode::Typed => unreachable!("typed long rows are appended by TypedLongColumns"),
     }
 
     columns.end_row();
 }
 
-pub(crate) fn append_typed_value(columns: &mut ColumnSet, value: Option<&Value<'_>>) {
-    match value {
-        Some(Value::Float64(v)) => {
-            columns.append("value_f64", Value::Float64(*v));
-            columns.append_null("value_i64");
-            columns.append_null("value_str");
-            columns.append_null("value_bool");
-            columns.append_null("value_date");
-            columns.append_null("value_ts");
-        }
-        Some(Value::Int64(v)) => {
-            columns.append_null("value_f64");
-            columns.append("value_i64", Value::Int64(*v));
-            columns.append_null("value_str");
-            columns.append_null("value_bool");
-            columns.append_null("value_date");
-            columns.append_null("value_ts");
-        }
-        Some(Value::Int32(v)) => {
-            columns.append_null("value_f64");
-            columns.append("value_i64", Value::Int64(*v as i64));
-            columns.append_null("value_str");
-            columns.append_null("value_bool");
-            columns.append_null("value_date");
-            columns.append_null("value_ts");
-        }
-        Some(Value::String(s)) | Some(Value::Enum(s)) => {
-            columns.append_null("value_f64");
-            columns.append_null("value_i64");
-            columns.append_str("value_str", s);
-            columns.append_null("value_bool");
-            columns.append_null("value_date");
-            columns.append_null("value_ts");
-        }
-        Some(Value::Bool(b)) => {
-            columns.append_null("value_f64");
-            columns.append_null("value_i64");
-            columns.append_null("value_str");
-            columns.append("value_bool", Value::Bool(*b));
-            columns.append_null("value_date");
-            columns.append_null("value_ts");
-        }
-        Some(Value::Date32(d)) => {
-            columns.append_null("value_f64");
-            columns.append_null("value_i64");
-            columns.append_null("value_str");
-            columns.append_null("value_bool");
-            columns.append("value_date", Value::Date32(*d));
-            columns.append_null("value_ts");
-        }
-        Some(Value::TimestampMicros(ts)) => {
-            columns.append_null("value_f64");
-            columns.append_null("value_i64");
-            columns.append_null("value_str");
-            columns.append_null("value_bool");
-            columns.append_null("value_date");
-            columns.append("value_ts", Value::TimestampMicros(*ts));
-        }
-        Some(Value::Datetime(dt)) => {
-            columns.append_null("value_f64");
-            columns.append_null("value_i64");
-            columns.append_null("value_str");
-            columns.append_null("value_bool");
-            columns.append_null("value_date");
-            columns.append("value_ts", Value::TimestampMicros(dt.to_micros()));
-        }
-        Some(Value::Time64Micros(t)) => {
-            columns.append_null("value_f64");
-            columns.append_null("value_i64");
-            columns.append_null("value_str");
-            columns.append_null("value_bool");
-            columns.append_null("value_date");
-            columns.append("value_ts", Value::TimestampMicros(*t));
-        }
-        Some(Value::Byte(b)) => {
-            columns.append_null("value_f64");
-            columns.append("value_i64", Value::Int64(*b as i64));
-            columns.append_null("value_str");
-            columns.append_null("value_bool");
-            columns.append_null("value_date");
-            columns.append_null("value_ts");
-        }
-        Some(Value::Null) | None => {
-            columns.append_null("value_f64");
-            columns.append_null("value_i64");
-            columns.append_null("value_str");
-            columns.append_null("value_bool");
-            columns.append_null("value_date");
-            columns.append_null("value_ts");
-        }
-    }
-}
 
 fn civil_from_days(days: i64) -> (i32, u32, u32) {
     // Howard Hinnant's civil-from-days algorithm. `days` is relative to
@@ -1063,6 +1215,156 @@ mod tests {
         assert_eq!(dates.value(1), 20_001);
         assert_eq!(fields.value(1), "VOLUME");
         assert!(values.is_null(1));
+    }
+
+    fn append_previous_column_set_typed_value(columns: &mut ColumnSet, value: Value<'_>) {
+        match value {
+            Value::Float64(v) => {
+                columns.append("value_f64", Value::Float64(v));
+                columns.append_null("value_i64");
+                columns.append_null("value_str");
+                columns.append_null("value_bool");
+                columns.append_null("value_date");
+                columns.append_null("value_ts");
+            }
+            Value::Int64(v) => {
+                columns.append_null("value_f64");
+                columns.append("value_i64", Value::Int64(v));
+                columns.append_null("value_str");
+                columns.append_null("value_bool");
+                columns.append_null("value_date");
+                columns.append_null("value_ts");
+            }
+            Value::Int32(v) => {
+                columns.append_null("value_f64");
+                columns.append("value_i64", Value::Int64(i64::from(v)));
+                columns.append_null("value_str");
+                columns.append_null("value_bool");
+                columns.append_null("value_date");
+                columns.append_null("value_ts");
+            }
+            Value::String(s) | Value::Enum(s) => {
+                columns.append_null("value_f64");
+                columns.append_null("value_i64");
+                columns.append_str("value_str", s);
+                columns.append_null("value_bool");
+                columns.append_null("value_date");
+                columns.append_null("value_ts");
+            }
+            Value::Bool(v) => {
+                columns.append_null("value_f64");
+                columns.append_null("value_i64");
+                columns.append_null("value_str");
+                columns.append("value_bool", Value::Bool(v));
+                columns.append_null("value_date");
+                columns.append_null("value_ts");
+            }
+            Value::Date32(days) => {
+                columns.append_null("value_f64");
+                columns.append_null("value_i64");
+                columns.append_null("value_str");
+                columns.append_null("value_bool");
+                columns.append("value_date", Value::Date32(days));
+                columns.append_null("value_ts");
+            }
+            Value::TimestampMicros(micros) => {
+                columns.append_null("value_f64");
+                columns.append_null("value_i64");
+                columns.append_null("value_str");
+                columns.append_null("value_bool");
+                columns.append_null("value_date");
+                columns.append("value_ts", Value::TimestampMicros(micros));
+            }
+            Value::Datetime(dt) => {
+                columns.append_null("value_f64");
+                columns.append_null("value_i64");
+                columns.append_null("value_str");
+                columns.append_null("value_bool");
+                columns.append_null("value_date");
+                columns.append("value_ts", Value::TimestampMicros(dt.to_micros()));
+            }
+            Value::Time64Micros(micros) => {
+                columns.append_null("value_f64");
+                columns.append_null("value_i64");
+                columns.append_null("value_str");
+                columns.append_null("value_bool");
+                columns.append_null("value_date");
+                columns.append("value_ts", Value::TimestampMicros(micros));
+            }
+            Value::Byte(v) => {
+                columns.append_null("value_f64");
+                columns.append("value_i64", Value::Int64(i64::from(v)));
+                columns.append_null("value_str");
+                columns.append_null("value_bool");
+                columns.append_null("value_date");
+                columns.append_null("value_ts");
+            }
+            Value::Null => {
+                columns.append_null("value_f64");
+                columns.append_null("value_i64");
+                columns.append_null("value_str");
+                columns.append_null("value_bool");
+                columns.append_null("value_date");
+                columns.append_null("value_ts");
+            }
+        }
+    }
+
+    #[test]
+    fn typed_long_columns_schema_matches_previous_column_set_shapes() {
+        let mut previous_refdata = ColumnSet::new();
+        previous_refdata.append_str("ticker", "IBM US Equity");
+        previous_refdata.append_str("field", "PX_LAST");
+        append_previous_column_set_typed_value(&mut previous_refdata, Value::Float64(123.45));
+        previous_refdata.end_row();
+        let previous_refdata = previous_refdata
+            .finish_with_order(&[
+                "ticker",
+                "field",
+                "value_f64",
+                "value_i64",
+                "value_str",
+                "value_bool",
+                "value_date",
+                "value_ts",
+            ])
+            .unwrap();
+
+        let mut typed_refdata = TypedLongColumns::refdata();
+        typed_refdata.append_row("IBM US Equity", None, "PX_LAST", Some(Value::Float64(123.45)));
+        let typed_refdata = typed_refdata.finish().unwrap();
+        assert_eq!(typed_refdata.schema().fields(), previous_refdata.schema().fields());
+
+        let mut previous_histdata = ColumnSet::new();
+        previous_histdata.append_str("ticker", "IBM US Equity");
+        previous_histdata.append("date", Value::Date32(20_000));
+        previous_histdata.append_str("field", "PX_LAST");
+        append_previous_column_set_typed_value(&mut previous_histdata, Value::Float64(123.45));
+        previous_histdata.end_row();
+        let previous_histdata = previous_histdata
+            .finish_with_order(&[
+                "ticker",
+                "date",
+                "field",
+                "value_f64",
+                "value_i64",
+                "value_str",
+                "value_bool",
+                "value_date",
+                "value_ts",
+            ])
+            .unwrap();
+
+        let mut typed_histdata = TypedLongColumns::histdata();
+        let date = Value::Date32(20_000);
+        typed_histdata.append_row(
+            "IBM US Equity",
+            Some(&date),
+            "PX_LAST",
+            Some(Value::Float64(123.45)),
+        );
+        let typed_histdata = typed_histdata.finish().unwrap();
+        assert_eq!(typed_histdata.schema().fields(), previous_histdata.schema().fields());
     }
 
     fn tiny_batch() -> RecordBatch {

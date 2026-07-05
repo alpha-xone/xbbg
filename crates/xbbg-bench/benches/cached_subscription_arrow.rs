@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use tokio::sync::mpsc;
-use xbbg_async::engine::state::SubscriptionState;
+use xbbg_async::engine::state::{subscription_update_to_record_batch, SubscriptionState};
 use xbbg_async::engine::OverflowPolicy;
 use xbbg_bench::write_json;
 use xbbg_core::{CorrelationId, Event, EventType, Session, SessionOptions, SubscriptionList};
@@ -31,6 +31,7 @@ const DEFAULT_REPLAY_LOOPS: usize = 1_000;
 const DEFAULT_FLUSH_THRESHOLD: usize = 1_024;
 const DEFAULT_CHANNEL_CAPACITY: usize = 16_384;
 const DEFAULT_ITERATIONS: usize = 5;
+const LIVE_ENABLE_ENV: &str = "CACHED_SUB_ENABLE_LIVE";
 
 #[derive(Debug)]
 struct BenchConfig {
@@ -88,15 +89,36 @@ fn main() {
         config.replay_loops, config.flush_threshold, config.iterations, config.channel_capacity
     );
 
-    let session = setup_subscription_session();
-    let capture = capture_subscription_events(&session, &config);
+    if !live_capture_enabled() {
+        println!(
+            "Skipping cached subscription benchmark: set {LIVE_ENABLE_ENV}=1 to enable the live Bloomberg capture."
+        );
+        return;
+    }
+
+    let session = match setup_subscription_session() {
+        Ok(session) => session,
+        Err(err) => {
+            println!("Skipping cached subscription benchmark: Bloomberg session unavailable ({err}).");
+            return;
+        }
+    };
+    let capture = match capture_subscription_events(&session, &config) {
+        Ok(capture) => capture,
+        Err(err) => {
+            session.stop();
+            println!("Skipping cached subscription benchmark: capture unavailable ({err}).");
+            return;
+        }
+    };
     session.stop();
 
     if capture.messages == 0 {
-        panic!(
-            "captured zero subscription messages for {}; ensure Bloomberg is running and ticker is active",
+        println!(
+            "Skipping cached subscription benchmark: captured zero subscription messages for {}; ensure Bloomberg is running and ticker is active.",
             config.ticker
         );
+        return;
     }
 
     println!(
@@ -181,40 +203,49 @@ fn env_bool(name: &str, default: bool) -> bool {
         })
         .unwrap_or(default)
 }
+fn live_capture_enabled() -> bool {
+    env_bool(LIVE_ENABLE_ENV, false)
+        || env_bool("XBBG_BENCH_LIVE", false)
+        || env_bool("XBBG_LIVE_BENCHMARKS", false)
+}
 
-fn setup_subscription_session() -> Session {
+fn setup_subscription_session() -> Result<Session, String> {
     let host = std::env::var("BLP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port: u16 = std::env::var("BLP_PORT")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(8194);
 
-    let mut options = SessionOptions::new().expect("failed to create session options");
-    options.set_server_host(&host).expect("failed to set host");
+    let mut options =
+        SessionOptions::new().map_err(|err| format!("failed to create session options: {err:?}"))?;
+    options
+        .set_server_host(&host)
+        .map_err(|err| format!("failed to set host: {err:?}"))?;
     options.set_server_port(port);
     options.set_record_subscription_receive_times(true);
 
-    let session = Session::new(&options).expect("failed to create session");
+    let session =
+        Session::new(&options).map_err(|err| format!("failed to create session: {err:?}"))?;
     session
         .start_and_wait(30_000)
-        .expect("failed to start subscription benchmark session");
-    session
+        .map_err(|err| format!("failed to start subscription benchmark session: {err:?}"))?;
+    Ok(session)
 }
 
 fn capture_subscription_events(
     session: &xbbg_core::Session,
     config: &BenchConfig,
-) -> CaptureResult {
+) -> Result<CaptureResult, String> {
     let mut subscription_list = SubscriptionList::new();
     let cid = CorrelationId::new_int(1);
     let field_refs: Vec<&str> = config.fields.iter().map(String::as_str).collect();
     subscription_list
         .add(&config.ticker, &field_refs, "", &cid)
-        .expect("failed to add subscription");
+        .map_err(|err| format!("failed to add subscription: {err:?}"))?;
 
     session
         .subscribe(&subscription_list, None)
-        .expect("failed to subscribe");
+        .map_err(|err| format!("failed to subscribe: {err:?}"))?;
 
     let started = Instant::now();
     let deadline = started + Duration::from_millis(config.capture_timeout_ms);
@@ -244,13 +275,13 @@ fn capture_subscription_events(
 
     session
         .unsubscribe(&subscription_list)
-        .expect("failed to unsubscribe after capture");
+        .map_err(|err| format!("failed to unsubscribe after capture: {err:?}"))?;
 
-    CaptureResult {
+    Ok(CaptureResult {
         events,
         messages,
         capture_elapsed_ms: started.elapsed().as_millis(),
-    }
+    })
 }
 
 fn replay_cached_events(iteration: usize, config: &BenchConfig, events: &[Event]) -> ReplayResult {
@@ -293,8 +324,9 @@ fn replay_cached_events(iteration: usize, config: &BenchConfig, events: &[Event]
     let mut total_columns_emitted = 0usize;
     let mut total_cells_emitted = 0usize;
     while let Ok(result) = rx.try_recv() {
-        let batch: RecordBatch =
-            result.expect("SubscriptionState should not emit errors in replay");
+        let update = result.expect("SubscriptionState should not emit errors in replay");
+        let batch: RecordBatch = subscription_update_to_record_batch(&update)
+            .expect("SubscriptionUpdate should adapt to RecordBatch in replay");
         rows_emitted += batch.num_rows();
         batches_emitted += 1;
         total_columns_emitted += batch.num_columns();
@@ -417,6 +449,14 @@ fn write_results(config: &BenchConfig, capture: &CaptureResult, results: &[Repla
     )
     .unwrap();
     writeln!(&mut json, "  \"uses_bloomberg_session\": true,").unwrap();
+    let build_mode = xbbg_bench::build_mode();
+    writeln!(
+        &mut json,
+        "  \"target_cpu\": {{ \"native\": {} }},",
+        build_mode.target_cpu_native
+    )
+    .unwrap();
+    writeln!(&mut json, "  \"debug_build\": {},", build_mode.debug_build).unwrap();
     writeln!(&mut json, "  \"config\": {{").unwrap();
     writeln!(
         &mut json,
@@ -600,10 +640,9 @@ fn write_results(config: &BenchConfig, capture: &CaptureResult, results: &[Repla
     writeln!(&mut json, "  ]").unwrap();
     writeln!(&mut json, "}}").unwrap();
 
-    let timestamped = PathBuf::from(format!(
-        "benchmarks/results/cached_subscription_arrow_{timestamp}.json"
-    ));
-    let latest = PathBuf::from("benchmarks/results/cached_subscription_arrow_latest.json");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benchmarks/results");
+    let timestamped = dir.join(format!("cached_subscription_arrow_{timestamp}.json"));
+    let latest = dir.join("cached_subscription_arrow_latest.json");
     write_json(&timestamped, &json);
     write_json(&latest, &json);
 }

@@ -95,15 +95,16 @@ impl IntradayBarStreamState {
         }
 
         // Create builders
-        let mut ticker_builder = StringBuilder::new();
-        let mut time_builder = TimestampMicrosecondBuilder::new();
-        let mut open_builder = Float64Builder::new();
-        let mut high_builder = Float64Builder::new();
-        let mut low_builder = Float64Builder::new();
-        let mut close_builder = Float64Builder::new();
-        let mut volume_builder = Float64Builder::new();
-        let mut num_events_builder = Int32Builder::new();
-        let mut value_builder = Float64Builder::new();
+        let mut ticker_builder =
+            StringBuilder::with_capacity(n, self.ticker.len().saturating_mul(n));
+        let mut time_builder = TimestampMicrosecondBuilder::with_capacity(n);
+        let mut open_builder = Float64Builder::with_capacity(n);
+        let mut high_builder = Float64Builder::with_capacity(n);
+        let mut low_builder = Float64Builder::with_capacity(n);
+        let mut close_builder = Float64Builder::with_capacity(n);
+        let mut volume_builder = Float64Builder::with_capacity(n);
+        let mut num_events_builder = Int32Builder::with_capacity(n);
+        let mut value_builder = Float64Builder::with_capacity(n);
 
         for i in 0..n {
             let Some(bar) = bar_tick_data.get_element(i) else {
@@ -165,17 +166,16 @@ impl IntradayBarStreamState {
             ]))
         });
 
-        let columns: Vec<ArrayRef> = vec![
-            Arc::new(ticker_builder.finish()),
-            Arc::new(time_builder.finish().with_timezone("UTC")),
-            Arc::new(open_builder.finish()),
-            Arc::new(high_builder.finish()),
-            Arc::new(low_builder.finish()),
-            Arc::new(close_builder.finish()),
-            Arc::new(volume_builder.finish()),
-            Arc::new(num_events_builder.finish()),
-            Arc::new(value_builder.finish()),
-        ];
+        let mut columns: Vec<ArrayRef> = Vec::with_capacity(9);
+        columns.push(Arc::new(ticker_builder.finish()));
+        columns.push(Arc::new(time_builder.finish().with_timezone("UTC")));
+        columns.push(Arc::new(open_builder.finish()));
+        columns.push(Arc::new(high_builder.finish()));
+        columns.push(Arc::new(low_builder.finish()));
+        columns.push(Arc::new(close_builder.finish()));
+        columns.push(Arc::new(volume_builder.finish()));
+        columns.push(Arc::new(num_events_builder.finish()));
+        columns.push(Arc::new(value_builder.finish()));
 
         RecordBatch::try_new(schema.clone(), columns).ok()
     }

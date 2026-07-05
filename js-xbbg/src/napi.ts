@@ -64,25 +64,58 @@ export interface NativeArrowZeroCopyBatch {
   readonly metadata: Record<string, string>;
 }
 
-export type NativeUpdateValue = null | boolean | number | string;
+// Scalar subscription rows use columnar, per-row typed option arrays instead of
+// serde_json values. At each value position exactly one typed array carries a
+// non-null payload; int64/time64/timestamp values are decimal strings so JS can
+// materialize BigInt lazily without losing precision.
+export type NativeSubscriptionFieldKind =
+  | 'unknown'
+  | 'bool'
+  | 'i32'
+  | 'i64'
+  | 'f64'
+  | 'str'
+  | 'date32'
+  | 'time64_us'
+  | 'timestamp_us';
 
-export interface NativeSubscriptionUpdate {
-  readonly kind: 'update';
+export interface NativeSubscriptionLayout {
+  readonly version: number;
+  readonly fields: readonly string[];
+  readonly kinds: readonly NativeSubscriptionFieldKind[];
+}
+
+export interface NativeSubscriptionRow {
   readonly topic: string;
   readonly topicId: number;
   readonly timestampUs: number;
   readonly layoutVersion: number;
-  readonly fields: readonly string[];
-  readonly values: readonly NativeUpdateValue[];
-  readonly valueKinds: readonly string[];
+  readonly fieldIndices: readonly number[];
+  readonly boolValues: readonly (boolean | null)[];
+  readonly i32Values: readonly (number | null)[];
+  readonly f64Values: readonly (number | null)[];
+  readonly stringValues: readonly (string | null)[];
+  readonly i64Values: readonly (string | null)[];
+}
+
+export interface NativeSubscriptionUpdateBatch {
+  readonly kind: 'batch';
+  readonly layout?: NativeSubscriptionLayout;
+  readonly updates: readonly NativeSubscriptionRow[];
 }
 
 export interface NativeSubscription {
-  nextUpdate(): Promise<NativeSubscriptionUpdate | null>;
-  nextArrow(): Promise<NativeArrowZeroCopyBatch | null>;
+  nextUpdates(
+    maxItems?: number,
+    maxWaitMs?: number,
+  ): Promise<NativeSubscriptionUpdateBatch | null>;
+  nextArrowBatch(
+    maxRows?: number,
+    maxWaitMs?: number,
+  ): Promise<NativeArrowZeroCopyBatch | null>;
   add(tickers: readonly string[]): Promise<void>;
   remove(tickers: readonly string[]): Promise<void>;
-  unsubscribe(drain: boolean): Promise<NativeSubscriptionUpdate[] | null>;
+  unsubscribe(drain: boolean): Promise<NativeSubscriptionUpdateBatch[] | null>;
   unsubscribeArrow(drain: boolean): Promise<NativeArrowZeroCopyBatch[] | null>;
   readonly tickers: string[];
   readonly fields: string[];
@@ -91,7 +124,8 @@ export interface NativeSubscription {
 }
 
 export interface NativeEngine {
-  request(params: RequestInput): Promise<Buffer>;
+  request(params: RequestInput): Promise<NativeArrowZeroCopyBatch>;
+  requestRaw(params: RequestInput): Promise<Buffer>;
   seatType(): Promise<SeatType>;
   checkEntitlements(service: string, eids: readonly number[]): Promise<EntitlementReport>;
   identityIsAuthorized(service: string): Promise<boolean>;
@@ -139,7 +173,7 @@ export interface NativeEngine {
     endDatetime: string | undefined,
     eventTypes: readonly string[] | null,
     includeBrokerCodes: boolean,
-  ): Promise<Buffer>;
+  ): Promise<NativeArrowZeroCopyBatch>;
   recipeYas(
     tickers: readonly string[],
     fields: readonly string[],
@@ -149,46 +183,46 @@ export interface NativeEngine {
     yieldVal: number | undefined,
     price: number | undefined,
     benchmark: string | undefined,
-  ): Promise<Buffer>;
-  recipePreferreds(equityTicker: string, fields: readonly string[] | null): Promise<Buffer>;
+  ): Promise<NativeArrowZeroCopyBatch>;
+  recipePreferreds(equityTicker: string, fields: readonly string[] | null): Promise<NativeArrowZeroCopyBatch>;
   recipeCorporateBonds(
     ticker: string,
     ccy: string | undefined,
     fields: readonly string[] | null,
     activeOnly: boolean,
-  ): Promise<Buffer>;
-  recipeFutTicker(genTicker: string, dt: string, freq: string | undefined): Promise<Buffer>;
-  recipeActiveFutures(genTicker: string, dt: string, freq: string | undefined): Promise<Buffer>;
+  ): Promise<NativeArrowZeroCopyBatch>;
+  recipeFutTicker(genTicker: string, dt: string, freq: string | undefined): Promise<NativeArrowZeroCopyBatch>;
+  recipeActiveFutures(genTicker: string, dt: string, freq: string | undefined): Promise<NativeArrowZeroCopyBatch>;
   recipeFuturesCurve(
     genTicker: string,
     asof: string | undefined,
     chainField: string | undefined,
     fields: readonly string[] | null,
     maxContracts: number | undefined,
-  ): Promise<Buffer>;
-  recipeCdxTicker(genTicker: string, dt: string): Promise<Buffer>;
-  recipeActiveCdx(genTicker: string, dt: string, lookbackDays: number | undefined): Promise<Buffer>;
+  ): Promise<NativeArrowZeroCopyBatch>;
+  recipeCdxTicker(genTicker: string, dt: string): Promise<NativeArrowZeroCopyBatch>;
+  recipeActiveCdx(genTicker: string, dt: string, lookbackDays: number | undefined): Promise<NativeArrowZeroCopyBatch>;
   recipeDividend(
     tickers: readonly string[],
     startDate: string,
     endDate: string,
     dvdType: string | undefined,
-  ): Promise<Buffer>;
+  ): Promise<NativeArrowZeroCopyBatch>;
   recipeDividendYield(
     tickers: readonly string[],
     startDate: string,
     endDate: string,
     dividendTypes: readonly string[] | null,
     windowDays: number | undefined,
-  ): Promise<Buffer>;
+  ): Promise<NativeArrowZeroCopyBatch>;
   recipeTurnover(
     tickers: readonly string[],
     startDate: string,
     endDate: string,
     ccy: string | undefined,
     factor: number | undefined,
-  ): Promise<Buffer>;
-  recipeEtfHoldings(etfTicker: string, fields: readonly string[] | null): Promise<Buffer>;
+  ): Promise<NativeArrowZeroCopyBatch>;
+  recipeEtfHoldings(etfTicker: string, fields: readonly string[] | null): Promise<NativeArrowZeroCopyBatch>;
   recipeVolSurface(
     tickers: readonly string[],
     startDate: string,
@@ -199,20 +233,20 @@ export interface NativeEngine {
     includeDerived: boolean | undefined,
     riskFreeRate: number | undefined,
     dividendYieldField: string | undefined,
-  ): Promise<Buffer>;
+  ): Promise<NativeArrowZeroCopyBatch>;
   recipeIndexMembers(
     index: string,
     field: string | undefined,
     asof: string | undefined,
-  ): Promise<Buffer>;
-  recipeResolveIsins(isins: readonly string[]): Promise<Buffer>;
-  recipeIssuerIsins(bondIsins: readonly string[]): Promise<Buffer>;
+  ): Promise<NativeArrowZeroCopyBatch>;
+  recipeResolveIsins(isins: readonly string[]): Promise<NativeArrowZeroCopyBatch>;
+  recipeIssuerIsins(bondIsins: readonly string[]): Promise<NativeArrowZeroCopyBatch>;
   recipeCurrencyConversion(
     ticker: string,
     targetCcy: string,
     startDate: string,
     endDate: string,
-  ): Promise<Buffer>;
+  ): Promise<NativeArrowZeroCopyBatch>;
 }
 
 export interface NativeEngineConstructor {

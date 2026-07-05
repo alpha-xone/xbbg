@@ -314,6 +314,21 @@ impl<'a> Element<'a> {
         (rc == 0).then(|| unsafe { v.assume_init() != 0 })
     }
 
+    /// Get char value at index as a raw byte.
+    ///
+    /// Single FFI call via `blpapi_Element_getValueAsChar` — the cheapest
+    /// accessor for `Char`/`Byte` elements.
+    ///
+    /// Returns `None` if null, type mismatch, or out of bounds.
+    #[must_use]
+    #[inline(always)]
+    pub fn get_char(&self, i: usize) -> Option<u8> {
+        let mut v = MaybeUninit::<std::os::raw::c_char>::uninit();
+        // SAFETY: blpapi_Element_getValueAsChar writes to the pointer on success.
+        let rc = unsafe { ffi::blpapi_Element_getValueAsChar(self.ptr, v.as_mut_ptr(), i) };
+        (rc == 0).then(|| unsafe { v.assume_init() } as u8)
+    }
+
     /// Get string value at index. Returns reference to Bloomberg's internal buffer.
     ///
     /// **Zero allocation**: Returns a borrowed reference, no copy.
@@ -535,12 +550,14 @@ impl<'a> Element<'a> {
             DataType::Bool => self.get_bool(i).map(Value::Bool),
             DataType::Char | DataType::Byte => {
                 // Bloomberg often stores boolean fields as Char ('Y'/'N').
-                // Try get_bool() first - Bloomberg's API coerces 'Y'/'N' to true/false.
-                if let Some(b) = self.get_bool(i) {
-                    return Some(Value::Bool(b));
-                }
-                // Fall back to byte if get_bool() fails
-                self.get_i32(i).map(|v| Value::Byte(v as u8))
+                // Single getValueAsChar call, then map — matches the documented
+                // coercion ('Y'→true, 'N'→false, other→Byte) with 1 FFI call
+                // instead of getValueAsBool + getValueAsInt32.
+                self.get_char(i).map(|c| match c {
+                    b'Y' => Value::Bool(true),
+                    b'N' => Value::Bool(false),
+                    other => Value::Byte(other),
+                })
             }
             DataType::Int32 => self.get_i32(i).map(Value::Int32),
             DataType::Int64 => self.get_i64(i).map(Value::Int64),
@@ -621,12 +638,11 @@ impl<'a> Element<'a> {
 
         match datatype {
             DataType::Bool => self.get_bool(i).map(Value::Bool),
-            DataType::Char | DataType::Byte => {
-                if let Some(b) = self.get_bool(i) {
-                    return Some(Value::Bool(b));
-                }
-                self.get_i32(i).map(|v| Value::Byte(v as u8))
-            }
+            DataType::Char | DataType::Byte => self.get_char(i).map(|c| match c {
+                b'Y' => Value::Bool(true),
+                b'N' => Value::Bool(false),
+                other => Value::Byte(other),
+            }),
             DataType::Int32 => self.get_i32(i).map(Value::Int32),
             DataType::Int64 => self.get_i64(i).map(Value::Int64),
             DataType::Float32 | DataType::Float64 | DataType::Decimal => {

@@ -3,13 +3,91 @@
 //! Extracts IntradayBarResponse messages directly from Bloomberg Elements
 //! without JSON intermediate serialization.
 
-use arrow_array::RecordBatch;
+use std::sync::Arc;
+
+use arrow_array::builder::{
+    Float64Builder, Int32Builder, StringBuilder, TimestampMicrosecondBuilder,
+};
+use arrow_array::{ArrayRef, RecordBatch};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use tokio::sync::oneshot;
 use xbbg_log::trace;
 
-use super::typed_builder::{ArrowType, ColumnSet};
 use super::value_utils::top_level_response_error;
-use xbbg_core::{BlpError, Message};
+use xbbg_core::{BlpError, Element, Message, Name, Value};
+
+struct IntradayBarNames {
+    bar_data: Name,
+    bar_tick_data: Name,
+    time: Name,
+    open: Name,
+    high: Name,
+    low: Name,
+    close: Name,
+    volume: Name,
+    num_events: Name,
+    value: Name,
+}
+
+impl IntradayBarNames {
+    fn new() -> Self {
+        Self {
+            bar_data: Name::get_or_intern("barData"),
+            bar_tick_data: Name::get_or_intern("barTickData"),
+            time: Name::get_or_intern("time"),
+            open: Name::get_or_intern("open"),
+            high: Name::get_or_intern("high"),
+            low: Name::get_or_intern("low"),
+            close: Name::get_or_intern("close"),
+            volume: Name::get_or_intern("volume"),
+            num_events: Name::get_or_intern("numEvents"),
+            value: Name::get_or_intern("value"),
+        }
+    }
+}
+
+struct IntradayBarBuilders {
+    ticker: StringBuilder,
+    time: TimestampMicrosecondBuilder,
+    open: Float64Builder,
+    high: Float64Builder,
+    low: Float64Builder,
+    close: Float64Builder,
+    volume: Float64Builder,
+    num_events: Int32Builder,
+    value: Float64Builder,
+}
+
+impl IntradayBarBuilders {
+    fn new() -> Self {
+        Self {
+            ticker: StringBuilder::new(),
+            time: TimestampMicrosecondBuilder::new(),
+            open: Float64Builder::new(),
+            high: Float64Builder::new(),
+            low: Float64Builder::new(),
+            close: Float64Builder::new(),
+            volume: Float64Builder::new(),
+            num_events: Int32Builder::new(),
+            value: Float64Builder::new(),
+        }
+    }
+
+    fn finish(&mut self) -> Vec<ArrayRef> {
+        let mut columns: Vec<ArrayRef> = Vec::with_capacity(9);
+        columns.push(Arc::new(self.ticker.finish()));
+        columns.push(Arc::new(self.time.finish().with_timezone("UTC")));
+        columns.push(Arc::new(self.open.finish()));
+        columns.push(Arc::new(self.high.finish()));
+        columns.push(Arc::new(self.low.finish()));
+        columns.push(Arc::new(self.close.finish()));
+        columns.push(Arc::new(self.volume.finish()));
+        columns.push(Arc::new(self.num_events.finish()));
+        columns.push(Arc::new(self.value.finish()));
+        columns
+    }
+}
+
 
 /// State for an intraday bar request (bdib).
 pub struct IntradayBarState {
@@ -19,8 +97,10 @@ pub struct IntradayBarState {
     interval: u32,
     /// Ticker for this request
     ticker: String,
-    /// Column set for building the output
-    columns: ColumnSet,
+    /// Pre-interned Bloomberg field names used in hot-path lookups.
+    names: IntradayBarNames,
+    /// Fixed Arrow builders for the output schema.
+    builders: IntradayBarBuilders,
     /// Reply channel
     pub reply: oneshot::Sender<Result<RecordBatch, BlpError>>,
 }
@@ -33,22 +113,12 @@ impl IntradayBarState {
         interval: u32,
         reply: oneshot::Sender<Result<RecordBatch, BlpError>>,
     ) -> Self {
-        let mut columns = ColumnSet::new();
-        columns.set_type_hint("ticker", ArrowType::String);
-        columns.set_type_hint("time", ArrowType::TimestampMicros);
-        columns.set_type_hint("open", ArrowType::Float64);
-        columns.set_type_hint("high", ArrowType::Float64);
-        columns.set_type_hint("low", ArrowType::Float64);
-        columns.set_type_hint("close", ArrowType::Float64);
-        columns.set_type_hint("volume", ArrowType::Float64);
-        columns.set_type_hint("numEvents", ArrowType::Int32);
-        columns.set_type_hint("value", ArrowType::Float64);
-
         Self {
             event_type,
             interval,
             ticker,
-            columns,
+            names: IntradayBarNames::new(),
+            builders: IntradayBarBuilders::new(),
             reply,
         }
     }
@@ -76,22 +146,11 @@ impl IntradayBarState {
         }
 
         self.process_message(msg);
-        let reply = self.reply;
-        let result = self.columns.finish_with_order(&[
-            "ticker",
-            "time",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "numEvents",
-            "value",
-        ]);
+        let result = self.finish_batch();
         if let Ok(ref batch) = result {
             xbbg_log::debug!(rows = batch.num_rows(), "intradaybar finish");
         }
-        let _ = reply.send(result);
+        let _ = self.reply.send(result);
     }
 
     /// Process an IntradayBarResponse message using Element API.
@@ -117,13 +176,13 @@ impl IntradayBarState {
         let root = msg.elements();
 
         // Get barData
-        let Some(bar_data) = root.get_by_str("barData") else {
+        let Some(bar_data) = root.get(&self.names.bar_data) else {
             trace!("No barData in message");
             return;
         };
 
         // Get barTickData array
-        let Some(bar_tick_data) = bar_data.get_by_str("barTickData") else {
+        let Some(bar_tick_data) = bar_data.get(&self.names.bar_tick_data) else {
             trace!("No barTickData in message");
             return;
         };
@@ -135,42 +194,90 @@ impl IntradayBarState {
                 continue;
             };
 
-            self.columns.append_str("ticker", &self.ticker);
-
-            // Get time (as timestamp)
-            if let Some(time_elem) = bar.get_by_str("time") {
-                if let Some(value) = time_elem.get_value(0) {
-                    self.columns.append("time", value);
-                } else {
-                    self.columns.append_null("time");
-                }
-            } else {
-                self.columns.append_null("time");
-            }
-
-            // Get OHLC values
-            self.append_field(&bar, "open");
-            self.append_field(&bar, "high");
-            self.append_field(&bar, "low");
-            self.append_field(&bar, "close");
-            self.append_field(&bar, "volume");
-            self.append_field(&bar, "numEvents");
-            self.append_field(&bar, "value");
-
-            self.columns.end_row();
+            self.builders.ticker.append_value(&self.ticker);
+            Self::append_time_field(&bar, &self.names.time, &mut self.builders.time);
+            Self::append_f64_field(&bar, &self.names.open, &mut self.builders.open);
+            Self::append_f64_field(&bar, &self.names.high, &mut self.builders.high);
+            Self::append_f64_field(&bar, &self.names.low, &mut self.builders.low);
+            Self::append_f64_field(&bar, &self.names.close, &mut self.builders.close);
+            Self::append_f64_field(&bar, &self.names.volume, &mut self.builders.volume);
+            Self::append_i32_field(
+                &bar,
+                &self.names.num_events,
+                &mut self.builders.num_events,
+            );
+            Self::append_f64_field(&bar, &self.names.value, &mut self.builders.value);
         }
     }
 
-    /// Helper to append a field value or null.
-    fn append_field(&mut self, element: &xbbg_core::Element, field_name: &str) {
-        if let Some(field_elem) = element.get_by_str(field_name) {
-            if let Some(value) = field_elem.get_value(0) {
-                self.columns.append(field_name, value);
+    fn finish_batch(&mut self) -> Result<RecordBatch, BlpError> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("ticker", DataType::Utf8, true),
+            Field::new(
+                "time",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("open", DataType::Float64, true),
+            Field::new("high", DataType::Float64, true),
+            Field::new("low", DataType::Float64, true),
+            Field::new("close", DataType::Float64, true),
+            Field::new("volume", DataType::Float64, true),
+            Field::new("numEvents", DataType::Int32, true),
+            Field::new("value", DataType::Float64, true),
+        ]));
+        RecordBatch::try_new(schema, self.builders.finish()).map_err(|e| BlpError::Internal {
+            detail: format!("build IntradayBar RecordBatch: {e}"),
+        })
+    }
+
+    fn append_time_field(
+        element: &Element<'_>,
+        field_name: &Name,
+        builder: &mut TimestampMicrosecondBuilder,
+    ) {
+        if let Some(field_elem) = element.get(field_name) {
+            if let Some(value) = field_elem.get_timestamp_us(0) {
+                builder.append_value(value);
             } else {
-                self.columns.append_null(field_name);
+                builder.append_null();
             }
         } else {
-            self.columns.append_null(field_name);
+            builder.append_null();
+        }
+    }
+
+    fn append_f64_field(element: &Element<'_>, field_name: &Name, builder: &mut Float64Builder) {
+        if let Some(field_elem) = element.get(field_name) {
+            if let Some(value) = field_elem.get_value(0).and_then(|value| value.as_f64()) {
+                builder.append_value(value);
+            } else {
+                builder.append_null();
+            }
+        } else {
+            builder.append_null();
+        }
+    }
+
+    fn append_i32_field(element: &Element<'_>, field_name: &Name, builder: &mut Int32Builder) {
+        if let Some(field_elem) = element.get(field_name) {
+            match field_elem.get_value(0) {
+                Some(Value::Int32(value)) => builder.append_value(value),
+                Some(Value::Int64(value)) => builder.append_value(value as i32),
+                Some(Value::Byte(value)) => builder.append_value(value as i32),
+                Some(Value::Bool(value)) => builder.append_value(if value { 1 } else { 0 }),
+                Some(Value::Float64(value))
+                    if value.is_finite()
+                        && value.fract() == 0.0
+                        && value >= i32::MIN as f64
+                        && value <= i32::MAX as f64 =>
+                {
+                    builder.append_value(value as i32);
+                }
+                _ => builder.append_null(),
+            }
+        } else {
+            builder.append_null();
         }
     }
 }

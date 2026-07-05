@@ -43,7 +43,8 @@ env = { ARCHFLAGS = "-arch arm64" }
 
 [tasks]
 install = { cmd = "pip install --no-deps -e .", env = { RUSTFLAGS = "-C target-cpu=native" }, description = "Editable install (compiles Rust extension, native CPU)" }
-build = { cmd = "python -m build", description = "Build sdist + wheel" }
+build = { cmd = "python -m build", description = "Build sdist + wheel (portable release; generic CPU)" }
+build-native = { cmd = "python -m build", env = { RUSTFLAGS = "-C target-cpu=native" }, description = "Build sdist + wheel tuned for this host CPU (internal deployments/benchmarks; not portable)" }
 test = "pytest py-xbbg/tests/ -ra -v"
 test-cov = "pytest py-xbbg/tests/ --cov=py-xbbg/src/xbbg --cov-report=xml -ra -v"
 lint-py = "ruff check py-xbbg/src py-xbbg/tests"

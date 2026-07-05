@@ -446,10 +446,14 @@ fn unsupported_array_reason(array: &dyn Array) -> Option<String> {
 /// resulting `Buffer` as read-only. Mutating it would corrupt the shared Arrow
 /// data (and violate Arrow's immutability invariants for any other holder of
 /// the same `RecordBatch`).
-fn external_buffer(env: &Env, batch: Arc<RecordBatch>, buffer: ArrowBuffer) -> Result<Buffer> {
+fn external_buffer(
+    env: &Env,
+    batch: Arc<RecordBatch>,
+    buffer: ArrowBuffer,
+) -> Result<Option<Buffer>> {
     let len = buffer.len();
     if len == 0 {
-        return Ok(Buffer::from(Vec::<u8>::new()));
+        return Ok(None);
     }
 
     // `from_external` takes `*mut u8`, so the `*const` from `as_ptr()` must be
@@ -470,7 +474,7 @@ fn external_buffer(env: &Env, batch: Arc<RecordBatch>, buffer: ArrowBuffer) -> R
             // Dropping the owner releases the Arrow buffer/RecordBatch once V8 is done.
         })?
     };
-    slice.into_buffer(env)
+    slice.into_buffer(env).map(Some)
 }
 
 impl ToNapiValue for NativeArrowBatch {
@@ -511,37 +515,34 @@ impl ToNapiValue for NativeArrowColumn {
             obj.set_named_property("timezone", timezone)?;
         }
         if let Some(buffer) = value.data {
-            obj.set_named_property(
-                "data",
-                external_buffer(&env, value.batch.clone(), buffer).map_err(|e| {
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("failed to expose Arrow data buffer: {e}"),
-                    )
-                })?,
-            )?;
+            if let Some(buffer) = external_buffer(&env, value.batch.clone(), buffer).map_err(|e| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("failed to expose Arrow data buffer: {e}"),
+                )
+            })? {
+                obj.set_named_property("data", buffer)?;
+            }
         }
         if let Some(buffer) = value.offsets {
-            obj.set_named_property(
-                "offsets",
-                external_buffer(&env, value.batch.clone(), buffer).map_err(|e| {
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("failed to expose Arrow offsets buffer: {e}"),
-                    )
-                })?,
-            )?;
+            if let Some(buffer) = external_buffer(&env, value.batch.clone(), buffer).map_err(|e| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("failed to expose Arrow offsets buffer: {e}"),
+                )
+            })? {
+                obj.set_named_property("offsets", buffer)?;
+            }
         }
         if let Some(buffer) = value.null_bitmap {
-            obj.set_named_property(
-                "nullBitmap",
-                external_buffer(&env, value.batch, buffer).map_err(|e| {
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("failed to expose Arrow null bitmap: {e}"),
-                    )
-                })?,
-            )?;
+            if let Some(buffer) = external_buffer(&env, value.batch, buffer).map_err(|e| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("failed to expose Arrow null bitmap: {e}"),
+                )
+            })? {
+                obj.set_named_property("nullBitmap", buffer)?;
+            }
         }
         Ok(obj.raw())
     }

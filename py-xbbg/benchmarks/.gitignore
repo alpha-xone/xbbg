@@ -14,6 +14,7 @@ __pycache__/
 # Temporary/latest files (ignore)
 results/latest.json
 results/latest.md
+results/handoff_offline_latest.json
 
 # Other formats (ignore)
 results/*.csv

@@ -1,5 +1,8 @@
 use std::sync::Arc;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
+use smallvec::SmallVec;
 use xbbg_core::{DataType as BlpDataType, Value};
 
 pub type FieldIndex = u16;
@@ -37,7 +40,7 @@ pub struct SubscriptionUpdate {
     pub topic_id: TopicId,
     pub topic: Arc<str>,
     pub layout: Arc<FieldLayout>,
-    pub values: Box<[UpdateField]>,
+    pub values: SmallVec<[UpdateField; 8]>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +61,8 @@ pub enum UpdateValue {
     Time64Micros(i64),
     TimestampMicros(i64),
 }
+pub type StringValueCache = Option<(u64, Arc<str>)>;
+
 
 impl FieldLayout {
     pub fn new(version: u32, fields: Vec<FieldMeta>) -> Self {
@@ -124,19 +129,45 @@ impl FieldKind {
 
 impl UpdateValue {
     pub fn from_blp(value: Option<Value<'_>>) -> Self {
+        Self::from_blp_with_str_cache(value, None)
+    }
+
+    pub fn from_blp_with_str_cache(
+        value: Option<Value<'_>>,
+        str_cache: Option<&mut StringValueCache>,
+    ) -> Self {
         match value {
             None | Some(Value::Null) => Self::Null,
             Some(Value::Bool(v)) => Self::Bool(v),
             Some(Value::Int32(v)) => Self::I32(v),
             Some(Value::Int64(v)) => Self::I64(v),
             Some(Value::Float64(v)) => Self::F64(v),
-            Some(Value::String(v)) | Some(Value::Enum(v)) => Self::Str(Arc::from(v)),
+            Some(Value::String(v)) | Some(Value::Enum(v)) => {
+                Self::Str(Self::cached_str(v, str_cache))
+            }
             Some(Value::Date32(v)) => Self::Date32(v),
             Some(Value::TimestampMicros(v)) => Self::TimestampMicros(v),
             Some(Value::Datetime(v)) => Self::TimestampMicros(v.to_micros()),
             Some(Value::Time64Micros(v)) => Self::Time64Micros(v),
             Some(Value::Byte(v)) => Self::I32(v as i32),
         }
+    }
+
+    fn cached_str(value: &str, str_cache: Option<&mut StringValueCache>) -> Arc<str> {
+        let Some(str_cache) = str_cache else {
+            return Arc::from(value);
+        };
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        let hash = hasher.finish();
+        if let Some((cached_hash, cached)) = str_cache.as_ref() {
+            if *cached_hash == hash && cached.as_ref() == value {
+                return Arc::clone(cached);
+            }
+        }
+        let interned = Arc::<str>::from(value);
+        *str_cache = Some((hash, Arc::clone(&interned)));
+        interned
     }
 
     pub fn as_string_lossy(&self) -> Option<String> {

@@ -8,11 +8,13 @@
 //! command queue and no poll loop: request dispatch latency is bounded by
 //! the SDK, not by a poll quantum, and an idle worker costs zero wakeups.
 //!
-//! Request state lives in a slab shared between submitters and the
+//! Request metadata lives in a slab shared between submitters and the
 //! dispatcher callback. Slots are generation-tagged (see
-//! [`super::dispatch::DispatchKey`]); state is registered **before**
-//! `sendRequest` because in async mode the response can reach the handler
-//! before the submitting call returns (blpapi_session.h:490-495).
+//! [`super::dispatch::DispatchKey`]); mutable decoder state lives behind a
+//! per-request mutex so expensive partial/final decoding never holds the slab
+//! mutex. State is registered **before** `sendRequest` because in async mode
+//! the response can reach the handler before the submitting call returns
+//! (blpapi_session.h:490-495).
 //!
 //! Handled request/response patterns:
 //! - Reference data (bdp)
@@ -238,15 +240,106 @@ pub(crate) struct RequestTicket {
     pub(crate) generation: u32,
 }
 
-/// One in-flight request slot.
-struct RequestSlot {
+/// Mutable state for one in-flight request.
+struct RequestStateCell {
     /// Generation encoded into this request's correlation ID.
     generation: u32,
+    /// Request decoder state. `None` means the request was completed, failed,
+    /// timed out, or cancelled; late partials that already cloned this cell
+    /// become no-ops.
+    state: Mutex<Option<UnifiedRequestState>>,
+    /// Partials that passed the slab generation check but have not completed
+    /// their per-request decode yet. Final/error consumers wait for this to
+    /// reach zero so they consume state after already-dispatched partials.
+    active_partials: Mutex<usize>,
+    active_partials_cv: Condvar,
+}
+
+impl RequestStateCell {
+    fn new(generation: u32, state: UnifiedRequestState) -> Self {
+        Self {
+            generation,
+            state: Mutex::new(Some(state)),
+            active_partials: Mutex::new(0),
+            active_partials_cv: Condvar::new(),
+        }
+    }
+
+    fn begin_partial(self: &Arc<Self>) -> RequestPartialGuard {
+        *self.active_partials.lock() += 1;
+        RequestPartialGuard {
+            cell: Arc::clone(self),
+        }
+    }
+
+    fn wait_for_partials(&self) {
+        let mut active = self.active_partials.lock();
+        while *active != 0 {
+            self.active_partials_cv.wait(&mut active);
+        }
+    }
+
+    fn on_partial(&self, msg: &xbbg_core::Message<'_>) -> bool {
+        let mut state = self.state.lock();
+        let Some(state) = state.as_mut() else {
+            return false;
+        };
+        state.on_partial(msg);
+        true
+    }
+
+    fn finish_and_reply(&self, msg: &xbbg_core::Message<'_>) -> bool {
+        self.wait_for_partials();
+        let Some(state) = self.state.lock().take() else {
+            return false;
+        };
+        state.finish_and_reply(msg);
+        true
+    }
+
+    fn fail(&self, error: BlpError) -> bool {
+        self.wait_for_partials();
+        let Some(state) = self.state.lock().take() else {
+            return false;
+        };
+        state.fail(error);
+        true
+    }
+
+    fn discard(&self) -> bool {
+        self.wait_for_partials();
+        self.state.lock().take().is_some()
+    }
+}
+
+struct RequestPartialGuard {
+    cell: Arc<RequestStateCell>,
+}
+
+impl RequestPartialGuard {
+    fn on_partial(&self, msg: &xbbg_core::Message<'_>) -> bool {
+        self.cell.on_partial(msg)
+    }
+}
+
+impl Drop for RequestPartialGuard {
+    fn drop(&mut self) {
+        let mut active = self.cell.active_partials.lock();
+        debug_assert!(*active > 0);
+        *active = active.saturating_sub(1);
+        if *active == 0 {
+            self.cell.active_partials_cv.notify_all();
+        }
+    }
+}
+
+/// One in-flight request slot.
+struct RequestSlot {
     /// When the request was registered (just before `sendRequest`).
     sent_at: Instant,
     /// Whether the slow-request warning has fired for this slot.
     warned: bool,
-    state: UnifiedRequestState,
+    cell: Arc<RequestStateCell>,
 }
 
 /// A pending async `open_service` call plus everyone awaiting its outcome.
@@ -350,10 +443,9 @@ impl WorkerShared {
 
     fn insert_slot(&self, generation: u32, state: UnifiedRequestState) -> SlabKey {
         self.requests.lock().insert(RequestSlot {
-            generation,
             sent_at: Instant::now(),
             warned: false,
-            state,
+            cell: Arc::new(RequestStateCell::new(generation, state)),
         })
     }
 
@@ -363,7 +455,7 @@ impl WorkerShared {
         let key = dispatch_key.to_slab_key();
         let mut requests = self.requests.lock();
         match requests.get(key) {
-            Some(slot) if slot.generation == dispatch_key.generation() => {
+            Some(slot) if slot.cell.generation == dispatch_key.generation() => {
                 Some(requests.remove(key))
             }
             Some(_) => {
@@ -419,7 +511,7 @@ impl WorkerShared {
                 if elapsed >= hard {
                     expired.push(RequestTicket {
                         key,
-                        generation: slot.generation,
+                        generation: slot.cell.generation,
                     });
                 }
             }
@@ -437,7 +529,7 @@ impl WorkerShared {
         }
         let count = drained.len();
         for slot in drained {
-            slot.state.fail(BlpError::Internal {
+            slot.cell.fail(BlpError::Internal {
                 detail: format!("{} (worker={})", reason, self.id),
             });
         }
@@ -530,18 +622,16 @@ impl WorkerShared {
     /// TOKEN_STATUS handler for the classic authorization flow's
     /// `generateToken` call ([`IDENTITY_TOKEN_CID`]).
     fn handle_token_status(&self, msg: &xbbg_core::Message<'_>) {
-        let n = msg.num_correlation_ids();
-        let ours = (0..n).any(|i| {
+        let ours = msg.correlation_ids().any(|cid| {
             matches!(
-                msg.correlation_id(i),
-                Some(CorrelationId::Int(value)) if value == IDENTITY_TOKEN_CID
+                cid,
+                CorrelationId::Int(value) if value == IDENTITY_TOKEN_CID
             )
         });
         if !ours {
             return;
         }
-        let msg_type_name = msg.message_type();
-        match msg_type_name.as_str() {
+        match msg.type_str() {
             "TokenGenerationSuccess" => {
                 let token = msg
                     .elements()
@@ -585,8 +675,7 @@ impl WorkerShared {
     /// `setSessionIdentityOptions` arrive as SESSION_STATUS and are handled
     /// in `handle_session_status`.
     fn handle_identity_authorization_message(&self, msg: &xbbg_core::Message<'_>) {
-        let msg_type_name = msg.message_type();
-        match msg_type_name.as_str() {
+        match msg.type_str() {
             "AuthorizationSuccess" => {
                 xbbg_log::info!(worker_id = self.id, "identity authorized");
                 self.resolve_identity_outcome(Ok(()));
@@ -631,11 +720,10 @@ impl WorkerShared {
 
     /// True when `msg` is tagged with the identity authorization CID.
     fn is_identity_auth_message(msg: &xbbg_core::Message<'_>) -> bool {
-        let n = msg.num_correlation_ids();
-        (0..n).any(|i| {
+        msg.correlation_ids().any(|cid| {
             matches!(
-                msg.correlation_id(i),
-                Some(CorrelationId::Int(value)) if value == IDENTITY_CID
+                cid,
+                CorrelationId::Int(value) if value == IDENTITY_CID
             )
         })
     }
@@ -688,28 +776,31 @@ impl WorkerShared {
             self.handle_identity_authorization_message(msg);
             return;
         }
-        let n = msg.num_correlation_ids();
-        for i in 0..n {
-            if let Some(correlation_id) = msg.correlation_id(i) {
-                let Some(dispatch_key) = DispatchKey::from_correlation_id(&correlation_id) else {
-                    continue;
-                };
-                let key = dispatch_key.to_slab_key();
-                // Hold the slab lock while appending: partials mutate state
-                // in place. Submitter inserts briefly contend; the state
-                // machines take no other locks, so no deadlock is possible.
-                let mut requests = self.requests.lock();
-                if let Some(slot) = requests.get_mut(key) {
-                    if slot.generation == dispatch_key.generation() {
-                        slot.state.on_partial(msg);
-                        xbbg_log::trace!(worker_id = self.id, key = key, "partial response");
-                    } else {
+        for correlation_id in msg.correlation_ids() {
+            let Some(dispatch_key) = DispatchKey::from_correlation_id(&correlation_id) else {
+                continue;
+            };
+            let key = dispatch_key.to_slab_key();
+            let partial = {
+                let requests = self.requests.lock();
+                match requests.get(key) {
+                    Some(slot) if slot.cell.generation == dispatch_key.generation() => {
+                        Some(slot.cell.begin_partial())
+                    }
+                    Some(_) => {
                         xbbg_log::debug!(
                             worker_id = self.id,
                             key = key,
                             "stale partial response for recycled slot; dropped"
                         );
+                        None
                     }
+                    None => None,
+                }
+            };
+            if let Some(partial) = partial {
+                if partial.on_partial(msg) {
+                    xbbg_log::trace!(worker_id = self.id, key = key, "partial response");
                 }
             }
         }
@@ -720,23 +811,21 @@ impl WorkerShared {
             self.handle_identity_authorization_message(msg);
             return;
         }
-        let n = msg.num_correlation_ids();
-        for i in 0..n {
-            if let Some(correlation_id) = msg.correlation_id(i) {
-                let Some(dispatch_key) = DispatchKey::from_correlation_id(&correlation_id) else {
-                    continue;
-                };
-                if let Some(slot) = self.take_slot(dispatch_key) {
-                    let key = dispatch_key.to_slab_key();
-                    let rtt_ms = slot.sent_at.elapsed().as_micros() as f64 / 1000.0;
-                    xbbg_log::debug!(
-                        worker_id = self.id,
-                        rtt_ms = rtt_ms,
-                        key = key,
-                        "bloomberg_roundtrip"
-                    );
-                    // Build the final batch outside the slab lock.
-                    slot.state.finish_and_reply(msg);
+        for correlation_id in msg.correlation_ids() {
+            let Some(dispatch_key) = DispatchKey::from_correlation_id(&correlation_id) else {
+                continue;
+            };
+            if let Some(slot) = self.take_slot(dispatch_key) {
+                let key = dispatch_key.to_slab_key();
+                let rtt_ms = slot.sent_at.elapsed().as_micros() as f64 / 1000.0;
+                xbbg_log::debug!(
+                    worker_id = self.id,
+                    rtt_ms = rtt_ms,
+                    key = key,
+                    "bloomberg_roundtrip"
+                );
+                // Build the final batch outside the slab lock.
+                if slot.cell.finish_and_reply(msg) {
                     xbbg_log::debug!(worker_id = self.id, key = key, "response completed");
                 }
             }
@@ -744,8 +833,7 @@ impl WorkerShared {
     }
 
     fn handle_request_status(&self, msg: &xbbg_core::Message<'_>) {
-        let msg_type_name = msg.message_type();
-        let msg_type = msg_type_name.as_str();
+        let msg_type = msg.type_str();
         if msg_type != "RequestFailure" {
             return;
         }
@@ -758,32 +846,27 @@ impl WorkerShared {
             }));
             return;
         }
-        let n = msg.num_correlation_ids();
-
-        for i in 0..n {
-            if let Some(correlation_id) = msg.correlation_id(i) {
-                let Some(dispatch_key) = DispatchKey::from_correlation_id(&correlation_id) else {
-                    continue;
-                };
-                let reason = extract_reason_description(msg);
-                xbbg_log::error!(
-                    worker_id = self.id,
-                    key = dispatch_key.to_slab_key(),
-                    reason = %reason.as_deref().unwrap_or(""),
-                    "request failed"
-                );
-                if let Some(slot) = self.take_slot(dispatch_key) {
-                    slot.state.fail(BlpError::Internal {
-                        detail: reason.unwrap_or_else(|| "RequestFailure".to_string()),
-                    });
-                }
+        for correlation_id in msg.correlation_ids() {
+            let Some(dispatch_key) = DispatchKey::from_correlation_id(&correlation_id) else {
+                continue;
+            };
+            let reason = extract_reason_description(msg);
+            xbbg_log::error!(
+                worker_id = self.id,
+                key = dispatch_key.to_slab_key(),
+                reason = %reason.as_deref().unwrap_or(""),
+                "request failed"
+            );
+            if let Some(slot) = self.take_slot(dispatch_key) {
+                slot.cell.fail(BlpError::Internal {
+                    detail: reason.unwrap_or_else(|| "RequestFailure".to_string()),
+                });
             }
         }
     }
 
     fn handle_session_status(&self, msg: &xbbg_core::Message<'_>) {
-        let msg_type_name = msg.message_type();
-        let msg_type = msg_type_name.as_str();
+        let msg_type = msg.type_str();
         match msg_type {
             "SessionStarted" => {
                 self.health.store(0, Ordering::Release);
@@ -902,8 +985,7 @@ impl WorkerShared {
     }
 
     fn handle_service_status(&self, msg: &xbbg_core::Message<'_>) {
-        let msg_type_name = msg.message_type();
-        let msg_type = msg_type_name.as_str();
+        let msg_type = msg.type_str();
 
         // If this ServiceOpened/ServiceOpenFailure is a reply to one of our
         // async `open_service_async` calls, resolve the matching pending open
@@ -1459,7 +1541,7 @@ impl AsyncRequestWorker {
             Ok(()) => Some(RequestTicket { key, generation }),
             Err(err) => {
                 if let Some(slot) = self.shared.take_slot(dispatch_key) {
-                    slot.state.fail(err);
+                    slot.cell.fail(err);
                 }
                 None
             }
@@ -1483,7 +1565,7 @@ impl AsyncRequestWorker {
                 error = %error,
                 "failed to cancel Bloomberg request"
             );
-            drop(slot);
+            slot.cell.discard();
             self.shared.health.store(2, Ordering::Release);
             self.shared
                 .drain_in_flight("Bloomberg request cancellation failed");
@@ -1491,7 +1573,7 @@ impl AsyncRequestWorker {
         }
 
         // Caller cancelled: drop the state without replying.
-        drop(slot);
+        slot.cell.discard();
         xbbg_log::info!(
             worker_id = self.id,
             key = ticket.key,
@@ -1516,7 +1598,7 @@ impl AsyncRequestWorker {
                 "timeout_request: Bloomberg cancel failed"
             );
         }
-        slot.state.fail(BlpError::Timeout);
+        slot.cell.fail(BlpError::Timeout);
         xbbg_log::warn!(
             worker_id = self.id,
             key = ticket.key,

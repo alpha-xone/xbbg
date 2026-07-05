@@ -120,8 +120,8 @@ impl SchemaCache {
     /// Publish a new snapshot with `service` mapped to `schema`.
     ///
     /// Uses RCU: clones the current map, inserts, atomically swaps the pointer.
-    /// Readers in flight keep their old snapshot alive via Arc refcount and see
-    /// either the old or new map — never a torn state.
+    /// Schema maps stay tiny (normally a handful of services), so this avoids a
+    /// write-side mutex while keeping readers lock-free and predictable.
     fn upsert(&self, service: &str, schema: Arc<ServiceSchema>) {
         self.cache.rcu(|current| {
             let mut next = current.as_ref().clone();

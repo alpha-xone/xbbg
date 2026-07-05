@@ -154,3 +154,60 @@ def test_ext_exports_new_workflows():
     ):
         assert hasattr(ext, name)
         assert name in ext.__all__
+
+
+def test_pivot_bdp_to_wide_uses_native_pyo3_pivot_for_xbbg_narwhals(monkeypatch):
+    import narwhals.stable.v1 as nw
+    import xbbg._core as core_module
+    from xbbg._core import ArrowTable
+    from xbbg.ext._utils import _pivot_bdp_to_wide
+
+    long_table = ArrowTable.from_pylist(
+        [
+            {"ticker": "IBM US Equity", "field": "PX_LAST", "value": 123.45},
+            {"ticker": "IBM US Equity", "field": "VOLUME", "value": 1000.0},
+        ]
+    )
+    wide_batch = ArrowTable.from_pylist(
+        [{"ticker": "IBM US Equity", "PX_LAST": 123.45, "VOLUME": 1000.0}]
+    ).to_batches()[0]
+    calls = []
+
+    def fake_ext_pivot_to_wide(batch):
+        calls.append(batch.to_pylist())
+        return wide_batch
+
+    monkeypatch.setattr(core_module, "ext_pivot_to_wide", fake_ext_pivot_to_wide)
+
+    result = _pivot_bdp_to_wide(nw.from_native(long_table))
+
+    assert calls == [long_table.to_pylist()]
+    native = result.to_native()
+    assert native.column_names == ["ticker", "PX_LAST", "VOLUME"]
+    assert native.to_pylist() == [{"ticker": "IBM US Equity", "PX_LAST": 123.45, "VOLUME": 1000.0}]
+
+
+def test_pivot_bdp_to_wide_keeps_foreign_frames_on_pure_narwhals_path(monkeypatch):
+    import narwhals.stable.v1 as nw
+    import xbbg._core as core_module
+    from xbbg.ext._utils import _pivot_bdp_to_wide
+
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame(
+        [
+            {"ticker": "IBM US Equity", "field": "PX_LAST", "value": 123.45},
+            {"ticker": "IBM US Equity", "field": "VOLUME", "value": 1000.0},
+        ]
+    )
+
+    def fail_native_pivot(_batch):
+        raise AssertionError("foreign Narwhals frames must not call the native xbbg pivot")
+
+    monkeypatch.setattr(core_module, "ext_pivot_to_wide", fail_native_pivot)
+
+    result = _pivot_bdp_to_wide(nw.from_native(frame)).to_native()
+
+    assert set(result.columns) == {"ticker", "PX_LAST", "VOLUME"}
+    row = result.set_index("ticker").loc["IBM US Equity"]
+    assert row["PX_LAST"] == 123.45
+    assert row["VOLUME"] == 1000.0

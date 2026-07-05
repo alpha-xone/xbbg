@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -142,39 +142,47 @@ fn py_value_to_cell(value: &Bound<'_, PyAny>) -> PyResult<CellValue> {
 
 fn rows_to_batch(rows: &Bound<'_, PyAny>) -> PyResult<RecordBatch> {
     let iterator = PyIterator::from_object(rows)?;
-    let mut column_names: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut raw_rows: Vec<HashMap<String, CellValue>> = Vec::new();
+    let mut columns: Vec<(String, Vec<CellValue>)> = Vec::new();
+    let mut column_indices: HashMap<String, usize> = HashMap::new();
+    let mut row_count = 0usize;
 
     for item in iterator {
         let item = item?;
         let dict = item.cast::<PyDict>().map_err(|_| {
             PyTypeError::new_err("ArrowTable.from_pylist expects an iterable of dict rows")
         })?;
-        let mut row = HashMap::new();
+        let row_idx = row_count;
+
         for (key, value) in dict.iter() {
             let name = key.extract::<String>()?;
-            if seen.insert(name.clone()) {
-                column_names.push(name.clone());
-            }
-            row.insert(name, py_value_to_cell(&value)?);
+            let column_idx = if let Some(&idx) = column_indices.get(&name) {
+                idx
+            } else {
+                let idx = columns.len();
+                column_indices.insert(name.clone(), idx);
+                columns.push((name, vec![CellValue::Null; row_idx]));
+                idx
+            };
+            columns[column_idx].1.push(py_value_to_cell(&value)?);
         }
-        raw_rows.push(row);
+
+        for (_, cells) in &mut columns {
+            if cells.len() == row_idx {
+                cells.push(CellValue::Null);
+            }
+        }
+        row_count += 1;
     }
 
-    if raw_rows.is_empty() {
+    if row_count == 0 {
         return RecordBatch::try_new(Arc::new(Schema::empty()), vec![])
             .map_err(|e| PyValueError::new_err(e.to_string()));
     }
 
-    let mut fields = Vec::with_capacity(column_names.len());
-    let mut arrays = Vec::with_capacity(column_names.len());
-    for name in &column_names {
-        let cells = raw_rows
-            .iter()
-            .map(|row| row.get(name).cloned().unwrap_or(CellValue::Null))
-            .collect::<Vec<_>>();
-        let (field, array) = build_array(name, &cells);
+    let mut fields = Vec::with_capacity(columns.len());
+    let mut arrays = Vec::with_capacity(columns.len());
+    for (name, cells) in columns {
+        let (field, array) = build_array(&name, &cells);
         fields.push(field);
         arrays.push(array);
     }
@@ -1004,6 +1012,10 @@ impl ArrowTable {
             .collect()
     }
 
+    fn to_record_batch(&self) -> PyResult<ArrowRecordBatch> {
+        map_core(self.data.combined_batch()).map(ArrowRecordBatch::new)
+    }
+
     fn to_pylist(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         table_to_pylist(py, &self.data)
     }
@@ -1021,15 +1033,20 @@ impl ArrowTable {
     fn to_pandas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ensure_optional_module(
             py,
+            "pyarrow",
+            "pip install xbbg[pyarrow]",
+            "ArrowTable.to_pandas()",
+        )?;
+        ensure_optional_module(
+            py,
             "pandas",
             "pip install xbbg[pandas]",
             "ArrowTable.to_pandas()",
         )?;
-        let pd = py.import("pandas")?;
-        let dataframe = pd.getattr("DataFrame")?;
+        let table = self.to_pyarrow(py)?;
         let kwargs = PyDict::new(py);
-        kwargs.set_item("columns", self.column_names())?;
-        dataframe.call_method("from_records", (self.to_pylist(py)?,), Some(&kwargs))
+        kwargs.set_item("split_blocks", true)?;
+        table.call_method("to_pandas", (), Some(&kwargs))
     }
 
     fn to_polars<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {

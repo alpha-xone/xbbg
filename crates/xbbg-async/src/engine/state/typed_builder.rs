@@ -526,7 +526,7 @@ impl ColumnSet {
                 .type_hints
                 .get(name)
                 .copied()
-                .unwrap_or(ArrowType::String);
+                .unwrap_or_else(|| Self::default_order_type(name));
             let mut builder = TypedBuilder::new(arrow_type);
             for _ in 0..=self.row_count {
                 builder.append_null();

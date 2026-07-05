@@ -7,7 +7,7 @@
 //! 4. Defaults (bdp=String, bdh=Float64)
 //!
 //! In-memory storage uses `ArcSwap` — lock-free reads via atomic pointer load.
-//! Writers publish a new snapshot via RCU so readers never block.
+//! Writers mutate a mutex-protected source-of-truth map and publish snapshots.
 
 use std::collections::HashMap;
 use std::fs;
@@ -18,6 +18,7 @@ use std::sync::{Arc, OnceLock};
 use arc_swap::ArcSwap;
 use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_schema::DataType;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use xbbg_log::{debug, info, warn};
 
@@ -107,32 +108,52 @@ pub struct FieldInfo {
     pub category: String,
 }
 
+const DEFAULT_MAX_FIELD_CACHE_ENTRIES: usize = 65_536;
+
+#[derive(Clone, Debug)]
+struct FieldCacheEntry {
+    info: FieldInfo,
+    inserted_at: u64,
+}
+
+#[derive(Debug, Default)]
+struct FieldCacheState {
+    entries: HashMap<String, FieldCacheEntry>,
+    next_insert_epoch: u64,
+}
+
 /// Field type resolver with caching.
 pub struct FieldTypeResolver {
     /// In-memory cache (uppercased field_id -> FieldInfo). Lock-free reads via ArcSwap.
     cache: ArcSwap<HashMap<String, FieldInfo>>,
+    /// Write-side source of truth. Writers hold this briefly, then publish one snapshot.
+    write_cache: Mutex<FieldCacheState>,
     /// Path to cache file
     cache_path: PathBuf,
     /// Disk load happens at most once (lazy).
     loaded: OnceLock<()>,
+    max_entries: usize,
 }
 
 impl FieldTypeResolver {
     /// Create a new resolver with default cache path (~/.xbbg/field_cache.json).
     pub fn new() -> Self {
-        Self {
-            cache: ArcSwap::from_pointee(HashMap::new()),
-            cache_path: Self::default_cache_path(),
-            loaded: OnceLock::new(),
-        }
+        Self::with_cache_path(Self::default_cache_path())
     }
 
     /// Create a resolver with a custom cache path.
     pub fn with_cache_path(path: PathBuf) -> Self {
+        Self::with_cache_path_and_max_entries(path, DEFAULT_MAX_FIELD_CACHE_ENTRIES)
+    }
+
+    /// Create a resolver with a custom cache path and entry bound.
+    pub fn with_cache_path_and_max_entries(path: PathBuf, max_entries: usize) -> Self {
         Self {
             cache: ArcSwap::from_pointee(HashMap::new()),
+            write_cache: Mutex::new(FieldCacheState::default()),
             cache_path: path,
             loaded: OnceLock::new(),
+            max_entries,
         }
     }
 
@@ -159,6 +180,63 @@ impl FieldTypeResolver {
     /// Ensure cache is loaded from disk (lazy, runs at most once).
     fn ensure_loaded(&self) {
         self.loaded.get_or_init(|| self.load_from_disk());
+    }
+
+    fn publish_snapshot(&self, state: &FieldCacheState) {
+        let snapshot = state
+            .entries
+            .iter()
+            .map(|(key, entry)| (key.clone(), entry.info.clone()))
+            .collect();
+        self.cache.store(Arc::new(snapshot));
+    }
+
+    fn insert_keyed_entries<I>(&self, entries: I)
+    where
+        I: IntoIterator<Item = (String, FieldInfo)>,
+    {
+        let mut state = self.write_cache.lock();
+        let mut changed = false;
+
+        for (key, info) in entries {
+            let key = key.to_uppercase();
+            if key.is_empty() {
+                continue;
+            }
+
+            let inserted_at = match state.entries.get(&key) {
+                Some(existing) => existing.inserted_at,
+                None => {
+                    let epoch = state.next_insert_epoch;
+                    state.next_insert_epoch = state.next_insert_epoch.saturating_add(1);
+                    epoch
+                }
+            };
+
+            state
+                .entries
+                .insert(key, FieldCacheEntry { info, inserted_at });
+            changed = true;
+        }
+
+        if changed {
+            Self::evict_oldest(&mut state, self.max_entries);
+            self.publish_snapshot(&state);
+        }
+    }
+
+    fn evict_oldest(state: &mut FieldCacheState, max_entries: usize) {
+        while state.entries.len() > max_entries {
+            let Some(key) = state
+                .entries
+                .iter()
+                .min_by_key(|(key, entry)| (entry.inserted_at, key.as_str()))
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            state.entries.remove(&key);
+        }
     }
 
     /// Load cache from JSON file.
@@ -203,11 +281,7 @@ impl FieldTypeResolver {
             .collect();
 
         if !pairs.is_empty() {
-            self.cache.rcu(|current| {
-                let mut next = (**current).clone();
-                next.extend(pairs.iter().cloned());
-                Arc::new(next)
-            });
+            self.insert_keyed_entries(pairs);
         }
 
         info!(count = self.cache.load().len(), path = %self.cache_path.display(), "Loaded field cache");
@@ -271,30 +345,29 @@ impl FieldTypeResolver {
 
     /// Insert field info into cache.
     pub fn insert(&self, info: FieldInfo) {
-        self.ensure_loaded();
-        let key = info.field_id.to_uppercase();
-        self.cache.rcu(|current| {
-            let mut next = (**current).clone();
-            next.insert(key.clone(), info.clone());
-            Arc::new(next)
-        });
+        self.insert_many(std::iter::once(info));
     }
 
-    /// Extend the cache with multiple (uppercase_key, FieldInfo) pairs in a single RCU.
+    /// Insert multiple field infos and publish a single snapshot.
+    pub fn insert_many<I>(&self, infos: I)
+    where
+        I: IntoIterator<Item = FieldInfo>,
+    {
+        self.ensure_loaded();
+        self.insert_keyed_entries(
+            infos
+                .into_iter()
+                .map(|info| (info.field_id.to_uppercase(), info)),
+        );
+    }
+
+    /// Extend the cache with multiple (uppercase_key, FieldInfo) pairs in one snapshot.
     ///
-    /// This is the same single-swap pattern used by `insert_from_response` internally.
-    /// Exposed only for benchmarks so callers can measure the batched-RCU cost directly.
+    /// Exposed only for benchmarks so callers can measure the batched-publish cost directly.
     #[cfg(feature = "bench-internals")]
     pub fn cache_rcu_extend(&self, entries: Vec<(String, FieldInfo)>) {
         self.ensure_loaded();
-        if entries.is_empty() {
-            return;
-        }
-        self.cache.rcu(|current| {
-            let mut next = (**current).clone();
-            next.extend(entries.iter().cloned());
-            Arc::new(next)
-        });
+        self.insert_keyed_entries(entries);
     }
 
     /// Insert multiple field infos from a FieldInfoRequest response.
@@ -325,8 +398,8 @@ impl FieldTypeResolver {
             return;
         };
 
-        // Collect all entries first, then do a single RCU — avoids O(n²) clone cost.
-        let mut entries: Vec<(String, FieldInfo)> = Vec::with_capacity(batch.num_rows());
+        // Collect all entries first, then publish a single snapshot — avoids O(n²) clone cost.
+        let mut entries: Vec<FieldInfo> = Vec::with_capacity(batch.num_rows());
         for i in 0..batch.num_rows() {
             if fields.is_null(i) || types.is_null(i) {
                 continue;
@@ -343,23 +416,16 @@ impl FieldTypeResolver {
                 .to_string();
 
             debug!(field = %field_id, arrow_type = %arrow_type, "Cached field type");
-            entries.push((
-                field_id.clone(),
-                FieldInfo {
-                    field_id,
-                    arrow_type,
-                    description,
-                    category,
-                },
-            ));
+            entries.push(FieldInfo {
+                field_id,
+                arrow_type,
+                description,
+                category,
+            });
         }
 
         if !entries.is_empty() {
-            self.cache.rcu(|current| {
-                let mut next = (**current).clone();
-                next.extend(entries.iter().cloned());
-                Arc::new(next)
-            });
+            self.insert_many(entries);
         }
     }
 
@@ -445,6 +511,9 @@ impl FieldTypeResolver {
 
     /// Clear all cached field info.
     pub fn clear(&self) {
+        let mut state = self.write_cache.lock();
+        state.entries.clear();
+        state.next_insert_epoch = 0;
         self.cache.store(Arc::new(HashMap::new()));
         info!("Cleared field cache");
     }
@@ -494,6 +563,15 @@ pub fn global_resolver() -> Arc<FieldTypeResolver> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn field_info(field_id: &str, arrow_type: &str) -> FieldInfo {
+        FieldInfo {
+            field_id: field_id.to_string(),
+            arrow_type: arrow_type.to_string(),
+            description: String::new(),
+            category: String::new(),
+        }
+    }
 
     #[test]
     fn test_blp_field_type_parsing() {
@@ -553,5 +631,46 @@ mod tests {
         assert_eq!(resolved.get("PX_LAST"), Some(&"float64".to_string()));
         assert_eq!(resolved.get("VOLUME"), Some(&"int64".to_string()));
         assert!(!resolved.contains_key("NAME"));
+    }
+
+    #[test]
+    fn insert_many_publishes_one_snapshot_and_reads_reflect_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolver = FieldTypeResolver::with_cache_path(dir.path().join("field_cache.json"));
+        let before = resolver.cache.load_full();
+
+        resolver.insert_many([
+            field_info("PX_LAST", "float64"),
+            field_info("VOLUME", "int64"),
+        ]);
+
+        let after = resolver.cache.load_full();
+        assert!(!Arc::ptr_eq(&before, &after));
+        assert_eq!(after.len(), 2);
+        assert_eq!(resolver.get_arrow_type("PX_LAST").as_deref(), Some("float64"));
+        assert_eq!(resolver.get_arrow_type("VOLUME").as_deref(), Some("int64"));
+
+        let after_reads = resolver.cache.load_full();
+        let _ = resolver.get("PX_LAST");
+        let _ = resolver.get("VOLUME");
+        assert!(Arc::ptr_eq(&after_reads, &resolver.cache.load_full()));
+    }
+
+    #[test]
+    fn evicts_oldest_inserted_field_when_bound_is_exceeded() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolver =
+            FieldTypeResolver::with_cache_path_and_max_entries(dir.path().join("field_cache.json"), 2);
+
+        resolver.insert_many([
+            field_info("FIRST", "float64"),
+            field_info("SECOND", "int64"),
+            field_info("THIRD", "string"),
+        ]);
+
+        assert!(resolver.get("FIRST").is_none());
+        assert_eq!(resolver.get_arrow_type("SECOND").as_deref(), Some("int64"));
+        assert_eq!(resolver.get_arrow_type("THIRD").as_deref(), Some("string"));
+        assert_eq!(resolver.cache.load().len(), 2);
     }
 }

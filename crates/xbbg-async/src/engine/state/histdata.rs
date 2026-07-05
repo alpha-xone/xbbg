@@ -13,7 +13,8 @@ use super::refdata::{LongMode, OutputFormat};
 use super::typed_builder::{ArrowType, ColumnSet};
 use super::value_utils::{
     append_long_value_row, common_value_type, get_value_cached_datatype, top_level_response_error,
-    FieldExceptionMeta, LongStringColumns, ResponseMetadata, SecurityErrorMeta, WideColumns,
+    FieldExceptionMeta, LongStringColumns, ResponseMetadata, SecurityErrorMeta, TypedLongColumns,
+    WideColumns,
 };
 use xbbg_core::{BlpError, DataType as BlpDataType, Message, Name, Value};
 
@@ -75,6 +76,8 @@ pub struct HistDataState {
     columns: ColumnSet,
     /// Fixed long-format builders for the common string-value output path
     long_columns: Option<LongStringColumns>,
+    /// Fixed typed-long builders for direct multi-value output
+    typed_long_columns: Option<TypedLongColumns>,
     /// Fixed wide-format builders for requested field columns
     wide_columns: Option<WideColumns>,
     /// Security identifiers that returned securityError.
@@ -127,14 +130,14 @@ impl HistDataState {
             .collect();
         let field_value_datatypes = vec![None; field_lookup_names.len()];
 
-        // Fixed long-string output bypasses ColumnSet entirely; keep ColumnSet hints only
-        // for wide/metadata/typed paths that actually append through ColumnSet.
+        // Fixed long output modes bypass ColumnSet entirely; keep ColumnSet hints only
+        // for dynamic wide/metadata paths that actually append through ColumnSet.
         let long_value_type = (format == OutputFormat::Long && long_mode == LongMode::String)
             .then(|| common_value_type(&fields, &arrow_types));
         let wide_columns =
             (format == OutputFormat::Wide).then(|| WideColumns::histdata(&fields, &arrow_types));
         let mut columns = ColumnSet::new();
-        if long_value_type.is_none() && wide_columns.is_none() {
+        if long_value_type.is_none() && wide_columns.is_none() && long_mode != LongMode::Typed {
             for (name, arrow_type) in &arrow_types {
                 columns.set_type_hint(name, *arrow_type);
             }
@@ -151,6 +154,8 @@ impl HistDataState {
             long_mode,
             columns,
             long_columns: long_value_type.map(LongStringColumns::histdata),
+            typed_long_columns: (format == OutputFormat::Long && long_mode == LongMode::Typed)
+                .then(TypedLongColumns::histdata),
             wide_columns,
             failed_securities: Vec::new(),
             response_meta: ResponseMetadata::default(),
@@ -177,7 +182,14 @@ impl HistDataState {
             OutputFormat::Long => self
                 .long_columns
                 .as_ref()
-                .map_or_else(|| self.columns.row_count(), LongStringColumns::row_count),
+                .map_or_else(
+                    || {
+                        self.typed_long_columns
+                            .as_ref()
+                            .map_or_else(|| self.columns.row_count(), TypedLongColumns::row_count)
+                    },
+                    LongStringColumns::row_count,
+                ),
             OutputFormat::Wide => self
                 .wide_columns
                 .as_ref()
@@ -213,17 +225,11 @@ impl HistDataState {
                 LongMode::WithMetadata => self
                     .columns
                     .finish_with_order(&["ticker", "date", "field", "value", "dtype"]),
-                LongMode::Typed => self.columns.finish_with_order(&[
-                    "ticker",
-                    "date",
-                    "field",
-                    "value_f64",
-                    "value_i64",
-                    "value_str",
-                    "value_bool",
-                    "value_date",
-                    "value_ts",
-                ]),
+                LongMode::Typed => self
+                    .typed_long_columns
+                    .take()
+                    .unwrap_or_else(TypedLongColumns::histdata)
+                    .finish(),
             },
             OutputFormat::Wide => {
                 if let Some(wide_columns) = self.wide_columns.take() {
@@ -352,6 +358,12 @@ impl HistDataState {
             trace!(ticker = ticker, "No fieldData for security");
             return;
         };
+        if self.format == OutputFormat::Long && self.long_mode == LongMode::Typed {
+            if let Some(columns) = self.typed_long_columns.as_mut() {
+                columns.reserve_if_empty(field_data.len().saturating_mul(self.field_names.len()));
+            }
+        }
+
 
         // Iterate through each row (each date)
         for row in field_data.values() {
@@ -392,6 +404,17 @@ impl HistDataState {
             }
             return;
         }
+        if let Some(typed_columns) = self.typed_long_columns.as_mut() {
+            for (field_name, field_lookup_name) in self.field_names.iter().zip(&self.field_lookup_names)
+            {
+                let value = row
+                    .get(field_lookup_name)
+                    .and_then(|element| element.get_value(0));
+                typed_columns.append_row(ticker, date_value.as_ref(), field_name, value);
+            }
+            return;
+        }
+
         let long_mode = self.long_mode;
         let field_names = &self.field_names;
         let field_lookup_names = &self.field_lookup_names;

@@ -124,6 +124,25 @@ pub fn write_json(path: &std::path::Path, json: &str) {
     println!("Results written to: {}", path.display());
 }
 
+/// Runtime build-mode metadata stamped into benchmark result files.
+#[derive(Clone, Copy, Debug)]
+pub struct BuildMode {
+    /// Whether `RUSTFLAGS` contains `target-cpu=native`.
+    pub target_cpu_native: bool,
+    /// Whether this benchmark binary was compiled with debug assertions.
+    pub debug_build: bool,
+}
+
+/// Read build-mode metadata at runtime.
+pub fn build_mode() -> BuildMode {
+    let rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
+    BuildMode {
+        target_cpu_native: rustflags.contains("target-cpu=native"),
+        debug_build: cfg!(debug_assertions),
+    }
+}
+
+
 /// Parse iteration count from env var, with default.
 pub fn env_iterations(var: &str, default: usize) -> usize {
     std::env::var(var)

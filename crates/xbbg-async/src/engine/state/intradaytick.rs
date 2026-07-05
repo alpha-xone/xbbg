@@ -278,8 +278,7 @@ impl IntradayTickState {
         child.name_index(&self.lookup_names)
     }
     fn discover_tick_field(&mut self, child: &Element<'_>) -> Option<usize> {
-        let lookup_name = child.name();
-        let name = lookup_name.as_str();
+        let name = child.name_str();
         if name == TICKER_COLUMN || self.column_name_set.contains(name) {
             return None;
         }
@@ -292,6 +291,7 @@ impl IntradayTickState {
             builder.append_null();
         }
 
+        let lookup_name = Name::get_or_intern(&output_name);
         self.tick_fields.push(TickField {
             output_name,
             lookup_name: lookup_name.clone(),

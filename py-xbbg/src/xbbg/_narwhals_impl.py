@@ -181,8 +181,14 @@ class XbbgDataFrame:
 
     def to_pandas(self) -> Any:
         pd = _import_backend_module(Backend.PANDAS, feature="XbbgDataFrame.to_pandas()")
+        try:
+            pa = _import_backend_module(Backend.PYARROW, feature="XbbgDataFrame.to_pandas()")
+        except ImportError:
+            # Slow fallback for installations without pyarrow: materializes one
+            # Python dict per cell path instead of consuming the Arrow C stream.
+            return pd.DataFrame.from_records(self.native.to_pylist(), columns=self.columns)
 
-        return pd.DataFrame.from_records(self.native.to_pylist(), columns=self.columns)
+        return pa.table(self.native).to_pandas(split_blocks=True)
 
     def to_arrow(self) -> Any:
         pa = _import_backend_module(Backend.PYARROW, feature="XbbgDataFrame.to_arrow()")

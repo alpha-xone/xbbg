@@ -21,6 +21,23 @@ def arrow_table() -> Any:
     )
 
 
+def test_from_pylist_preserves_first_seen_columns_and_backfills_late_nulls() -> None:
+    table = ArrowTable.from_pylist(
+        [
+            {"ticker": "IBM US Equity", "PX_LAST": 123.0},
+            {"ticker": "MSFT US Equity", "VOLUME": 10},
+            {"ticker": "AAPL US Equity", "NAME": "Apple", "PX_LAST": 150.0},
+        ]
+    )
+
+    assert table.column_names == ["ticker", "PX_LAST", "VOLUME", "NAME"]
+    assert table.to_pylist() == [
+        {"ticker": "IBM US Equity", "PX_LAST": 123.0, "VOLUME": None, "NAME": None},
+        {"ticker": "MSFT US Equity", "PX_LAST": None, "VOLUME": 10, "NAME": None},
+        {"ticker": "AAPL US Equity", "PX_LAST": 150.0, "VOLUME": None, "NAME": "Apple"},
+    ]
+
+
 def test_table_carrier_properties_and_columns_are_arrow_backed(arrow_table: Any) -> None:
     assert len(arrow_table) == 3
     assert arrow_table.shape == (3, 4)

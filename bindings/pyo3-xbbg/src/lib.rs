@@ -1918,10 +1918,8 @@ impl SubscriptionStreamHandle {
         new_keys: Vec<usize>,
         new_metrics: Vec<Arc<SubscriptionMetrics>>,
     ) {
-        self.status.rcu(|current| {
-            let mut next = (**current).clone();
-            next.add_active(topics, &new_keys, new_metrics.clone());
-            Arc::new(next)
+        self.status.update(|state| {
+            state.add_active(topics, &new_keys, new_metrics.clone());
         });
     }
 
@@ -1958,12 +1956,10 @@ impl SubscriptionStreamHandle {
     }
 
     fn apply_remove(&mut self, topics: &[String]) {
-        self.status.rcu(|current| {
-            let mut next = (**current).clone();
+        self.status.update(|state| {
             for topic in topics {
-                next.remove_topic(topic);
+                state.remove_topic(topic);
             }
-            Arc::new(next)
         });
     }
 }
@@ -2419,10 +2415,8 @@ impl PySubscription {
                             .unsubscribe(keys)
                             .await
                             .map_err(blp_async_error_to_pyerr)?;
-                        h.status.rcu(|current| {
-                            let mut next = (**current).clone();
-                            next.clear_active();
-                            Arc::new(next)
+                        h.status.update(|state| {
+                            state.clear_active();
                         });
                     }
                     // claim drops here; cleared status means a clean worker lease can be reused.

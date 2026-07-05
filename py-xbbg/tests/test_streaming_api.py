@@ -660,6 +660,75 @@ class TestTickModeWarning:
         assert captured["flush_threshold"] == 1
 
 
+class TestSubscriptionConversion:
+    """Subscription iteration converts batches through the constructor-bound path."""
+
+    def test_backend_none_yields_native_table_from_batch(self, monkeypatch):
+        from xbbg import blp as blp_module
+        from xbbg._core import ArrowTable
+        from xbbg.blp import Subscription
+
+        table = ArrowTable.from_pylist([{"ticker": "IBM US Equity", "LAST_PRICE": 123.45}])
+
+        class FakeBatch:
+            def __init__(self):
+                self.to_table_calls = 0
+
+            def to_table(self):
+                self.to_table_calls += 1
+                return table
+
+        class FakePySubscription:
+            async def __anext__(self):
+                return batch
+
+        def fail_facade_conversion(_frame, _backend):
+            raise AssertionError("Subscription.__anext__ must not call facade backend conversion")
+
+        batch = FakeBatch()
+        monkeypatch.setattr(blp_module, "_convert_result_backend", fail_facade_conversion)
+        sub = Subscription(FakePySubscription(), raw=False, backend=None)
+
+        result = asyncio.run(sub.__anext__())
+
+        assert result is table
+        assert batch.to_table_calls == 1
+
+    def test_explicit_backend_uses_bound_converter_without_facade_conversion(self, monkeypatch):
+        from xbbg import blp as blp_module
+        from xbbg._core import ArrowTable
+        from xbbg.blp import Backend, Subscription
+
+        table = ArrowTable.from_pylist([{"ticker": "IBM US Equity", "LAST_PRICE": 123.45}])
+        converted = object()
+        calls = []
+
+        class FakeBatch:
+            def to_table(self):
+                calls.append("to_table")
+                return table
+
+        class FakePySubscription:
+            async def __anext__(self):
+                return FakeBatch()
+
+        def bound_converter(frame, backend):
+            calls.append((frame, backend))
+            return converted
+
+        def fail_facade_conversion(_frame, _backend):
+            raise AssertionError("Subscription.__anext__ must not call facade backend conversion")
+
+        monkeypatch.setattr(blp_module, "convert_backend_frame", bound_converter)
+        monkeypatch.setattr(blp_module, "_convert_result_backend", fail_facade_conversion)
+        sub = Subscription(FakePySubscription(), raw=False, backend=Backend.NATIVE)
+
+        result = asyncio.run(sub.__anext__())
+
+        assert result is converted
+        assert calls == ["to_table", (table, Backend.NATIVE)]
+
+
 class TestSubscriptionStats:
     """Verify Subscription class has a stats property."""
 

@@ -47,8 +47,11 @@
   },
   "scripts": {
     "bench:subscription-replay": "tsx ./benchmarks/bench-subscription-replay.ts",
+    "bench:handoff-offline": "tsx ./benchmarks/bench-handoff-offline.ts",
     "build": "npm run build:native && npm run build:ts",
     "build:native": "tsx ./scripts/build-native.ts",
+    "build:native:debug": "tsx ./scripts/build-native.ts --debug",
+    "build:native:host": "tsx ./scripts/build-native.ts --target-cpu-native",
     "build:offline-bundle": "tsx ./scripts/build-offline-bundle.ts",
     "build:package-loaders": "tsx ./scripts/build-package-loaders.ts",
     "build:ts": "tsup && npm run build:package-loaders",

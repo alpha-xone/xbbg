@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import functools
 import logging
 import sys
 from typing import Any, TypeAlias
@@ -545,7 +546,14 @@ def _to_pyarrow_table(table: Any) -> Any:
 
 def _to_pandas_frame(table: Any) -> Any:
     pd = _import_backend_module(Backend.PANDAS)
-    frame = pd.DataFrame.from_records(table.to_pylist(), columns=table.column_names)
+    try:
+        pa = _import_backend_module(Backend.PYARROW)
+    except ImportError:
+        # Slow fallback for installations without pyarrow: materializes one
+        # Python dict per cell path instead of consuming the Arrow C stream.
+        frame = pd.DataFrame.from_records(table.to_pylist(), columns=table.column_names)
+    else:
+        frame = pa.table(table).to_pandas(split_blocks=True)
     return _attach_xbbg_metadata_attrs(frame, table)
 
 
@@ -557,7 +565,7 @@ def _to_polars_frame(table: Any) -> Any:
         pa = _import_backend_module(Backend.PYARROW)
         return pl.from_arrow(pa.table(table))
 
-    return pl.DataFrame(table.to_pylist(), schema=table.column_names)
+    return pl.from_arrow(table)
 
 
 _native_narwhals_fallback_warned = False
@@ -578,22 +586,24 @@ def _warn_native_narwhals_fallback() -> None:
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _best_narwhals_backend() -> Backend | None:
+    """Return the best installed concrete backend for Narwhals native wrapping."""
+    for candidate in (Backend.PYARROW, Backend.PANDAS, Backend.POLARS):
+        if is_backend_available(candidate) and check_backend(candidate, raise_on_error=False):
+            return candidate
+    return None
+
+
 def _best_narwhals_native(table: Any) -> Any:
     """Return the richest installed native object for Narwhals wrapping."""
-    candidates = (
-        (Backend.PYARROW, _to_pyarrow_table),
-        (Backend.PANDAS, _to_pandas_frame),
-        (Backend.POLARS, _to_polars_frame),
-    )
-    for candidate, convert in candidates:
-        if not is_backend_available(candidate):
-            continue
-        if not check_backend(candidate, raise_on_error=False):
-            continue
-        try:
-            return convert(table)
-        except ImportError:
-            continue
+    candidate = _best_narwhals_backend()
+    if candidate is Backend.PYARROW:
+        return _to_pyarrow_table(table)
+    if candidate is Backend.PANDAS:
+        return _to_pandas_frame(table)
+    if candidate is Backend.POLARS:
+        return _to_polars_frame(table)
     _warn_native_narwhals_fallback()
     return table
 

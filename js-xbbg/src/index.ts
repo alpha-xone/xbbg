@@ -1,7 +1,6 @@
 /* oxlint-disable import/max-dependencies -- public entry point intentionally consolidates native and helper modules. */
 import type { Table } from 'apache-arrow';
 
-import { tableFromIPC } from 'apache-arrow';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -26,7 +25,10 @@ import type {
   NativeArrowZeroCopyBatch,
   NativeEngine,
   NativeSubscription,
-  NativeSubscriptionUpdate,
+  NativeSubscriptionFieldKind,
+  NativeSubscriptionLayout,
+  NativeSubscriptionRow,
+  NativeSubscriptionUpdateBatch,
 } from './napi';
 import { resolveNativeAddon } from './native/resolve-native';
 import { configureRuntimeSearchPath } from './runtime-search-path';
@@ -1062,17 +1064,21 @@ function normalizeBackend(backend: BackendKind | undefined): BackendKind {
   );
 }
 
-function ipcToBackend(buffer: Buffer, backend: BackendKind | undefined): unknown {
+function nativeArrowToBackend(batch: NativeArrowZeroCopyBatch, backend: BackendKind | undefined): unknown {
   const selected = normalizeBackend(backend);
-  const table = tableFromIPC(buffer);
+  const table = tableFromNativeArrowBatch(batch);
   const metadata = metadataRecordFromMap(table.schema.metadata);
   if (selected === Backend.JSON) {
     return attachResultMetadata([...table], metadata);
   }
   if (selected === Backend.POLARS) {
-    return loadPolars().readIPC(buffer);
+    throw new TypeError('Polars backend requires the IPC requestRaw path');
   }
   return attachResultMetadata(table, metadata);
+}
+
+function ipcToPolars(buffer: Buffer): unknown {
+  return loadPolars().readIPC(buffer);
 }
 
 // ── Configured engine state ─────────────────────────────────────────────
@@ -1116,12 +1122,31 @@ export class FieldHandle {
   public constructor(public readonly name: string) {}
 }
 
-export class Tick {
-  private readonly positions: Map<string, number>;
+interface TickLayout {
+  readonly version: number;
+  readonly fields: readonly string[];
+  readonly kinds: readonly NativeSubscriptionFieldKind[];
+  readonly positions: Map<string, number>;
+}
 
-  public constructor(private readonly update: NativeSubscriptionUpdate) {
-    this.positions = new Map(update.fields.map((field, index) => [field, index]));
-  }
+function createTickLayout(layout: NativeSubscriptionLayout): TickLayout {
+  return {
+    fields: layout.fields,
+    kinds: layout.kinds,
+    positions: new Map(layout.fields.map((field, index) => [field, index])),
+    version: layout.version,
+  };
+}
+
+export class Tick {
+  private readonly decodedSet: boolean[] = [];
+  private readonly decodedValues: TickValue[] = [];
+  private rowPositions: number[] | undefined;
+
+  public constructor(
+    private readonly update: NativeSubscriptionRow,
+    private readonly layout: TickLayout,
+  ) {}
 
   public get topic(): string {
     return this.update.topic;
@@ -1137,26 +1162,62 @@ export class Tick {
 
   public get(field: string | FieldHandle): TickValue {
     const name = typeof field === 'string' ? field : field.name;
-    const index = this.positions.get(name);
-    if (index === undefined) {
+    const fieldIndex = this.layout.positions.get(name);
+    return fieldIndex === undefined ? null : this.getByFieldIndex(fieldIndex);
+  }
+
+  private getByFieldIndex(fieldIndex: number): TickValue {
+    if (this.decodedSet[fieldIndex] === true) {
+      return this.decodedValues[fieldIndex] ?? null;
+    }
+    const position = this.valuePosition(fieldIndex);
+    if (position === undefined) {
+      this.decodedSet[fieldIndex] = true;
+      this.decodedValues[fieldIndex] = null;
       return null;
     }
-    const value = this.update.values[index] ?? null;
-    const kind = this.update.valueKinds[index] ?? 'unknown';
-    if (value === null) {
-      return null;
-    }
-    if (kind === 'i64' || kind === 'time64_us' || kind === 'timestamp_us') {
-      try {
-        return BigInt(String(value));
-      } catch {
-        return null;
+
+    const kind = this.layout.kinds[fieldIndex] ?? 'unknown';
+    let value: TickValue;
+    if (kind === 'bool') {
+      value = this.update.boolValues[position] ?? null;
+    } else if (kind === 'i32') {
+      value = this.update.i32Values[position] ?? null;
+    } else if (kind === 'f64') {
+      value = this.update.f64Values[position] ?? null;
+    } else if (kind === 'str' || kind === 'unknown') {
+      value = this.update.stringValues[position] ?? null;
+    } else if (kind === 'date32') {
+      const days = this.update.i32Values[position];
+      value = days === null || days === undefined ? null : new Date(Date.UTC(1970, 0, 1 + days));
+    } else {
+      const raw = this.update.i64Values[position];
+      if (raw === null || raw === undefined) {
+        value = null;
+      } else {
+        try {
+          value = BigInt(raw);
+        } catch {
+          value = null;
+        }
       }
     }
-    if (kind === 'date32' && typeof value === 'number') {
-      return new Date(Date.UTC(1970, 0, 1 + value));
-    }
+    this.decodedSet[fieldIndex] = true;
+    this.decodedValues[fieldIndex] = value;
     return value;
+  }
+
+  private valuePosition(fieldIndex: number): number | undefined {
+    let positions = this.rowPositions;
+    if (positions === undefined) {
+      const built: number[] = [];
+      this.update.fieldIndices.forEach((index, position) => {
+        built[index] = position;
+      });
+      positions = built;
+      this.rowPositions = positions;
+    }
+    return positions[fieldIndex];
   }
 
   public f64(field: string | FieldHandle): number | null {
@@ -1173,8 +1234,11 @@ export class Tick {
     if (value === null) {
       return null;
     }
+    if (typeof value === 'bigint') {
+      return value;
+    }
     try {
-      return BigInt(String(value));
+      return BigInt(typeof value === 'string' ? value : String(value));
     } catch {
       return null;
     }
@@ -1187,8 +1251,11 @@ export class Tick {
 
   public toObject(): Record<string, unknown> {
     const out: Record<string, unknown> = { timestampUs: this.timestampUs, topic: this.topic };
-    for (const field of this.update.fields) {
-      out[field] = this.get(field);
+    for (const fieldIndex of this.update.fieldIndices) {
+      const field = this.layout.fields[fieldIndex];
+      if (field !== undefined) {
+        out[field] = this.getByFieldIndex(fieldIndex);
+      }
     }
     return out;
   }
@@ -1197,9 +1264,10 @@ export class Tick {
 export class ArrowSubscription implements AsyncIterator<Table>, AsyncIterable<Table> {
   public constructor(private readonly inner: NativeSubscription) {}
 
+  /** Return the next zero-copy Arrow table; one native crossing may contain many rows. */
   public async next(): Promise<IteratorResult<Table>> {
     try {
-      const batch = await this.inner.nextArrow();
+      const batch = await this.inner.nextArrowBatch();
       if (batch === null) {
         return { done: true, value: undefined };
       }
@@ -1224,22 +1292,40 @@ export class ArrowSubscription implements AsyncIterator<Table>, AsyncIterable<Ta
 }
 
 export class Subscription implements AsyncIterator<Tick>, AsyncIterable<Tick> {
-  private readonly inner: NativeSubscription;
+  private readonly layouts = new Map<number, TickLayout>();
+  private readonly pending: Tick[] = [];
 
-  public constructor(inner: NativeSubscription) {
-    this.inner = inner;
-  }
+  public constructor(private readonly inner: NativeSubscription) {}
 
   public async next(): Promise<IteratorResult<Tick>> {
     try {
-      const update = await this.inner.nextUpdate();
-      if (update === null) {
+      const pending = this.pending.shift();
+      if (pending !== undefined) {
+        return { done: false, value: pending };
+      }
+      const batch = await this.inner.nextUpdates();
+      if (batch === null) {
         return { done: true, value: undefined };
       }
-      return { done: false, value: new Tick(update) };
+      this.pending.push(...this.ticksFromBatch(batch));
+      const next = this.pending.shift();
+      return next === undefined ? { done: true, value: undefined } : { done: false, value: next };
     } catch (error) {
       throw wrapError(error);
     }
+  }
+
+  private ticksFromBatch(batch: NativeSubscriptionUpdateBatch): Tick[] {
+    if (batch.layout !== undefined) {
+      this.layouts.set(batch.layout.version, createTickLayout(batch.layout));
+    }
+    return batch.updates.map((update) => {
+      const layout = this.layouts.get(update.layoutVersion);
+      if (layout === undefined) {
+        throw new Error(`subscription layout ${update.layoutVersion} was not supplied by native`);
+      }
+      return new Tick(update, layout);
+    });
   }
 
   public async add(tickers: readonly string[]): Promise<void> {
@@ -1261,10 +1347,7 @@ export class Subscription implements AsyncIterator<Tick>, AsyncIterable<Tick> {
   public async unsubscribe(drain = false): Promise<Tick[]> {
     try {
       const drained = await this.inner.unsubscribe(drain);
-      if (drained === null) {
-        return [];
-      }
-      return drained.map((update) => new Tick(update));
+      return drained?.flatMap((batch) => this.ticksFromBatch(batch)) ?? [];
     } catch (error) {
       throw wrapError(error);
     }
@@ -1304,6 +1387,8 @@ export class Subscription implements AsyncIterator<Tick>, AsyncIterable<Tick> {
 export class Engine {
   // Set via constructor or via `withConfig` (which instantiates via Object.create).
   private inner!: NativeEngine;
+  private parsedSchemas = new Map<string, unknown>();
+  private parsedOperations = new Map<string, unknown>();
 
   public constructor(host = 'localhost', port = 8194) {
     try {
@@ -1320,6 +1405,8 @@ export class Engine {
       throw new TypeError('Failed to allocate Engine instance');
     }
     maybeEngine.inner = inner;
+    maybeEngine.parsedSchemas = new Map<string, unknown>();
+    maybeEngine.parsedOperations = new Map<string, unknown>();
     return maybeEngine;
   }
 
@@ -1408,8 +1495,11 @@ export class Engine {
     }
     const nativeParams = { ...rest, ...mapOverridesToRequestParts(overrides) };
     try {
-      const buffer = await this.inner.request(nativeParams);
-      return ipcToBackend(buffer, backend);
+      if (backend === Backend.POLARS) {
+        return ipcToPolars(await this.inner.requestRaw(nativeParams));
+      }
+      const batch = await this.inner.request(nativeParams);
+      return nativeArrowToBackend(batch, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -1424,7 +1514,7 @@ export class Engine {
       );
     }
     try {
-      return await this.inner.request({ ...rest, ...mapOverridesToRequestParts(overrides) });
+      return await this.inner.requestRaw({ ...rest, ...mapOverridesToRequestParts(overrides) });
     } catch (error) {
       throw wrapError(error);
     }
@@ -1699,13 +1789,24 @@ export class Engine {
   }
 
   public async getSchema(service: string): Promise<unknown> {
-    const json = await this.inner.getSchema(service);
-    return JSON.parse(json) as unknown;
+    const cached = this.parsedSchemas.get(service);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const parsed = JSON.parse(await this.inner.getSchema(service)) as unknown;
+    this.parsedSchemas.set(service, parsed);
+    return parsed;
   }
 
   public async getOperation(service: string, operation: string): Promise<unknown> {
-    const json = await this.inner.getOperation(service, operation);
-    return JSON.parse(json) as unknown;
+    const key = `${service}\u0000${operation}`;
+    const cached = this.parsedOperations.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const parsed = JSON.parse(await this.inner.getOperation(service, operation)) as unknown;
+    this.parsedOperations.set(key, parsed);
+    return parsed;
   }
 
   public async listOperations(service: string): Promise<string[]> {
@@ -1713,16 +1814,33 @@ export class Engine {
   }
 
   public getCachedSchema(service: string): unknown {
+    const cached = this.parsedSchemas.get(service);
+    if (cached !== undefined) {
+      return cached;
+    }
     const json = this.inner.getCachedSchema(service);
-    return json === null ? null : (JSON.parse(json) as unknown);
+    if (json === null) {
+      return null;
+    }
+    const parsed = JSON.parse(json) as unknown;
+    this.parsedSchemas.set(service, parsed);
+    return parsed;
   }
 
   public invalidateSchema(service: string): void {
     this.inner.invalidateSchema(service);
+    this.parsedSchemas.delete(service);
+    for (const key of this.parsedOperations.keys()) {
+      if (key.startsWith(`${service}\u0000`)) {
+        this.parsedOperations.delete(key);
+      }
+    }
   }
 
   public clearSchemaCache(): void {
     this.inner.clearSchemaCache();
+    this.parsedSchemas.clear();
+    this.parsedOperations.clear();
   }
 
   public listCachedSchemas(): string[] {
@@ -1884,12 +2002,9 @@ export class Engine {
   }
 
   public async bschema(service: string, operation?: string): Promise<unknown> {
-    if (operation !== undefined) {
-      const json = await this.inner.getOperation(service, operation);
-      return JSON.parse(json) as unknown;
-    }
-    const json = await this.inner.getSchema(service);
-    return JSON.parse(json) as unknown;
+    return operation === undefined
+      ? await this.getSchema(service)
+      : await this.getOperation(service, operation);
   }
 
   public async fieldInfo(
@@ -1918,7 +2033,7 @@ export class Engine {
         options.eventTypes ?? null,
         options.includeBrokerCodes !== false,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -1941,7 +2056,7 @@ export class Engine {
         options.price ?? undefined,
         options.benchmark ?? undefined,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -1954,7 +2069,7 @@ export class Engine {
         toRequestString(equityTicker),
         options.fields !== undefined ? toStringArray(options.fields) : null,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -1972,7 +2087,7 @@ export class Engine {
         options.fields !== undefined ? toStringArray(options.fields) : null,
         options.activeOnly !== false,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -1990,7 +2105,7 @@ export class Engine {
         formatDate(dt) ?? '',
         options.freq ?? undefined,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2008,7 +2123,7 @@ export class Engine {
         formatDate(dt) ?? '',
         options.freq ?? undefined,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2027,7 +2142,7 @@ export class Engine {
         options.fields !== undefined ? toStringArray(options.fields) : null,
         options.maxContracts ?? undefined,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2044,7 +2159,7 @@ export class Engine {
         toRequestString(genTicker),
         formatDate(dt) ?? '',
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2062,7 +2177,7 @@ export class Engine {
         formatDate(dt) ?? '',
         options.lookbackDays ?? undefined,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2082,7 +2197,7 @@ export class Engine {
         formatDate(endDate) ?? '',
         options.dvdType ?? undefined,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2103,7 +2218,7 @@ export class Engine {
         options.dividendTypes !== undefined ? toStringArray(options.dividendTypes) : null,
         options.windowDays ?? undefined,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2124,7 +2239,7 @@ export class Engine {
         options.ccy ?? undefined,
         options.factor ?? undefined,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2137,7 +2252,7 @@ export class Engine {
         toRequestString(etfTicker),
         options.fields !== undefined ? toStringArray(options.fields) : null,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2162,7 +2277,7 @@ export class Engine {
         options.riskFreeRate ?? undefined,
         options.dividendYieldField ?? undefined,
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2176,7 +2291,7 @@ export class Engine {
         options.field ?? undefined,
         options.asof === undefined ? undefined : (formatDate(options.asof) ?? ''),
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2189,7 +2304,7 @@ export class Engine {
     const backend = normalizeBackend(options.backend);
     try {
       const buffer = await this.inner.recipeResolveIsins(toStringArray(isins));
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2202,7 +2317,7 @@ export class Engine {
     const backend = normalizeBackend(options.backend);
     try {
       const buffer = await this.inner.recipeIssuerIsins(toStringArray(bondIsins));
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }
@@ -2223,7 +2338,7 @@ export class Engine {
         formatDate(startDate) ?? '',
         formatDate(endDate) ?? '',
       );
-      return ipcToBackend(buffer, backend);
+      return nativeArrowToBackend(buffer, backend);
     } catch (error) {
       throw wrapError(error);
     }

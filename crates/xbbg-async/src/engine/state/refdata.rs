@@ -12,7 +12,8 @@ use xbbg_log::trace;
 use super::typed_builder::{ArrowType, ColumnSet};
 use super::value_utils::{
     append_long_value_row, common_value_type, get_value_cached_datatype, top_level_response_error,
-    FieldExceptionMeta, LongStringColumns, ResponseMetadata, SecurityErrorMeta, WideColumns,
+    FieldExceptionMeta, LongStringColumns, ResponseMetadata, SecurityErrorMeta, TypedLongColumns,
+    WideColumns,
 };
 use xbbg_core::{BlpError, DataType as BlpDataType, Element, Message, Name, Value};
 
@@ -100,6 +101,8 @@ pub struct RefDataState {
     columns: ColumnSet,
     /// Fixed long-format builders for the common string-value output path
     long_columns: Option<LongStringColumns>,
+    /// Fixed typed-long builders for direct multi-value output
+    typed_long_columns: Option<TypedLongColumns>,
     /// Fixed wide-format builders for requested field columns
     wide_columns: Option<WideColumns>,
     /// Response-level diagnostics (eidData / securityError / fieldExceptions)
@@ -143,14 +146,14 @@ impl RefDataState {
             .collect();
         let field_value_datatypes = vec![None; field_lookup_names.len()];
 
-        // Fixed long-string output bypasses ColumnSet entirely; keep ColumnSet hints only
-        // for wide/metadata/typed paths that actually append through ColumnSet.
+        // Fixed long output modes bypass ColumnSet entirely; keep ColumnSet hints only
+        // for dynamic wide/metadata paths that actually append through ColumnSet.
         let long_value_type = (format == OutputFormat::Long && long_mode == LongMode::String)
             .then(|| common_value_type(&fields, &arrow_types));
         let wide_columns =
             (format == OutputFormat::Wide).then(|| WideColumns::refdata(&fields, &arrow_types));
         let mut columns = ColumnSet::new();
-        if long_value_type.is_none() && wide_columns.is_none() {
+        if long_value_type.is_none() && wide_columns.is_none() && long_mode != LongMode::Typed {
             for (name, arrow_type) in &arrow_types {
                 columns.set_type_hint(name, *arrow_type);
             }
@@ -170,6 +173,8 @@ impl RefDataState {
             field_exception_count: 0,
             columns,
             long_columns: long_value_type.map(LongStringColumns::refdata),
+            typed_long_columns: (format == OutputFormat::Long && long_mode == LongMode::Typed)
+                .then(TypedLongColumns::refdata),
             wide_columns,
             response_meta: ResponseMetadata::default(),
             reply,
@@ -212,7 +217,14 @@ impl RefDataState {
             OutputFormat::Long => self
                 .long_columns
                 .as_ref()
-                .map_or_else(|| self.columns.row_count(), LongStringColumns::row_count),
+                .map_or_else(
+                    || {
+                        self.typed_long_columns
+                            .as_ref()
+                            .map_or_else(|| self.columns.row_count(), TypedLongColumns::row_count)
+                    },
+                    LongStringColumns::row_count,
+                ),
             OutputFormat::Wide => self
                 .wide_columns
                 .as_ref()
@@ -249,16 +261,11 @@ impl RefDataState {
                 LongMode::WithMetadata => self
                     .columns
                     .finish_with_order(&["ticker", "field", "value", "dtype"]),
-                LongMode::Typed => self.columns.finish_with_order(&[
-                    "ticker",
-                    "field",
-                    "value_f64",
-                    "value_i64",
-                    "value_str",
-                    "value_bool",
-                    "value_date",
-                    "value_ts",
-                ]),
+                LongMode::Typed => self
+                    .typed_long_columns
+                    .take()
+                    .unwrap_or_else(TypedLongColumns::refdata)
+                    .finish(),
             },
             OutputFormat::Wide => {
                 if let Some(wide_columns) = self.wide_columns.take() {
@@ -306,6 +313,12 @@ impl RefDataState {
             trace!("No securityData in message");
             return;
         };
+        if self.format == OutputFormat::Long && self.long_mode == LongMode::Typed {
+            if let Some(columns) = self.typed_long_columns.as_mut() {
+                columns.reserve_if_empty(security_data.len().saturating_mul(self.field_names.len()));
+            }
+        }
+
 
         // Iterate through each security
         for sec in security_data.values() {
@@ -456,6 +469,18 @@ impl RefDataState {
             );
             return;
         }
+        if let Some(typed_columns) = self.typed_long_columns.as_mut() {
+            let detail = format!(
+                "code={code} category={category} subcategory={subcategory} message={message}"
+            );
+            typed_columns.append_row(
+                ticker,
+                None,
+                "__SECURITY_ERROR__",
+                Some(Value::String(detail.as_str())),
+            );
+            return;
+        }
         let detail =
             format!("code={code} category={category} subcategory={subcategory} message={message}");
         let value = Some(Value::String(detail.as_str()));
@@ -485,6 +510,17 @@ impl RefDataState {
             }
             return;
         }
+        if let Some(typed_columns) = self.typed_long_columns.as_mut() {
+            for (field_name, field_lookup_name) in self.field_names.iter().zip(&self.field_lookup_names)
+            {
+                let value = field_data
+                    .get(field_lookup_name)
+                    .and_then(|element| element.get_value(0));
+                typed_columns.append_row(ticker, None, field_name, value);
+            }
+            return;
+        }
+
         let long_mode = self.long_mode;
         let field_names = &self.field_names;
         let field_lookup_names = &self.field_lookup_names;

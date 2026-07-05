@@ -98,6 +98,44 @@ impl<'a> Message<'a> {
         unsafe { Name::from_raw(NonNull::new(ffi::blpapi_Name_duplicate(ptr)).unwrap()) }
     }
 
+    /// Message type as a borrowed string — no `Name` duplication, no refcount.
+    ///
+    /// Uses `blpapi_Message_typeString` (blpapi_message.h), which returns a
+    /// pointer into the message's own storage. Valid for the message lifetime.
+    ///
+    /// # Performance
+    /// Hot-path alternative to `message_type().as_str()`: avoids the
+    /// duplicate/drop refcount pair and the `Name` allocation.
+    #[inline(always)]
+    pub fn type_str(&self) -> &'a str {
+        // SAFETY: blpapi_Message_typeString returns a valid null-terminated
+        // C string owned by the message, valid for the message lifetime 'a.
+        let ptr = unsafe { ffi::blpapi_Message_typeString(self.ptr) };
+        unsafe { std::ffi::CStr::from_ptr(ptr) }
+            .to_str()
+            .expect("Bloomberg message type contained invalid UTF-8")
+    }
+
+    /// Message type intern key for allocation-free dispatch.
+    ///
+    /// Bloomberg message-type `Name`s are interned; the pointer value is a
+    /// stable process-lifetime key for the type. Use as a transient map key
+    /// while dispatching, mirroring [`Element::name_key`].
+    #[inline(always)]
+    pub fn name_key(&self) -> usize {
+        // SAFETY: blpapi_Message_messageType returns a valid interned Name pointer.
+        unsafe { ffi::blpapi_Message_messageType(self.ptr) as usize }
+    }
+
+    /// Check if the message type matches a pre-interned `Name`
+    /// (O(1) pointer comparison, no allocation).
+    #[inline(always)]
+    pub fn name_eq(&self, other: &Name) -> bool {
+        // SAFETY: blpapi_Message_messageType returns a valid interned Name pointer.
+        let ptr = unsafe { ffi::blpapi_Message_messageType(self.ptr) };
+        ptr == other.as_ptr()
+    }
+
     /// Get the time this message was received by the SDK, as microseconds since Unix epoch.
     ///
     /// Returns `None` if receive-time recording was not enabled via
@@ -160,6 +198,8 @@ impl<'a> Message<'a> {
     ///
     /// # Performance
     /// This is a hot path method - minimal allocation (just the CorrelationId).
+    /// When looping over all IDs, prefer [`Message::correlation_ids`], which
+    /// reads the count once instead of re-checking per index.
     #[inline]
     pub fn correlation_id(&self, index: usize) -> Option<CorrelationId> {
         if index >= self.num_correlation_ids() {
@@ -173,7 +213,58 @@ impl<'a> Message<'a> {
             Some(CorrelationId::from_ffi(&cid))
         }
     }
+
+    /// Iterator over all correlation IDs on this message.
+    ///
+    /// Reads `numCorrelationIds` once; each step is a single
+    /// `blpapi_Message_correlationId` call (no per-item bounds re-check).
+    #[inline]
+    pub fn correlation_ids(&self) -> CorrelationIdIter<'_, 'a> {
+        CorrelationIdIter {
+            msg: self,
+            idx: 0,
+            len: self.num_correlation_ids(),
+        }
+    }
 }
+
+/// Iterator over the correlation IDs of a [`Message`].
+///
+/// Created by [`Message::correlation_ids`]. The count is read once at
+/// construction; iteration performs one FFI call per ID.
+pub struct CorrelationIdIter<'m, 'a> {
+    msg: &'m Message<'a>,
+    idx: usize,
+    len: usize,
+}
+
+impl Iterator for CorrelationIdIter<'_, '_> {
+    type Item = CorrelationId;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx < self.len {
+            let i = self.idx;
+            self.idx += 1;
+            // SAFETY: i < len == numCorrelationIds, and msg.ptr is valid.
+            // blpapi_Message_correlationId returns the CorrelationId by value.
+            unsafe {
+                let cid = ffi::blpapi_Message_correlationId(self.msg.ptr, i);
+                Some(CorrelationId::from_ffi(&cid))
+            }
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.len - self.idx;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for CorrelationIdIter<'_, '_> {}
 
 #[cfg(test)]
 mod tests {

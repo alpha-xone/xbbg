@@ -93,11 +93,12 @@ impl IntradayTickStreamState {
         }
 
         // Create builders for core fields only
-        let mut ticker_builder = StringBuilder::new();
-        let mut time_builder = TimestampMicrosecondBuilder::new();
-        let mut type_builder = StringBuilder::new();
-        let mut value_builder = Float64Builder::new();
-        let mut size_builder = Int64Builder::new();
+        let mut ticker_builder =
+            StringBuilder::with_capacity(n, self.ticker.len().saturating_mul(n));
+        let mut time_builder = TimestampMicrosecondBuilder::with_capacity(n);
+        let mut type_builder = StringBuilder::with_capacity(n, n.saturating_mul(8));
+        let mut value_builder = Float64Builder::with_capacity(n);
+        let mut size_builder = Int64Builder::with_capacity(n);
 
         for i in 0..n {
             let Some(tick) = tick_data.get_element(i) else {
@@ -168,13 +169,12 @@ impl IntradayTickStreamState {
             ]))
         });
 
-        let columns: Vec<ArrayRef> = vec![
-            Arc::new(ticker_builder.finish()),
-            Arc::new(time_builder.finish().with_timezone("UTC")),
-            Arc::new(type_builder.finish()),
-            Arc::new(value_builder.finish()),
-            Arc::new(size_builder.finish()),
-        ];
+        let mut columns: Vec<ArrayRef> = Vec::with_capacity(5);
+        columns.push(Arc::new(ticker_builder.finish()));
+        columns.push(Arc::new(time_builder.finish().with_timezone("UTC")));
+        columns.push(Arc::new(type_builder.finish()));
+        columns.push(Arc::new(value_builder.finish()));
+        columns.push(Arc::new(size_builder.finish()));
 
         RecordBatch::try_new(schema.clone(), columns).ok()
     }

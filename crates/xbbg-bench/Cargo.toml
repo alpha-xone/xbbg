@@ -29,6 +29,10 @@ dhat = "0.3"
 hdrhistogram = "7.5"
 tempfile = "3.15"
 
+[dev-dependencies]
+serde_json = "1.0"
+simd-json = "0.15"
+
 [package.metadata.cargo-udeps.ignore]
 normal = ["criterion", "dhat", "hdrhistogram", "tempfile"]
 
@@ -36,11 +40,27 @@ normal = ["criterion", "dhat", "hdrhistogram", "tempfile"]
 # Supported benchmark suite
 # =============================================================================
 # Run with: cargo bench --package xbbg-bench --bench xbbg_benchmark_suite
-
+# Offline checks: cargo bench --package xbbg-bench --bench bql_json_parsers -- --test
 [[bench]]
 name = "xbbg_benchmark_suite"
 harness = false
 
 [[bench]]
 name = "lockfree_paths"
+harness = false
+
+[[bench]]
+name = "arrow_builder_append"
+harness = false
+
+[[bench]]
+name = "async_subscription_replay"
+harness = false
+
+[[bench]]
+name = "cached_subscription_arrow"
+harness = false
+
+[[bench]]
+name = "bql_json_parsers"
 harness = false

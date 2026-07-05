@@ -105,6 +105,24 @@ async def _abds_field(
     return await abds(tickers=tickers, flds=field, **kwargs)
 
 
+def _native_pivot_bdp_to_wide(nw_df):
+    try:
+        native = nw_df.to_native()
+    except AttributeError:
+        return None
+
+    if native.__class__.__name__ == "ArrowRecordBatch" and hasattr(native, "__arrow_c_array__"):
+        batch = native
+    elif native.__class__.__name__ == "ArrowTable" and hasattr(native, "__arrow_c_stream__"):
+        batch = native.to_record_batch()
+    else:
+        return None
+
+    from xbbg._core import ext_pivot_to_wide
+
+    return nw.from_native(ext_pivot_to_wide(batch).to_table())
+
+
 def _pivot_bdp_to_wide(nw_df):
     """Pivot bdp result from long format (ticker, field, value) to wide format.
 
@@ -117,6 +135,10 @@ def _pivot_bdp_to_wide(nw_df):
 
     if len(nw_df) == 0:
         return nw_df
+
+    native_result = _native_pivot_bdp_to_wide(nw_df)
+    if native_result is not None:
+        return native_result
 
     # Pivot from long to wide: each unique field becomes a column
     # Group by ticker and create dict of field -> value

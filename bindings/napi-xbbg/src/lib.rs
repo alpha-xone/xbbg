@@ -4,10 +4,12 @@ mod request;
 pub use ext::*;
 use request::pairs_to_map;
 
+use std::collections::{HashMap, VecDeque};
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
@@ -16,7 +18,7 @@ use napi::bindgen_prelude::{Buffer, Error, Status};
 use napi_derive::napi;
 use tokio::sync::{Mutex, Notify};
 use xbbg_async::engine::state::{
-    subscription_update_to_record_batch, SubscriptionUpdate, UpdateValue,
+    FieldKind, SubscriptionArrowBatcher, SubscriptionUpdate, UpdateValue,
 };
 use xbbg_async::engine::{
     Engine, EngineConfig, OverflowPolicy, RequestParams, ServerAddr, SharedSubscriptionStatus,
@@ -25,9 +27,12 @@ use xbbg_async::engine::{
 use xbbg_async::{BlpAsyncError, ValidationMode};
 use xbbg_core::{AuthConfig, BlpError};
 
+const DEFAULT_SUBSCRIPTION_BATCH_ITEMS: usize = 256;
+
 type StreamBatchResult = std::result::Result<SubscriptionUpdate, BlpError>;
 type StreamReceiver = tokio::sync::mpsc::Receiver<StreamBatchResult>;
 type SharedStreamReceiver = Arc<Mutex<Option<StreamReceiver>>>;
+type SharedPendingStreamItems = Arc<Mutex<VecDeque<StreamBatchResult>>>;
 
 struct SubscriptionStreamHandle {
     tx: tokio::sync::mpsc::Sender<StreamBatchResult>,
@@ -179,15 +184,31 @@ pub struct SubscriptionStats {
 }
 
 #[napi(object)]
-pub struct NativeSubscriptionUpdate {
-    pub kind: String,
+pub struct NativeSubscriptionLayout {
+    pub version: u32,
+    pub fields: Vec<String>,
+    pub kinds: Vec<String>,
+}
+
+#[napi(object)]
+pub struct NativeSubscriptionRow {
     pub topic: String,
     pub topic_id: u32,
     pub timestamp_us: i64,
     pub layout_version: u32,
-    pub fields: Vec<String>,
-    pub values: Vec<serde_json::Value>,
-    pub value_kinds: Vec<String>,
+    pub field_indices: Vec<u32>,
+    pub bool_values: Vec<Option<bool>>,
+    pub i32_values: Vec<Option<i32>>,
+    pub f64_values: Vec<Option<f64>>,
+    pub string_values: Vec<Option<String>>,
+    pub i64_values: Vec<Option<String>>,
+}
+
+#[napi(object)]
+pub struct NativeSubscriptionUpdateBatch {
+    pub kind: String,
+    pub layout: Option<NativeSubscriptionLayout>,
+    pub updates: Vec<NativeSubscriptionRow>,
 }
 
 #[napi(object)]
@@ -554,62 +575,167 @@ fn to_ipc_buffer(batch: RecordBatch) -> napi::Result<Buffer> {
     Ok(Buffer::from(cursor.into_inner()))
 }
 
-fn to_native_arrow(update: SubscriptionUpdate) -> napi::Result<NativeArrowBatch> {
-    let batch = subscription_update_to_record_batch(&update).map_err(blp_error_to_napi)?;
+fn to_native_record_batch(batch: RecordBatch) -> napi::Result<NativeArrowBatch> {
     NativeArrowBatch::from_record_batch(batch)
 }
 
-fn to_native_update(update: SubscriptionUpdate) -> NativeSubscriptionUpdate {
-    let mut fields = Vec::with_capacity(update.values.len());
-    let mut values = Vec::with_capacity(update.values.len());
-    let mut value_kinds = Vec::with_capacity(update.values.len());
-    for field in update.values.iter() {
-        let Some(meta) = update.layout.fields.get(field.index as usize) else {
-            continue;
-        };
-        fields.push(meta.name.to_string());
-        values.push(update_value_to_json(&field.value));
-        value_kinds.push(update_value_kind(&field.value).to_string());
+fn field_kind_label(kind: FieldKind) -> &'static str {
+    match kind {
+        FieldKind::Unknown => "unknown",
+        FieldKind::Bool => "bool",
+        FieldKind::I32 => "i32",
+        FieldKind::I64 => "i64",
+        FieldKind::F64 => "f64",
+        FieldKind::Str => "str",
+        FieldKind::Date32 => "date32",
+        FieldKind::Time64Micros => "time64_us",
+        FieldKind::TimestampMicros => "timestamp_us",
     }
-    NativeSubscriptionUpdate {
-        kind: "update".to_string(),
+}
+
+fn to_native_layout(update: &SubscriptionUpdate) -> NativeSubscriptionLayout {
+    let fields = update
+        .layout
+        .fields
+        .iter()
+        .map(|field| field.name.to_string())
+        .collect();
+    let kinds = update
+        .layout
+        .fields
+        .iter()
+        .map(|field| field_kind_label(field.kind).to_string())
+        .collect();
+    NativeSubscriptionLayout {
+        version: update.layout.version,
+        fields,
+        kinds,
+    }
+}
+
+fn to_native_row(update: SubscriptionUpdate) -> NativeSubscriptionRow {
+    let len = update.values.len();
+    let mut field_indices = Vec::with_capacity(len);
+    let mut bool_values = Vec::with_capacity(len);
+    let mut i32_values = Vec::with_capacity(len);
+    let mut f64_values = Vec::with_capacity(len);
+    let mut string_values = Vec::with_capacity(len);
+    let mut i64_values = Vec::with_capacity(len);
+
+    for field in update.values.iter() {
+        field_indices.push(u32::from(field.index));
+        match &field.value {
+            UpdateValue::Null => {
+                bool_values.push(None);
+                i32_values.push(None);
+                f64_values.push(None);
+                string_values.push(None);
+                i64_values.push(None);
+            }
+            UpdateValue::Bool(v) => {
+                bool_values.push(Some(*v));
+                i32_values.push(None);
+                f64_values.push(None);
+                string_values.push(None);
+                i64_values.push(None);
+            }
+            UpdateValue::I32(v) | UpdateValue::Date32(v) => {
+                bool_values.push(None);
+                i32_values.push(Some(*v));
+                f64_values.push(None);
+                string_values.push(None);
+                i64_values.push(None);
+            }
+            UpdateValue::I64(v)
+            | UpdateValue::Time64Micros(v)
+            | UpdateValue::TimestampMicros(v) => {
+                bool_values.push(None);
+                i32_values.push(None);
+                f64_values.push(None);
+                string_values.push(None);
+                i64_values.push(Some(v.to_string()));
+            }
+            UpdateValue::F64(v) => {
+                bool_values.push(None);
+                i32_values.push(None);
+                f64_values.push(Some(*v));
+                string_values.push(None);
+                i64_values.push(None);
+            }
+            UpdateValue::Str(v) => {
+                bool_values.push(None);
+                i32_values.push(None);
+                f64_values.push(None);
+                string_values.push(Some(v.to_string()));
+                i64_values.push(None);
+            }
+        }
+    }
+
+    NativeSubscriptionRow {
         topic: update.topic.to_string(),
         topic_id: update.topic_id,
         timestamp_us: update.timestamp_us,
         layout_version: update.layout.version,
-        fields,
-        values,
-        value_kinds,
+        field_indices,
+        bool_values,
+        i32_values,
+        f64_values,
+        string_values,
+        i64_values,
     }
 }
 
-fn update_value_kind(value: &UpdateValue) -> &'static str {
+fn to_native_update_batch(
+    updates: Vec<SubscriptionUpdate>,
+    last_layout_sent: &mut Option<u32>,
+) -> Option<NativeSubscriptionUpdateBatch> {
+    let mut iter = updates.into_iter();
+    let first = iter.next()?;
+    let version = first.layout.version;
+    let layout = if *last_layout_sent == Some(version) {
+        None
+    } else {
+        *last_layout_sent = Some(version);
+        Some(to_native_layout(&first))
+    };
+    let mut rows = Vec::with_capacity(iter.size_hint().0 + 1);
+    rows.push(to_native_row(first));
+    rows.extend(iter.map(to_native_row));
+    Some(NativeSubscriptionUpdateBatch {
+        kind: "batch".to_string(),
+        layout,
+        updates: rows,
+    })
+}
+
+fn subscription_limit(value: Option<u32>, label: &str) -> napi::Result<usize> {
     match value {
-        UpdateValue::Null => "null",
-        UpdateValue::Bool(_) => "bool",
-        UpdateValue::I32(_) => "i32",
-        UpdateValue::I64(_) => "i64",
-        UpdateValue::F64(_) => "f64",
-        UpdateValue::Str(_) => "str",
-        UpdateValue::Date32(_) => "date32",
-        UpdateValue::Time64Micros(_) => "time64_us",
-        UpdateValue::TimestampMicros(_) => "timestamp_us",
+        Some(0) => Err(Error::new(
+            Status::InvalidArg,
+            format!("{label} must be greater than zero"),
+        )),
+        Some(value) => Ok(value as usize),
+        None => Ok(DEFAULT_SUBSCRIPTION_BATCH_ITEMS),
     }
 }
 
-fn update_value_to_json(value: &UpdateValue) -> serde_json::Value {
-    match value {
-        UpdateValue::Null => serde_json::Value::Null,
-        UpdateValue::Bool(v) => serde_json::Value::Bool(*v),
-        UpdateValue::I32(v) => serde_json::Value::Number((*v).into()),
-        UpdateValue::I64(v) => serde_json::Value::String(v.to_string()),
-        UpdateValue::F64(v) => serde_json::Number::from_f64(*v)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        UpdateValue::Str(v) => serde_json::Value::String(v.to_string()),
-        UpdateValue::Date32(v) => serde_json::Value::Number((*v).into()),
-        UpdateValue::Time64Micros(v) => serde_json::Value::String(v.to_string()),
-        UpdateValue::TimestampMicros(v) => serde_json::Value::String(v.to_string()),
+async fn receive_stream_item(
+    rx: &mut StreamReceiver,
+    close_notify: &Notify,
+    max_wait_ms: Option<u32>,
+) -> Option<StreamBatchResult> {
+    let receive = async {
+        tokio::select! {
+            item = rx.recv() => item,
+            _ = close_notify.notified() => None,
+        }
+    };
+    match max_wait_ms {
+        Some(wait_ms) => tokio::time::timeout(Duration::from_millis(u64::from(wait_ms)), receive)
+            .await
+            .unwrap_or(None),
+        None => receive.await,
     }
 }
 
@@ -857,9 +983,16 @@ pub fn get_log_level() -> String {
     .to_string()
 }
 
+#[derive(Default)]
+struct SchemaJsonCache {
+    services: HashMap<String, String>,
+    operations: HashMap<(String, String), String>,
+}
+
 #[napi]
 pub struct JsEngine {
     engine: Arc<Engine>,
+    schema_json_cache: Arc<StdMutex<SchemaJsonCache>>,
 }
 
 #[napi]
@@ -905,7 +1038,18 @@ impl JsEngine {
     }
 
     #[napi]
-    pub async fn request(&self, params: RequestInput) -> napi::Result<Buffer> {
+    pub async fn request(&self, params: RequestInput) -> napi::Result<NativeArrowBatch> {
+        let rust_params: RequestParams = params.try_into()?;
+        let batch = self
+            .engine
+            .request(rust_params)
+            .await
+            .map_err(blp_async_error_to_napi)?;
+        to_native_record_batch(batch)
+    }
+
+    #[napi]
+    pub async fn request_raw(&self, params: RequestInput) -> napi::Result<Buffer> {
         let rust_params: RequestParams = params.try_into()?;
         let batch = self
             .engine
@@ -1028,24 +1172,60 @@ impl JsEngine {
 
     #[napi]
     pub async fn get_schema(&self, service: String) -> napi::Result<String> {
+        if let Some(cached) = self
+            .schema_json_cache
+            .lock()
+            .expect("schema JSON cache poisoned")
+            .services
+            .get(&service)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+
         let schema = self
             .engine
             .get_schema(&service)
             .await
             .map_err(blp_async_error_to_napi)?;
-        serde_json::to_string(&*schema)
-            .map_err(|e| Error::new(Status::GenericFailure, format!("serialize schema: {e}")))
+        let serialized = serde_json::to_string(&*schema)
+            .map_err(|e| Error::new(Status::GenericFailure, format!("serialize schema: {e}")))?;
+        self.schema_json_cache
+            .lock()
+            .expect("schema JSON cache poisoned")
+            .services
+            .insert(service, serialized.clone());
+        Ok(serialized)
     }
 
     #[napi]
     pub async fn get_operation(&self, service: String, operation: String) -> napi::Result<String> {
+        let key = (service.clone(), operation.clone());
+        if let Some(cached) = self
+            .schema_json_cache
+            .lock()
+            .expect("schema JSON cache poisoned")
+            .operations
+            .get(&key)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+
         let op = self
             .engine
             .get_operation(&service, &operation)
             .await
             .map_err(blp_async_error_to_napi)?;
-        serde_json::to_string(&op)
-            .map_err(|e| Error::new(Status::GenericFailure, format!("serialize operation: {e}")))
+        let serialized = serde_json::to_string(&op).map_err(|e| {
+            Error::new(Status::GenericFailure, format!("serialize operation: {e}"))
+        })?;
+        self.schema_json_cache
+            .lock()
+            .expect("schema JSON cache poisoned")
+            .operations
+            .insert(key, serialized.clone());
+        Ok(serialized)
     }
 
     #[napi]
@@ -1058,19 +1238,49 @@ impl JsEngine {
 
     #[napi]
     pub fn get_cached_schema(&self, service: String) -> Option<String> {
-        self.engine
+        if let Some(cached) = self
+            .schema_json_cache
+            .lock()
+            .expect("schema JSON cache poisoned")
+            .services
+            .get(&service)
+            .cloned()
+        {
+            return Some(cached);
+        }
+
+        let serialized = self
+            .engine
             .get_cached_schema(&service)
-            .and_then(|s| serde_json::to_string(&*s).ok())
+            .and_then(|s| serde_json::to_string(&*s).ok())?;
+        self.schema_json_cache
+            .lock()
+            .expect("schema JSON cache poisoned")
+            .services
+            .insert(service, serialized.clone());
+        Some(serialized)
     }
 
     #[napi]
     pub fn invalidate_schema(&self, service: String) {
         self.engine.invalidate_schema(&service);
+        let mut cache = self
+            .schema_json_cache
+            .lock()
+            .expect("schema JSON cache poisoned");
+        cache.services.remove(&service);
+        cache
+            .operations
+            .retain(|(cached_service, _), _| cached_service != &service);
     }
 
     #[napi]
     pub fn clear_schema_cache(&self) {
         self.engine.clear_schema_cache();
+        *self
+            .schema_json_cache
+            .lock()
+            .expect("schema JSON cache poisoned") = SchemaJsonCache::default();
     }
 
     #[napi]
@@ -1200,7 +1410,7 @@ impl JsEngine {
         end_datetime: String,
         event_types: Option<Vec<String>>,
         include_broker_codes: Option<bool>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::fixed_income::recipe_bqr(
             &engine,
@@ -1212,7 +1422,7 @@ impl JsEngine {
         )
         .await
         .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1227,7 +1437,7 @@ impl JsEngine {
         yield_val: Option<f64>,
         price: Option<f64>,
         benchmark: Option<String>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let yt = yield_type
             .and_then(|v| xbbg_ext::transforms::fixed_income::YieldType::try_from(v).ok());
@@ -1236,7 +1446,7 @@ impl JsEngine {
         )
         .await
         .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1244,12 +1454,12 @@ impl JsEngine {
         &self,
         equity_ticker: String,
         fields: Option<Vec<String>>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::fixed_income::recipe_preferreds(&engine, equity_ticker, fields)
             .await
             .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1259,7 +1469,7 @@ impl JsEngine {
         ccy: Option<String>,
         fields: Option<Vec<String>>,
         active_only: Option<bool>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::fixed_income::recipe_corporate_bonds(
             &engine,
@@ -1270,7 +1480,7 @@ impl JsEngine {
         )
         .await
         .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1279,12 +1489,12 @@ impl JsEngine {
         gen_ticker: String,
         dt: String,
         freq: Option<String>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::futures::recipe_fut_ticker(&engine, gen_ticker, dt, freq)
             .await
             .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1293,12 +1503,12 @@ impl JsEngine {
         gen_ticker: String,
         dt: String,
         freq: Option<String>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::futures::recipe_active_futures(&engine, gen_ticker, dt, freq)
             .await
             .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1309,7 +1519,7 @@ impl JsEngine {
         chain_field: Option<String>,
         fields: Option<Vec<String>>,
         max_contracts: Option<i32>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::futures::recipe_futures_curve(
             &engine,
@@ -1321,16 +1531,16 @@ impl JsEngine {
         )
         .await
         .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
-    pub async fn recipe_cdx_ticker(&self, gen_ticker: String, dt: String) -> napi::Result<Buffer> {
+    pub async fn recipe_cdx_ticker(&self, gen_ticker: String, dt: String) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::futures::recipe_cdx_ticker(&engine, gen_ticker, dt)
             .await
             .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1339,13 +1549,13 @@ impl JsEngine {
         gen_ticker: String,
         dt: String,
         lookback_days: Option<i32>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch =
             xbbg_recipes::futures::recipe_active_cdx(&engine, gen_ticker, dt, lookback_days)
                 .await
                 .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1355,14 +1565,14 @@ impl JsEngine {
         start_date: String,
         end_date: String,
         dvd_type: Option<String>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::historical::recipe_dividend(
             &engine, tickers, dvd_type, start_date, end_date,
         )
         .await
         .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1373,7 +1583,7 @@ impl JsEngine {
         end_date: String,
         dividend_types: Option<Vec<String>>,
         window_days: Option<i32>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::historical::recipe_dividend_yield(
             &engine,
@@ -1385,7 +1595,7 @@ impl JsEngine {
         )
         .await
         .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1396,14 +1606,14 @@ impl JsEngine {
         end_date: String,
         ccy: Option<String>,
         factor: Option<f64>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::historical::recipe_turnover(
             &engine, tickers, start_date, end_date, ccy, factor,
         )
         .await
         .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1411,12 +1621,12 @@ impl JsEngine {
         &self,
         etf_ticker: String,
         fields: Option<Vec<String>>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::historical::recipe_etf_holdings(&engine, etf_ticker, fields)
             .await
             .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1432,7 +1642,7 @@ impl JsEngine {
         include_derived: Option<bool>,
         risk_free_rate: Option<f64>,
         dividend_yield_field: Option<String>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::volatility::recipe_vol_surface(
             &engine,
@@ -1448,7 +1658,7 @@ impl JsEngine {
         )
         .await
         .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1457,30 +1667,30 @@ impl JsEngine {
         index: String,
         field: Option<String>,
         asof: Option<String>,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::indices::recipe_index_members(&engine, index, field, asof)
             .await
             .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
-    pub async fn recipe_resolve_isins(&self, isins: Vec<String>) -> napi::Result<Buffer> {
+    pub async fn recipe_resolve_isins(&self, isins: Vec<String>) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::identifiers::recipe_resolve_isins(&engine, isins)
             .await
             .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
-    pub async fn recipe_issuer_isins(&self, bond_isins: Vec<String>) -> napi::Result<Buffer> {
+    pub async fn recipe_issuer_isins(&self, bond_isins: Vec<String>) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::identifiers::recipe_issuer_isins(&engine, bond_isins)
             .await
             .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     #[napi]
@@ -1490,20 +1700,21 @@ impl JsEngine {
         target_ccy: String,
         start_date: String,
         end_date: String,
-    ) -> napi::Result<Buffer> {
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::currency::recipe_currency_conversion(
             &engine, ticker, target_ccy, start_date, end_date,
         )
         .await
         .map_err(recipe_error_to_napi)?;
-        to_ipc_buffer(batch)
+        to_native_record_batch(batch)
     }
 
     fn start_engine(config: EngineConfig) -> napi::Result<Self> {
         let engine = Engine::start(config).map_err(blp_async_error_to_napi)?;
         Ok(Self {
             engine: Arc::new(engine),
+            schema_json_cache: Arc::new(StdMutex::new(SchemaJsonCache::default())),
         })
     }
 
@@ -1521,6 +1732,7 @@ impl JsEngine {
                 .map_err(|error| blp_async_error_to_napi(*error))?;
         Ok(Self {
             engine: Arc::new(engine),
+            schema_json_cache: Arc::new(StdMutex::new(SchemaJsonCache::default())),
         })
     }
 }
@@ -1533,6 +1745,11 @@ pub struct JsSubscription {
     closed: Arc<AtomicBool>,
     mutation: Arc<Mutex<()>>,
     stream: Arc<Mutex<Option<SubscriptionStreamHandle>>>,
+    pending: SharedPendingStreamItems,
+    scalar_layout_version: Arc<Mutex<Option<u32>>>,
+    arrow_batcher: Arc<Mutex<SubscriptionArrowBatcher>>,
+    fields_snapshot: Arc<Vec<String>>,
+    status: SharedSubscriptionStatus,
 }
 
 #[napi]
@@ -1545,6 +1762,8 @@ impl JsSubscription {
     ) -> napi::Result<Self> {
         let (rx, tx, claim, status, ft, op_policy, service, options, all_fields) =
             stream.into_parts().map_err(blp_error_to_napi)?;
+        let fields_snapshot = Arc::new(fields.clone());
+        let status_snapshot = status.clone();
         let handle = SubscriptionStreamHandle {
             tx,
             claim: Some(claim),
@@ -1563,14 +1782,24 @@ impl JsSubscription {
             closed: Arc::new(AtomicBool::new(false)),
             mutation: Arc::new(Mutex::new(())),
             stream: Arc::new(Mutex::new(Some(handle))),
+            pending: Arc::new(Mutex::new(VecDeque::new())),
+            scalar_layout_version: Arc::new(Mutex::new(None)),
+            arrow_batcher: Arc::new(Mutex::new(SubscriptionArrowBatcher::new())),
+            fields_snapshot,
+            status: status_snapshot,
         })
     }
 
     #[napi]
-    pub async fn next_update(&self) -> napi::Result<Option<NativeSubscriptionUpdate>> {
+    pub async fn next_updates(
+        &self,
+        max_items: Option<u32>,
+        max_wait_ms: Option<u32>,
+    ) -> napi::Result<Option<NativeSubscriptionUpdateBatch>> {
         if self.closed.load(Ordering::Acquire) {
             return Ok(None);
         }
+        let limit = subscription_limit(max_items, "maxItems")?;
         let mut rx = {
             let mut guard = self.rx.lock().await;
             guard
@@ -1578,10 +1807,47 @@ impl JsSubscription {
                 .ok_or_else(|| Error::new(Status::GenericFailure, "subscription receiver busy"))?
         };
 
-        let item = tokio::select! {
-            item = rx.recv() => item,
-            _ = self.close_notify.notified() => None,
+        let first = match self.pending.lock().await.pop_front() {
+            Some(item) => Some(item),
+            None => receive_stream_item(&mut rx, &self.close_notify, max_wait_ms).await,
         };
+
+        let mut updates = Vec::with_capacity(limit);
+        let layout_version = match first {
+            Some(Ok(update)) => {
+                let version = update.layout.version;
+                updates.push(update);
+                version
+            }
+            Some(Err(e)) => {
+                let mut guard = self.rx.lock().await;
+                if guard.is_none() {
+                    *guard = Some(rx);
+                    self.rx_available.notify_waiters();
+                }
+                return Err(blp_error_to_napi(e));
+            }
+            None => {
+                let mut guard = self.rx.lock().await;
+                if guard.is_none() {
+                    *guard = Some(rx);
+                    self.rx_available.notify_waiters();
+                }
+                return Ok(None);
+            }
+        };
+
+        while updates.len() < limit {
+            match rx.try_recv() {
+                Ok(Ok(update)) if update.layout.version == layout_version => updates.push(update),
+                Ok(item) => {
+                    self.pending.lock().await.push_front(item);
+                    break;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        }
 
         {
             let mut guard = self.rx.lock().await;
@@ -1591,18 +1857,20 @@ impl JsSubscription {
             }
         }
 
-        match item {
-            Some(Ok(update)) => Ok(Some(to_native_update(update))),
-            Some(Err(e)) => Err(blp_error_to_napi(e)),
-            None => Ok(None),
-        }
+        let mut last_layout = self.scalar_layout_version.lock().await;
+        Ok(to_native_update_batch(updates, &mut *last_layout))
     }
 
     #[napi]
-    pub async fn next_arrow(&self) -> napi::Result<Option<NativeArrowBatch>> {
+    pub async fn next_arrow_batch(
+        &self,
+        max_rows: Option<u32>,
+        max_wait_ms: Option<u32>,
+    ) -> napi::Result<Option<NativeArrowBatch>> {
         if self.closed.load(Ordering::Acquire) {
             return Ok(None);
         }
+        let limit = subscription_limit(max_rows, "maxRows")?;
         let mut rx = {
             let mut guard = self.rx.lock().await;
             guard
@@ -1610,10 +1878,59 @@ impl JsSubscription {
                 .ok_or_else(|| Error::new(Status::GenericFailure, "subscription receiver busy"))?
         };
 
-        let item = tokio::select! {
-            item = rx.recv() => item,
-            _ = self.close_notify.notified() => None,
+        let first = match self.pending.lock().await.pop_front() {
+            Some(item) => Some(item),
+            None => receive_stream_item(&mut rx, &self.close_notify, max_wait_ms).await,
         };
+
+        let mut batcher = self.arrow_batcher.lock().await;
+        let mut output = match first {
+            Some(Ok(update)) => {
+                if let Some(batch) = batcher.append(&update) {
+                    Some(batch)
+                } else if batcher.rows() >= limit {
+                    batcher.flush()
+                } else {
+                    None
+                }
+            }
+            Some(Err(e)) => {
+                let mut guard = self.rx.lock().await;
+                if guard.is_none() {
+                    *guard = Some(rx);
+                    self.rx_available.notify_waiters();
+                }
+                return Err(blp_error_to_napi(e));
+            }
+            None => {
+                let mut guard = self.rx.lock().await;
+                if guard.is_none() {
+                    *guard = Some(rx);
+                    self.rx_available.notify_waiters();
+                }
+                return Ok(None);
+            }
+        };
+
+        while output.is_none() && batcher.rows() < limit {
+            match rx.try_recv() {
+                Ok(Ok(update)) => {
+                    if let Some(batch) = batcher.append(&update) {
+                        output = Some(batch);
+                    }
+                }
+                Ok(item) => {
+                    self.pending.lock().await.push_front(item);
+                    break;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        }
+        if output.is_none() {
+            output = batcher.flush();
+        }
+        drop(batcher);
 
         {
             let mut guard = self.rx.lock().await;
@@ -1623,9 +1940,8 @@ impl JsSubscription {
             }
         }
 
-        match item {
-            Some(Ok(batch)) => Ok(Some(to_native_arrow(batch)?)),
-            Some(Err(e)) => Err(blp_error_to_napi(e)),
+        match output {
+            Some(batch) => Ok(Some(to_native_record_batch(batch)?)),
             None => Ok(None),
         }
     }
@@ -1704,11 +2020,7 @@ impl JsSubscription {
             .map_err(blp_async_error_to_napi)?;
 
         if self.stream.lock().await.is_some() {
-            status.rcu(|current| {
-                let mut next = (**current).clone();
-                next.add_active(&new_topics, &new_keys, new_metrics.clone());
-                Arc::new(next)
-            });
+            status.update(|state| state.add_active(&new_topics, &new_keys, new_metrics.clone()));
         } else if !new_keys.is_empty() {
             command
                 .unsubscribe(new_keys)
@@ -1760,12 +2072,10 @@ impl JsSubscription {
             .map_err(blp_async_error_to_napi)?;
 
         if self.stream.lock().await.is_some() {
-            status.rcu(|current| {
-                let mut next = (**current).clone();
+            status.update(|state| {
                 for ticker in &topics_to_remove {
-                    next.remove_topic(ticker);
+                    state.remove_topic(ticker);
                 }
-                Arc::new(next)
             });
         }
 
@@ -1774,68 +2084,45 @@ impl JsSubscription {
 
     #[napi(getter)]
     pub fn tickers(&self) -> Vec<String> {
-        let guard = self.stream.blocking_lock();
-        match guard.as_ref() {
-            Some(handle) => handle.status.load().topics().to_vec(),
-            None => Vec::new(),
-        }
+        self.status.load().topics().to_vec()
     }
 
     #[napi(getter)]
     pub fn fields(&self) -> Vec<String> {
-        let guard = self.stream.blocking_lock();
-        match guard.as_ref() {
-            Some(handle) => handle.fields.clone(),
-            None => Vec::new(),
-        }
+        self.fields_snapshot.as_ref().clone()
     }
 
     #[napi(getter)]
     pub fn is_active(&self) -> bool {
-        let guard = self.stream.blocking_lock();
-        match guard.as_ref() {
-            Some(handle) => handle.claim.is_some() && handle.status.load().has_active_topics(),
-            None => false,
-        }
+        !self.closed.load(Ordering::Acquire) && self.status.load().has_active_topics()
     }
 
     #[napi(getter)]
     pub fn stats(&self) -> SubscriptionStats {
-        let guard = self.stream.blocking_lock();
-        match guard.as_ref() {
-            Some(handle) => {
-                let snapshot = handle.status.load();
-                let metrics: Vec<_> = snapshot.fields_metrics().values().cloned().collect();
-                SubscriptionStats {
-                    messages_received: to_i64_saturating(
-                        metrics
-                            .iter()
-                            .map(|metric| metric.messages_received.load(Ordering::Relaxed))
-                            .sum(),
-                    ),
-                    dropped_batches: to_i64_saturating(
-                        metrics
-                            .iter()
-                            .map(|metric| metric.dropped_batches.load(Ordering::Relaxed))
-                            .sum(),
-                    ),
-                    batches_sent: to_i64_saturating(
-                        metrics
-                            .iter()
-                            .map(|metric| metric.batches_sent.load(Ordering::Relaxed))
-                            .sum(),
-                    ),
-                    slow_consumer: metrics
-                        .iter()
-                        .any(|metric| metric.slow_consumer.load(Ordering::Relaxed)),
-                }
-            }
-            None => SubscriptionStats {
-                messages_received: 0,
-                dropped_batches: 0,
-                batches_sent: 0,
-                slow_consumer: false,
-            },
+        let snapshot = self.status.load();
+        let metrics: Vec<_> = snapshot.fields_metrics().values().cloned().collect();
+        SubscriptionStats {
+            messages_received: to_i64_saturating(
+                metrics
+                    .iter()
+                    .map(|metric| metric.messages_received.load(Ordering::Relaxed))
+                    .sum(),
+            ),
+            dropped_batches: to_i64_saturating(
+                metrics
+                    .iter()
+                    .map(|metric| metric.dropped_batches.load(Ordering::Relaxed))
+                    .sum(),
+            ),
+            batches_sent: to_i64_saturating(
+                metrics
+                    .iter()
+                    .map(|metric| metric.batches_sent.load(Ordering::Relaxed))
+                    .sum(),
+            ),
+            slow_consumer: metrics
+                .iter()
+                .any(|metric| metric.slow_consumer.load(Ordering::Relaxed)),
         }
     }
 
@@ -1843,7 +2130,7 @@ impl JsSubscription {
     pub async fn unsubscribe(
         &self,
         drain: Option<bool>,
-    ) -> napi::Result<Option<Vec<NativeSubscriptionUpdate>>> {
+    ) -> napi::Result<Option<Vec<NativeSubscriptionUpdateBatch>>> {
         let _mutation = self.mutation.lock().await;
         self.closed.store(true, Ordering::Release);
         let drain = drain.unwrap_or(false);
@@ -1863,11 +2150,7 @@ impl JsSubscription {
             drop(handle);
 
             let clear_active = || {
-                status.rcu(|current| {
-                    let mut next = (**current).clone();
-                    next.clear_active();
-                    Arc::new(next)
-                });
+                status.update(|state| state.clear_active());
             };
 
             if let Some(claim) = claim {
@@ -1902,18 +2185,46 @@ impl JsSubscription {
             notified.await;
         };
 
-        let mut remaining = Vec::new();
-        if let Some(mut rx) = rx {
-            if drain {
+        let mut drained_updates = Vec::new();
+        if drain {
+            {
+                let mut pending = self.pending.lock().await;
+                while let Some(item) = pending.pop_front() {
+                    if let Ok(update) = item {
+                        drained_updates.push(update);
+                    }
+                }
+            }
+            if let Some(mut rx) = rx {
                 while let Ok(item) = rx.try_recv() {
                     if let Ok(update) = item {
-                        remaining.push(to_native_update(update));
+                        drained_updates.push(update);
                     }
                 }
             }
         }
 
         unsubscribe_result?;
+
+        let mut remaining = Vec::new();
+        if !drained_updates.is_empty() {
+            let mut last_layout = self.scalar_layout_version.lock().await;
+            let mut current = Vec::new();
+            let mut current_version = None;
+            for update in drained_updates {
+                if current_version.is_some_and(|version| version != update.layout.version) {
+                    if let Some(batch) = to_native_update_batch(current, &mut *last_layout) {
+                        remaining.push(batch);
+                    }
+                    current = Vec::new();
+                }
+                current_version = Some(update.layout.version);
+                current.push(update);
+            }
+            if let Some(batch) = to_native_update_batch(current, &mut *last_layout) {
+                remaining.push(batch);
+            }
+        }
 
         if remaining.is_empty() {
             Ok(None)
@@ -1946,11 +2257,7 @@ impl JsSubscription {
             drop(handle);
 
             let clear_active = || {
-                status.rcu(|current| {
-                    let mut next = (**current).clone();
-                    next.clear_active();
-                    Arc::new(next)
-                });
+                status.update(|state| state.clear_active());
             };
 
             if let Some(claim) = claim {
@@ -1986,13 +2293,29 @@ impl JsSubscription {
         };
 
         let mut remaining = Vec::new();
-        if let Some(mut rx) = rx {
-            if drain {
-                while let Ok(item) = rx.try_recv() {
-                    if let Ok(batch) = item {
-                        remaining.push(to_native_arrow(batch)?);
+        if drain {
+            let mut batcher = self.arrow_batcher.lock().await;
+            {
+                let mut pending = self.pending.lock().await;
+                while let Some(item) = pending.pop_front() {
+                    if let Ok(update) = item {
+                        if let Some(batch) = batcher.append(&update) {
+                            remaining.push(to_native_record_batch(batch)?);
+                        }
                     }
                 }
+            }
+            if let Some(mut rx) = rx {
+                while let Ok(item) = rx.try_recv() {
+                    if let Ok(update) = item {
+                        if let Some(batch) = batcher.append(&update) {
+                            remaining.push(to_native_record_batch(batch)?);
+                        }
+                    }
+                }
+            }
+            if let Some(batch) = batcher.flush() {
+                remaining.push(to_native_record_batch(batch)?);
             }
         }
 

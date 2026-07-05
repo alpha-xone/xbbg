@@ -12,6 +12,8 @@ Results are saved per version:
 """
 
 from __future__ import annotations
+import argparse
+import inspect
 
 from datetime import datetime
 import json
@@ -60,7 +62,10 @@ def run_benchmark_module(module_name: str):
     try:
         module = __import__(module_name)
         if hasattr(module, "main"):
-            return module.main()
+            main_func = module.main
+            if inspect.signature(main_func).parameters:
+                return main_func([])
+            return main_func()
         else:
             logger.warning(f"{module_name} has no main() function")
             return []
@@ -158,8 +163,9 @@ def generate_json_report(all_results: dict, output_path: Path, version: str, tim
     }
 
     for operation, results in all_results.items():
-        json_data["benchmarks"][operation] = [
-            {
+        entries = []
+        for r in results:
+            entry = {
                 "package": r.package,
                 "operation": r.operation,
                 "cold_start_ms": r.cold_start_ms,
@@ -172,24 +178,57 @@ def generate_json_report(all_results: dict, output_path: Path, version: str, tim
                 "data_shape": r.data_shape,
                 "iterations": r.iterations,
             }
-            for r in results
-        ]
+            for extra in (
+                "warm_min_ms",
+                "warmup_iterations",
+                "offline",
+                "scenario",
+                "rows",
+                "columns",
+                "build_profile",
+                "extension_path",
+            ):
+                if hasattr(r, extra):
+                    entry[extra] = getattr(r, extra)
+            entries.append(entry)
+        json_data["benchmarks"][operation] = entries
 
     with output_path.open("w") as f:
         json.dump(json_data, f, indent=2)
 
 
-def main():
+def parse_args(argv: list[str] | None = None):
+    """Parse benchmark runner arguments."""
+    parser = argparse.ArgumentParser(description="Run xbbg benchmark suite")
+    parser.add_argument(
+        "--offline",
+        dest="include_offline",
+        action="store_true",
+        default=True,
+        help="Include offline binding handoff benchmarks (default)",
+    )
+    parser.add_argument(
+        "--no-offline",
+        dest="include_offline",
+        action="store_false",
+        help="Skip offline binding handoff benchmarks",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None):
     """Run all benchmarks and generate reports."""
     logger.info("=" * 70)
     logger.info("xbbg Comprehensive Benchmark Suite")
     logger.info("=" * 70)
+    args = parse_args(argv)
 
     # Get version
     version = get_xbbg_version()
     logger.info(f"\nxbbg version: {version}")
     logger.info("\nRunning benchmarks with live Bloomberg data...")
-    logger.info("Estimated data usage: ~200-350 data points\n")
+    logger.info("Estimated live data usage: ~200-350 data points")
+    logger.info("Offline binding handoff benchmark included: %s\n", args.include_offline)
 
     all_results = {}
 
@@ -201,6 +240,8 @@ def main():
         ("bench_bdtick", "BDTICK - Tick Data"),
         ("bench_bql", "BQL - Query Language"),
     ]
+    if args.include_offline:
+        benchmarks.append(("bench_handoff_offline", "Binding Handoff - Offline"))
 
     for module_name, description in benchmarks:
         try:

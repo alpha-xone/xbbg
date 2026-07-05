@@ -38,6 +38,51 @@ import {
 import type { NativeArrowColumn, NativeArrowZeroCopyBatch } from './napi';
 
 const NATIVE_ARROW_BUFFERS = Symbol('@xbbg/nativeArrowBuffers');
+const EMPTY_BUFFER = Buffer.alloc(0);
+
+interface CachedArrowSchema {
+  readonly fields: Field[];
+  readonly types: DataType[];
+  readonly schema: Schema;
+  readonly structType: Struct;
+}
+
+const schemaCache = new Map<string, CachedArrowSchema>();
+
+function schemaFingerprint(batch: NativeArrowZeroCopyBatch): string {
+  const columns = batch.columns
+    .map((column) =>
+      [
+        column.name,
+        column.type,
+        column.nullable ? '1' : '0',
+        column.timezone ?? '',
+      ].join('\u0000'),
+    )
+    .join('\u0001');
+  const metadata = Object.entries(batch.metadata)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}\u0000${value}`)
+    .join('\u0001');
+  return `${columns}\u0002${metadata}`;
+}
+
+function cachedSchema(batch: NativeArrowZeroCopyBatch): CachedArrowSchema {
+  const fingerprint = schemaFingerprint(batch);
+  const cached = schemaCache.get(fingerprint);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const types = batch.columns.map(arrowType);
+  const fields = batch.columns.map(
+    (column, index) => new Field(column.name, types[index] as DataType, column.nullable),
+  );
+  const schema = new Schema(fields, new Map(Object.entries(batch.metadata)));
+  const created = { fields, schema, structType: new Struct(fields), types };
+  schemaCache.set(fingerprint, created);
+  return created;
+}
+
 
 function unsupportedNativeArrowType(type: never): never {
   throw new Error(`Unsupported native Arrow column type: ${String(type)}`);
@@ -50,19 +95,17 @@ interface TypedArrayConstructor<T extends ArrayBufferView> {
 
 export function tableFromNativeArrowBatch(batch: NativeArrowZeroCopyBatch): Table {
   const retainedBuffers: Buffer[] = [];
-  const fields = batch.columns.map((column) => {
-    const type = arrowType(column);
-    return new Field(column.name, type, column.nullable);
-  });
-  const children = batch.columns.map((column) => dataFromColumn(column, retainedBuffers));
+  const cached = cachedSchema(batch);
+  const children = batch.columns.map((column, index) =>
+    dataFromColumn(column, retainedBuffers, cached.types[index] as DataType),
+  );
 
-  const schema = new Schema(fields, new Map(Object.entries(batch.metadata)));
   const structData = makeData({
     children,
     length: batch.numRows,
-    type: new Struct(fields),
+    type: cached.structType,
   });
-  const table = new Table(schema, new RecordBatch(schema, structData));
+  const table = new Table(cached.schema, new RecordBatch(cached.schema, structData));
 
   // Keep the original Node Buffer views alive. Numeric Arrow vectors retain typed
   // Views over the same backing ArrayBuffers, but keeping these Buffer objects on
@@ -75,96 +118,100 @@ export function tableFromNativeArrowBatch(batch: NativeArrowZeroCopyBatch): Tabl
   return table;
 }
 
-function dataFromColumn(column: NativeArrowColumn, retainedBuffers: Buffer[]): Data {
+function dataFromColumn(
+  column: NativeArrowColumn,
+  retainedBuffers: Buffer[],
+  type: DataType,
+): Data {
   const nullBitmap = optionalUint8View(column.nullBitmap, retainedBuffers);
   switch (column.type) {
     case 'bool': {
       return makeData({
-        type: new Bool(),
+        type,
         length: column.length,
         nullCount: column.nullCount,
         nullBitmap,
         data: requiredUint8View(column, retainedBuffers, Math.ceil(column.length / 8)),
-      });
+      } as never) as Data;
     }
     case 'binary': {
       return makeData({
-        type: new Binary(),
+        type,
         length: column.length,
         nullCount: column.nullCount,
         nullBitmap,
         valueOffsets: requiredOffsets(column, retainedBuffers),
         data: requiredUint8View(column, retainedBuffers),
-      });
+      } as never) as Data;
     }
     case 'date32': {
-      return scalarData(column, retainedBuffers, nullBitmap, new DateDay(), Int32Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Int32Array);
     }
     case 'date64': {
-      return scalarData(column, retainedBuffers, nullBitmap, new DateMillisecond(), BigInt64Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, BigInt64Array);
     }
     case 'float32': {
-      return scalarData(column, retainedBuffers, nullBitmap, new Float32(), Float32Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Float32Array);
     }
     case 'float64': {
-      return scalarData(column, retainedBuffers, nullBitmap, new Float64(), Float64Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Float64Array);
     }
     case 'int8': {
-      return scalarData(column, retainedBuffers, nullBitmap, new Int8(), Int8Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Int8Array);
     }
     case 'int16': {
-      return scalarData(column, retainedBuffers, nullBitmap, new Int16(), Int16Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Int16Array);
     }
     case 'int32': {
-      return scalarData(column, retainedBuffers, nullBitmap, new Int32(), Int32Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Int32Array);
     }
     case 'int64': {
-      return scalarData(column, retainedBuffers, nullBitmap, new Int64(), BigInt64Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, BigInt64Array);
     }
     case 'large_binary': {
       return makeData({
-        type: new LargeBinary(),
+        type,
         length: column.length,
         nullCount: column.nullCount,
         nullBitmap,
         valueOffsets: requiredLargeOffsets(column, retainedBuffers),
         data: requiredUint8View(column, retainedBuffers),
-      });
+      } as never) as Data;
     }
     case 'large_utf8': {
       return makeData({
-        type: new LargeUtf8(),
+        type,
         length: column.length,
         nullCount: column.nullCount,
         nullBitmap,
         valueOffsets: requiredLargeOffsets(column, retainedBuffers),
         data: requiredUint8View(column, retainedBuffers),
-      });
+      } as never) as Data;
     }
     case 'null': {
       return makeData({
-        type: new Null(),
+        type,
         length: column.length,
-      });
+      } as never) as Data;
     }
     case 'time32_ms': {
-      return scalarData(column, retainedBuffers, nullBitmap, new TimeMillisecond(), Int32Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Int32Array);
     }
     case 'time32_s': {
-      return scalarData(column, retainedBuffers, nullBitmap, new TimeSecond(), Int32Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Int32Array);
     }
     case 'time64_us': {
-      return scalarData(column, retainedBuffers, nullBitmap, new TimeMicrosecond(), BigInt64Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, BigInt64Array);
     }
     case 'time64_ns': {
-      return scalarData(column, retainedBuffers, nullBitmap, new TimeNanosecond(), BigInt64Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, BigInt64Array);
     }
     case 'timestamp_ms': {
       return scalarData(
         column,
         retainedBuffers,
         nullBitmap,
-        new TimestampMillisecond(column.timezone),
+        type,
         BigInt64Array,
       );
     }
@@ -173,7 +220,7 @@ function dataFromColumn(column: NativeArrowColumn, retainedBuffers: Buffer[]): D
         column,
         retainedBuffers,
         nullBitmap,
-        new TimestampNanosecond(column.timezone),
+        type,
         BigInt64Array,
       );
     }
@@ -182,7 +229,7 @@ function dataFromColumn(column: NativeArrowColumn, retainedBuffers: Buffer[]): D
         column,
         retainedBuffers,
         nullBitmap,
-        new TimestampSecond(column.timezone),
+        type,
         BigInt64Array,
       );
     }
@@ -191,31 +238,31 @@ function dataFromColumn(column: NativeArrowColumn, retainedBuffers: Buffer[]): D
         column,
         retainedBuffers,
         nullBitmap,
-        new TimestampMicrosecond(column.timezone),
+        type,
         BigInt64Array,
       );
     }
     case 'uint8': {
-      return scalarData(column, retainedBuffers, nullBitmap, new Uint8(), Uint8Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Uint8Array);
     }
     case 'uint16': {
-      return scalarData(column, retainedBuffers, nullBitmap, new Uint16(), Uint16Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Uint16Array);
     }
     case 'uint32': {
-      return scalarData(column, retainedBuffers, nullBitmap, new Uint32(), Uint32Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, Uint32Array);
     }
     case 'uint64': {
-      return scalarData(column, retainedBuffers, nullBitmap, new Uint64(), BigUint64Array);
+      return scalarData(column, retainedBuffers, nullBitmap, type, BigUint64Array);
     }
     case 'utf8': {
       return makeData({
-        type: new Utf8(),
+        type,
         length: column.length,
         nullCount: column.nullCount,
         nullBitmap,
         valueOffsets: requiredOffsets(column, retainedBuffers),
         data: requiredUint8View(column, retainedBuffers),
-      });
+      } as never) as Data;
     }
   }
   return unsupportedNativeArrowType(column.type);
@@ -305,20 +352,20 @@ function arrowType(column: NativeArrowColumn): DataType {
   return unsupportedNativeArrowType(column.type);
 }
 
-function scalarData<T extends DataType & { TArray: ArrayBufferView }>(
+function scalarData(
   column: NativeArrowColumn,
   retainedBuffers: Buffer[],
   nullBitmap: Uint8Array | undefined,
-  type: T,
-  ctor: TypedArrayConstructor<T['TArray']>,
-): Data<T> {
+  type: DataType,
+  ctor: TypedArrayConstructor<ArrayBufferView>,
+): Data {
   return makeData({
     data: requiredTypedView(column, ctor, retainedBuffers),
     length: column.length,
     nullBitmap,
     nullCount: column.nullCount,
     type,
-  } as never) as Data<T>;
+  } as never) as Data;
 }
 
 function requiredTypedView<T extends ArrayBufferView>(
@@ -326,7 +373,8 @@ function requiredTypedView<T extends ArrayBufferView>(
   ctor: TypedArrayConstructor<T>,
   retainedBuffers: Buffer[],
 ): T {
-  const buffer = requireBuffer(column, 'data');
+  const byteLength = column.length * ctor.BYTES_PER_ELEMENT;
+  const buffer = requireBuffer(column, 'data', byteLength);
   assertBufferByteLength(column, 'data', buffer, column.length, ctor.BYTES_PER_ELEMENT);
   retainedBuffers.push(buffer);
   return new ctor(buffer.buffer, buffer.byteOffset, column.length);
@@ -363,7 +411,7 @@ function requiredUint8View(
   retainedBuffers: Buffer[],
   byteLength?: number,
 ): Uint8Array {
-  const buffer = requireBuffer(column, 'data');
+  const buffer = requireBuffer(column, 'data', byteLength);
   if (byteLength !== undefined) {
     assertBufferByteLength(column, 'data', buffer, byteLength, 1);
   }
@@ -403,9 +451,16 @@ function assertBufferByteLength(
   }
 }
 
-function requireBuffer(column: NativeArrowColumn, property: 'data' | 'offsets'): Buffer {
+function requireBuffer(
+  column: NativeArrowColumn,
+  property: 'data' | 'offsets',
+  expectedByteLength?: number,
+): Buffer {
   const buffer = column[property];
   if (buffer === undefined) {
+    if (property === 'data' && (expectedByteLength === undefined || expectedByteLength === 0)) {
+      return EMPTY_BUFFER;
+    }
     throw new Error(`native Arrow column ${column.name} is missing ${property} buffer`);
   }
   return buffer;

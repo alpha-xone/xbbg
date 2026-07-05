@@ -8,14 +8,15 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use smallvec::SmallVec;
 use tokio::sync::mpsc;
 
 use xbbg_core::{BlpError, DataType as BlpDataType, Message, Name};
 
 use super::super::OverflowPolicy;
 use super::update::{
-    FieldIndex, FieldKind, FieldLayout, FieldMeta, SubscriptionUpdate, TopicId, UpdateField,
-    UpdateValue,
+    FieldIndex, FieldKind, FieldLayout, FieldMeta, StringValueCache, SubscriptionUpdate, TopicId,
+    UpdateField, UpdateValue,
 };
 
 pub struct SubscriptionMetrics {
@@ -38,6 +39,12 @@ enum AllFieldSlot {
     Skipped {
         key: usize,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageOutcome {
+    Normal { first_message: bool },
+    DataLoss,
 }
 
 /// State for a single subscription, owned by PumpA.
@@ -77,6 +84,10 @@ pub struct SubscriptionState {
     capture_all_fields: bool,
     /// Optional projected field for Bloomberg mktbar message kind (MarketBarStart/Update/End).
     subscription_data_index: Option<FieldIndex>,
+    event_type_index: FieldIndex,
+    event_subtype_index: FieldIndex,
+    string_value_cache: Vec<StringValueCache>,
+    subscription_data_type_cache: [Option<(usize, Arc<str>)>; 4],
 }
 
 impl SubscriptionState {
@@ -133,16 +144,22 @@ impl SubscriptionState {
                 field.into(),
             );
         }
-        for field in Self::EVENT_METADATA_FIELDS {
-            Self::push_field_if_new(
-                &mut field_strings,
-                &mut field_names,
-                &mut field_name_keys,
-                &mut invalid_dateortime_fields,
-                &mut field_kinds,
-                Arc::from(field),
-            );
-        }
+        let event_type_index = Self::push_field_if_new(
+            &mut field_strings,
+            &mut field_names,
+            &mut field_name_keys,
+            &mut invalid_dateortime_fields,
+            &mut field_kinds,
+            Arc::from("MKTDATA_EVENT_TYPE"),
+        );
+        let event_subtype_index = Self::push_field_if_new(
+            &mut field_strings,
+            &mut field_names,
+            &mut field_name_keys,
+            &mut invalid_dateortime_fields,
+            &mut field_kinds,
+            Arc::from("MKTDATA_EVENT_SUBTYPE"),
+        );
         let subscription_data_index = if topic.starts_with("//blp/mktbar/") {
             Some(Self::push_field_if_new(
                 &mut field_strings,
@@ -166,6 +183,7 @@ impl SubscriptionState {
             last_data_loss_us: Arc::new(AtomicU64::new(0)),
         });
         let layout = Self::build_layout(1, &field_strings, &field_kinds);
+        let string_value_cache = vec![None; field_strings.len()];
 
         Self {
             topic: Arc::from(topic),
@@ -188,6 +206,10 @@ impl SubscriptionState {
             suppress_closed_warning: false,
             capture_all_fields,
             subscription_data_index,
+            event_type_index,
+            event_subtype_index,
+            string_value_cache,
+            subscription_data_type_cache: std::array::from_fn(|_| None),
         }
     }
 
@@ -234,18 +256,20 @@ impl SubscriptionState {
     /// Timestamps use Bloomberg SDK receive time when available (requires
     /// `setRecordSubscriptionDataReceiveTimes(true)`), falling back to
     /// `SystemTime::now()` if not enabled.
-    pub fn on_message(&mut self, msg: &Message) -> bool {
+    pub fn on_message(&mut self, msg: &Message) -> MessageOutcome {
         let timestamp = msg.time_received_us().unwrap_or_else(Self::system_time_us);
-        let subscription_data = self
-            .subscription_data_index
-            .is_some()
-            .then(|| Arc::<str>::from(msg.message_type().as_str()));
+        let subscription_data = self.subscription_data_arc(msg);
         let elem = msg.elements();
         let values = if self.capture_all_fields {
             self.extract_all_fields(&elem, subscription_data.as_ref())
         } else {
             self.extract_requested_fields(&elem, subscription_data.as_ref())
         };
+
+        if self.is_dataloss_update(&values) {
+            self.on_dataloss(msg.time_received_us());
+            return MessageOutcome::DataLoss;
+        }
 
         self.metrics
             .messages_received
@@ -262,11 +286,40 @@ impl SubscriptionState {
             topic_id: self.topic_id,
             topic: self.topic.clone(),
             layout: self.layout.clone(),
-            values: values.into_boxed_slice(),
+            values,
         };
         self.send_update(update);
 
-        first_message
+        MessageOutcome::Normal { first_message }
+    }
+
+    fn subscription_data_arc(&mut self, msg: &Message) -> Option<Arc<str>> {
+        self.subscription_data_index?;
+        let key = msg.name_key();
+        for entry in &self.subscription_data_type_cache {
+            if let Some((cached_key, cached)) = entry {
+                if *cached_key == key {
+                    return Some(Arc::clone(cached));
+                }
+            }
+        }
+        let value = Arc::<str>::from(msg.type_str());
+        let slot = key % self.subscription_data_type_cache.len();
+        self.subscription_data_type_cache[slot] = Some((key, Arc::clone(&value)));
+        Some(value)
+    }
+
+    fn is_dataloss_update(&self, values: &[UpdateField]) -> bool {
+        let mut is_summary = false;
+        let mut is_dataloss = false;
+        for field in values {
+            if field.index == self.event_type_index {
+                is_summary = matches!(&field.value, UpdateValue::Str(value) if value.as_ref() == "SUMMARY");
+            } else if field.index == self.event_subtype_index {
+                is_dataloss = matches!(&field.value, UpdateValue::Str(value) if value.as_ref() == "DATALOSS");
+            }
+        }
+        is_summary && is_dataloss
     }
 
     fn system_time_us() -> i64 {
@@ -280,8 +333,8 @@ impl SubscriptionState {
         &mut self,
         elem: &xbbg_core::Element<'_>,
         subscription_data: Option<&Arc<str>>,
-    ) -> Vec<UpdateField> {
-        let mut values = Vec::with_capacity(self.field_names.len());
+    ) -> SmallVec<[UpdateField; 8]> {
+        let mut values = SmallVec::with_capacity(self.field_names.len());
         for idx in 0..self.field_names.len() {
             let value = if Some(idx as FieldIndex) == self.subscription_data_index {
                 subscription_data
@@ -292,7 +345,7 @@ impl SubscriptionState {
                 UpdateValue::Null
             } else if let Some(field) = elem.get(&self.field_names[idx]) {
                 let datatype = field.datatype();
-                let value = UpdateValue::from_blp(field.get_value_fast_with_datatype(0, datatype));
+                let value = self.update_value_for_field(idx, &field, datatype);
                 if matches!(value, UpdateValue::Null) {
                     self.observe_field_kind(
                         idx as FieldIndex,
@@ -316,8 +369,8 @@ impl SubscriptionState {
         &mut self,
         elem: &xbbg_core::Element<'_>,
         subscription_data: Option<&Arc<str>>,
-    ) -> Vec<UpdateField> {
-        let mut values = Vec::with_capacity(elem.num_children() + 1);
+    ) -> SmallVec<[UpdateField; 8]> {
+        let mut values = SmallVec::with_capacity(elem.num_children() + 1);
         self.push_subscription_data(&mut values, subscription_data);
         for child_idx in 0..elem.num_children() {
             let Some(child) = elem.get_at(child_idx) else {
@@ -359,7 +412,7 @@ impl SubscriptionState {
 
     fn push_subscription_data(
         &mut self,
-        values: &mut Vec<UpdateField>,
+        values: &mut SmallVec<[UpdateField; 8]>,
         subscription_data: Option<&Arc<str>>,
     ) {
         let Some(idx) = self.subscription_data_index else {
@@ -374,7 +427,7 @@ impl SubscriptionState {
     }
 
     fn extract_child_value(
-        &self,
+        &mut self,
         idx: FieldIndex,
         child: &xbbg_core::Element<'_>,
         datatype: BlpDataType,
@@ -382,8 +435,20 @@ impl SubscriptionState {
         if self.invalid_dateortime_fields[idx as usize] {
             UpdateValue::Null
         } else {
-            UpdateValue::from_blp(child.get_value_fast_with_datatype(0, datatype))
+            self.update_value_for_field(idx as usize, child, datatype)
         }
+    }
+
+    fn update_value_for_field(
+        &mut self,
+        idx: usize,
+        element: &xbbg_core::Element<'_>,
+        datatype: BlpDataType,
+    ) -> UpdateValue {
+        UpdateValue::from_blp_with_str_cache(
+            element.get_value_fast_with_datatype(0, datatype),
+            self.string_value_cache.get_mut(idx),
+        )
     }
 
     fn observe_kind(&mut self, idx: FieldIndex, value: &UpdateValue) {
@@ -436,6 +501,7 @@ impl SubscriptionState {
         self.invalid_dateortime_fields
             .push(Self::is_invalid_dateortime_field(&field_name));
         self.field_kinds.push(FieldKind::Unknown);
+        self.string_value_cache.push(None);
         self.layout_version = self.layout_version.wrapping_add(1).max(1);
         self.layout =
             Self::build_layout(self.layout_version, &self.field_strings, &self.field_kinds);
@@ -481,12 +547,39 @@ impl SubscriptionState {
     fn send_update(&mut self, update: SubscriptionUpdate) {
         match self.overflow_policy {
             OverflowPolicy::Block => {
-                if self.stream.blocking_send(Ok(update)).is_err() {
-                    if !self.suppress_closed_warning {
-                        xbbg_log::warn!(topic = %self.topic, "stream closed");
+                let mut item = Ok(update);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+                loop {
+                    match self.stream.try_send(item) {
+                        Ok(()) => {
+                            self.metrics.batches_sent.fetch_add(1, Ordering::Relaxed);
+                            break;
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            if !self.suppress_closed_warning {
+                                xbbg_log::warn!(topic = %self.topic, "stream closed");
+                            }
+                            break;
+                        }
+                        Err(mpsc::error::TrySendError::Full(returned)) => {
+                            item = returned;
+                            if std::time::Instant::now() >= deadline {
+                                self.dropped_batches += 1;
+                                self.metrics.dropped_batches.fetch_add(1, Ordering::Relaxed);
+                                self.metrics.slow_consumer.store(true, Ordering::Relaxed);
+                                if self.dropped_batches == 1 || self.dropped_batches % 1024 == 0 {
+                                    xbbg_log::warn!(
+                                        topic = %self.topic,
+                                        dropped = self.dropped_batches,
+                                        policy = "Block",
+                                        "stream full after bounded producer backoff - dropping update"
+                                    );
+                                }
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
                     }
-                } else {
-                    self.metrics.batches_sent.fetch_add(1, Ordering::Relaxed);
                 }
             }
             OverflowPolicy::DropNewest => match self.stream.try_send(Ok(update)) {

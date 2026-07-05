@@ -327,6 +327,68 @@ impl AsyncSession {
         Ok(())
     }
 
+    /// Begin subscriptions for every entry in `subs`
+    /// (`blpapi_session.h`: subscriptions are legal on asynchronous sessions;
+    /// data and status events reach the handler tagged with each entry's
+    /// correlation ID).
+    ///
+    /// Register per-CID state *before* calling — `SubscriptionStatus` /
+    /// `SubscriptionData` events can reach the handler before this returns.
+    pub fn subscribe(&self, subs: &crate::SubscriptionList, label: Option<&str>) -> Result<()> {
+        let (label_ptr, label_len, _label_cstring) = match label {
+            Some(l) => {
+                let cs = CString::new(l).map_err(|e| BlpError::InvalidArgument {
+                    detail: format!("invalid subscription label: {}", e),
+                })?;
+                (cs.as_ptr(), l.len() as i32, Some(cs))
+            }
+            None => (std::ptr::null(), 0, None),
+        };
+
+        // SAFETY: valid session/list pointers; identity null (session
+        // identity from SessionOptions applies).
+        let rc = unsafe {
+            crate::ffi::blpapi_Session_subscribe(
+                self.ptr,
+                subs.as_ptr(),
+                std::ptr::null(),
+                label_ptr,
+                label_len,
+            )
+        };
+
+        if rc != 0 {
+            return Err(BlpError::Internal {
+                detail: format!("blpapi_Session_subscribe failed with rc={}", rc),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Cancel the subscriptions in `subs`; entries are matched by
+    /// correlation ID. Termination is confirmed to the handler via
+    /// `SubscriptionTerminated` / `SubscriptionFailure` status messages.
+    pub fn unsubscribe(&self, subs: &crate::SubscriptionList) -> Result<()> {
+        // SAFETY: valid session/list pointers.
+        let rc = unsafe {
+            crate::ffi::blpapi_Session_unsubscribe(
+                self.ptr,
+                subs.as_ptr(),
+                std::ptr::null(),
+                0,
+            )
+        };
+
+        if rc != 0 {
+            return Err(BlpError::Internal {
+                detail: format!("blpapi_Session_unsubscribe failed with rc={}", rc),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Begin asynchronous authorization of an identity described by
     /// `auth_options` (blpapi_abstractsession.h:540-560). One or more
     /// `AUTHORIZATION_STATUS` events tagged with `cid` reach the handler:

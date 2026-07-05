@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 ### Added
 
 - **Official MCP Registry publish workflow**: Added a manual GitHub Actions workflow that publishes release `server.json` metadata through `mcp-publisher` with GitHub Actions OIDC, so the xbbg-org namespace can publish without relying on a maintainer's local public organization membership.
+- **Batched subscription delivery in `@xbbg/core`**: one native crossing now drains many ticks (`nextUpdates`) and Arrow subscriptions return multi-row zero-copy batches (`nextArrowBatch`); tick field layouts cross the boundary once per layout version and `Tick` caches decoded `BigInt`/`Date` values.
+- **`SubscriptionArrowBatcher`** in the Rust engine: cached schema + reusable Arrow builders convert streaming updates into multi-row RecordBatches instead of one-row batches per tick.
+- **Offline benchmark coverage**: registered the previously orphaned Arrow/subscription bench targets, added a `serde_json` vs `simd-json` BQL parser bench, and added offline Rust→Python / Rust→JS binding-handoff benches that run without a Bloomberg connection.
+- **Host-tuned build modes**: `pixi run build-native` and `npm run build:native:host` produce `target-cpu=native` artifacts for internal deployments; published artifacts stay portable.
+
+### Changed
+
+- **Subscription sessions moved to Bloomberg SDK asynchronous callback mode**: the 1 ms `nextEvent` busy-poll loop, its command channel, and per-loop topic-status scans are gone; events are dispatched by SDK callbacks and deactivation warnings run on a 1 s timer. Idle subscription workers no longer consume CPU.
+- **Faster response decoding**: typed long-format reference/historical output uses fixed-schema builders (no per-cell string-keyed map lookups), BDS bulk decoding walks each row once via interned name keys instead of O(rows × subfields) lookups, intraday bars use fixed builders, streaming chunks pre-reserve capacity, and BQL infers column types in a single pass.
+- **Cheaper ticks**: DATALOSS detection is folded into the normal extraction pass, message types are read via borrowed strings instead of refcounted `Name` duplicates, small updates avoid heap allocation (`SmallVec`), and repeated string values (exchange/condition codes) are interned per field.
+- **Python pandas conversion is Arrow-native**: `backend='pandas'` now converts through the Arrow C stream (`pyarrow.table(...).to_pandas()`) instead of materializing every cell as a Python object; the row-based path remains only as a documented no-pyarrow fallback. Python subscriptions with `backend=None` now yield native Arrow wrappers and resolve their converter once at construction.
+- **`@xbbg/core` request responses are zero-copy**: reference/historical/recipe results cross N-API as Arrow buffer descriptors instead of Arrow IPC bytes that were immediately reparsed; schema APIs cache their JSON payloads.
+- **Request workers decode responses outside the shared slot table lock**, so large partial responses no longer block unrelated in-flight requests on the same worker.
+- **`OverflowPolicy::Block` is now bounded on the SDK callback thread**: instead of parking Bloomberg's dispatcher indefinitely when a consumer stalls, the producer retries briefly, then records a slow-consumer event and drops the update.
+- **`npm run build:native` builds release by default** (use `build:native:debug` for local iteration), and packaging refuses to stage a native addon whose build profile isn't `release`.
+- **`blpapi-sys` caches generated bindings** next to the vendored SDK keyed by target and build-script hash, and tracks headers/env precisely, removing bindgen from warm clean builds and spurious `CONDA_PREFIX` rebuilds on non-Windows hosts.
+- **Metadata caches (exchange info, field types) publish snapshots per batch** with bounded capacity instead of cloning the whole map per inserted key.
 
 ## [1.4.3] - 2026-07-04
 

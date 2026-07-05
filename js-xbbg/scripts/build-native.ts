@@ -277,7 +277,10 @@ function patchDarwinNativeAddon(binaryPath: string, sdkLibDir: string): void {
   verifyDarwinPortableBinary(binaryPath);
 }
 
-const profile: 'debug' | 'release' = process.argv.includes('--release') ? 'release' : 'debug';
+// Release by default: this artifact feeds packaging and benchmarks, and a debug
+// addon silently bypasses the workspace release profile (fat LTO, opt-level=3,
+// panic=abort). Pass --debug for local iteration builds.
+const profile: 'debug' | 'release' = process.argv.includes('--debug') ? 'debug' : 'release';
 const artifactPath = resolveBuildArtifact(profile);
 const outputPath = path.join(packageDir, nativeBinaryName);
 
@@ -299,6 +302,10 @@ if (!exists(sdkLibDir)) {
 }
 
 const extraRustFlags: string[] = [];
+if (process.argv.includes('--target-cpu-native')) {
+  // Host-tuned build for internal deployments/benchmarks; not for published packages.
+  extraRustFlags.push('-C target-cpu=native');
+}
 if (process.platform === 'darwin') {
   extraRustFlags.push('-C link-arg=-Wl,-headerpad_max_install_names');
 }
@@ -330,6 +337,8 @@ if (!exists(artifactPath)) {
 fs.copyFileSync(artifactPath, outputPath);
 fs.chmodSync(outputPath, 0o755);
 patchDarwinNativeAddon(outputPath, sdkLibDir);
+// Record build provenance so packaging can refuse to stage a debug addon.
+fs.writeFileSync(path.join(packageDir, '.native-build-profile'), `${profile}\n`);
 
 console.log(
   `Copied ${path.relative(repoRoot, artifactPath)} -> ${path.relative(repoRoot, outputPath)}`,

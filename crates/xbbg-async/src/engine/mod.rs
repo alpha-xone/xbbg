@@ -26,12 +26,12 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
+use parking_lot::Mutex as ParkingMutex;
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType, SchemaRef, TimeUnit};
 use futures_util::stream::{self, StreamExt};
 use tokio::sync::{mpsc, watch};
 
-use xbbg_core::session::Session;
 use xbbg_core::{apply_session_identity_options, AuthConfig, BlpError, SessionOptions};
 
 use crate::errors::BlpAsyncError;
@@ -84,7 +84,7 @@ fn apply_direct_transport(
 
 /// Apply non-transport session behavior: pool sizes, keep-alive, slow-consumer
 /// watermarks, identity auth, etc. Endpoint configuration (server addresses,
-/// SOCKS5, TLS) is handled separately in `start_configured_session` so ZFP
+/// SOCKS5, TLS) is handled separately in `build_session_options` so ZFP
 /// options from `ZfpUtil::getOptionsForLeasedLines` are never clobbered.
 fn configure_session_behavior(
     options: &mut SessionOptions,
@@ -158,21 +158,6 @@ fn build_session_options(
     Ok(options)
 }
 
-/// Build options, then create and start a synchronous session (blocking until
-/// `SessionStarted`). Used by the subscription pool; request workers use
-/// asynchronous sessions via [`worker::AsyncRequestWorker`].
-fn start_configured_session(
-    config: &EngineConfig,
-    record_subscription_receive_times: bool,
-) -> Result<Session, BlpError> {
-    let options = build_session_options(config, record_subscription_receive_times)?;
-
-    let session = Session::new(&options)?;
-    session
-        .start_and_wait(SESSION_STARTUP_TIMEOUT_MS)
-        .map_err(|err| attach_auth_context(err, config.auth.as_ref()))?;
-    Ok(session)
-}
 
 fn attach_auth_context(error: BlpError, auth: Option<&AuthConfig>) -> BlpError {
     let Some(auth) = auth else {
@@ -202,7 +187,9 @@ pub enum OverflowPolicy {
     /// Drop the newest data when buffer is full (default, non-blocking)
     #[default]
     DropNewest,
-    /// Block the producer until space is available (use with caution)
+    /// Bounded producer-side backoff for full buffers. Bloomberg delivers
+    /// subscription data on an SDK callback thread, so this policy retries only
+    /// for a short fixed window before recording a slow-consumer drop.
     Block,
 }
 
@@ -436,7 +423,49 @@ pub struct SubscriptionStatusState {
     admin: AdminStatusInfo,
 }
 
-pub type SharedSubscriptionStatus = Arc<ArcSwap<SubscriptionStatusState>>;
+/// Shared status handle: readers get an ArcSwap snapshot, while writers take a
+/// small mutation mutex so all changes for one dispatch path are published as a
+/// single snapshot update instead of many independent whole-state RCU clones.
+#[derive(Default)]
+pub struct SubscriptionStatusHandle {
+    snapshot: ArcSwap<SubscriptionStatusState>,
+    mutation_lock: ParkingMutex<()>,
+}
+
+pub type SharedSubscriptionStatus = Arc<SubscriptionStatusHandle>;
+
+impl SubscriptionStatusHandle {
+    pub fn new(initial: SubscriptionStatusState) -> Self {
+        Self {
+            snapshot: ArcSwap::from_pointee(initial),
+            mutation_lock: ParkingMutex::new(()),
+        }
+    }
+
+    pub fn load(&self) -> arc_swap::Guard<Arc<SubscriptionStatusState>> {
+        self.snapshot.load()
+    }
+
+    pub fn store(&self, next: Arc<SubscriptionStatusState>) {
+        let _guard = self.mutation_lock.lock();
+        self.snapshot.store(next);
+    }
+
+    pub fn update(&self, mutate: impl FnOnce(&mut SubscriptionStatusState)) {
+        self.update_with(|status| {
+            mutate(status);
+        });
+    }
+
+    pub fn update_with<R>(&self, mutate: impl FnOnce(&mut SubscriptionStatusState) -> R) -> R {
+        let _guard = self.mutation_lock.lock();
+        let current = self.snapshot.load();
+        let mut next = (**current).clone();
+        let result = mutate(&mut next);
+        self.snapshot.store(Arc::new(next));
+        result
+    }
+}
 
 impl SubscriptionStatusState {
     pub fn from_active(
@@ -1855,7 +1884,7 @@ impl Engine {
             });
         }
         let (tx, rx) = mpsc::channel(capacity);
-        let status = Arc::new(ArcSwap::from_pointee(SubscriptionStatusState::default()));
+        let status = Arc::new(SubscriptionStatusHandle::new(SubscriptionStatusState::default()));
 
         // Claim a session from the pool (uses Arc-based claim for 'static
         // lifetime). Run on the blocking pool: when the pool is exhausted,
@@ -2354,11 +2383,7 @@ impl SubscriptionStream {
         if let Some(claim) = self.claim.take() {
             claim.close_without_reuse(keys);
         }
-        self.status.rcu(|current| {
-            let mut next = (**current).clone();
-            next.clear_active();
-            Arc::new(next)
-        });
+        self.status.update(|next| next.clear_active());
     }
 
     /// Receive the next batch of data or an error.
@@ -2415,11 +2440,8 @@ impl SubscriptionStream {
             )
             .await?;
 
-        self.status.rcu(|current| {
-            let mut next = (**current).clone();
-            next.add_active(&new_topics, &new_keys, new_metrics.clone());
-            Arc::new(next)
-        });
+        self.status
+            .update(|next| next.add_active(&new_topics, &new_keys, new_metrics.clone()));
 
         Ok(())
     }
@@ -2454,12 +2476,10 @@ impl SubscriptionStream {
 
         command.unsubscribe(keys_to_remove.clone()).await?;
 
-        self.status.rcu(|current| {
-            let mut next = (**current).clone();
+        self.status.update(|next| {
             for topic in &topics_to_remove {
                 next.drop_topic(topic);
             }
-            Arc::new(next)
         });
 
         Ok(())
@@ -2506,11 +2526,7 @@ impl SubscriptionStream {
             }
         }
 
-        self.status.rcu(|current| {
-            let mut next = (**current).clone();
-            next.clear_active();
-            Arc::new(next)
-        });
+        self.status.update(|next| next.clear_active());
 
         Ok(remaining)
     }

@@ -93,11 +93,11 @@ impl GenericState {
                 } else {
                     // Sequence with named children - iterate over children
                     for child in elem.children() {
-                        let child_name = child.name();
+                        let child_name = child.name_str();
                         let child_path = if path.is_empty() {
-                            child_name.as_str().to_string()
+                            child_name.to_string()
                         } else {
-                            format!("{}.{}", path, child_name.as_str())
+                            format!("{}.{}", path, child_name)
                         };
                         self.flatten_element(&child_path, &child);
                     }
@@ -106,11 +106,11 @@ impl GenericState {
             DataType::Choice => {
                 // Choice - single selected child
                 for child in elem.children() {
-                    let child_name = child.name();
+                    let child_name = child.name_str();
                     let child_path = if path.is_empty() {
-                        child_name.as_str().to_string()
+                        child_name.to_string()
                     } else {
-                        format!("{}.{}", path, child_name.as_str())
+                        format!("{}.{}", path, child_name)
                     };
                     self.flatten_element(&child_path, &child);
                 }

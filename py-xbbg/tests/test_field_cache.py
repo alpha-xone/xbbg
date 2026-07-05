@@ -138,3 +138,69 @@ def test_cache_path_warns_but_stats_still_resolve(monkeypatch):
 
     _CASE.assertEqual(len(warnings), 1)
     _CASE.assertEqual(cache.cache_path, "C:/tmp/xbbg/field_cache.json")
+
+
+def test_schema_invalidation_clears_schema_parse_and_blp_field_type_caches(monkeypatch):
+    from xbbg import blp
+    import xbbg.schema as schema_module
+
+    class FakeEngine:
+        def __init__(self):
+            self.invalidated = []
+            self.clear_calls = 0
+            self.resolve_calls = []
+
+        def invalidate_schema(self, service: str) -> None:
+            self.invalidated.append(service)
+
+        def clear_schema_cache(self) -> None:
+            self.clear_calls += 1
+
+        async def resolve_field_types(self, fields, overrides, default_type):
+            self.resolve_calls.append((list(fields), overrides, default_type))
+            return dict.fromkeys(fields, default_type)
+
+    fake_engine = FakeEngine()
+    json_schema = '{"service":"//blp/refdata","description":"refdata","operations":[],"cached_at":"1"}'
+    monkeypatch.setattr(blp, "_get_engine", lambda: fake_engine)
+    schema_module._parse_service_schema_json.cache_clear()
+    blp._clear_field_type_resolution_cache()
+
+    try:
+        parsed_before = schema_module.ServiceSchema.from_json(json_schema)
+        _CASE.assertIs(schema_module.ServiceSchema.from_json(json_schema), parsed_before)
+        _CASE.assertEqual(
+            asyncio.run(blp._resolve_field_types_cached(["PX_LAST"], None, "string")),
+            {"PX_LAST": "string"},
+        )
+        _CASE.assertEqual(
+            asyncio.run(blp._resolve_field_types_cached(["PX_LAST"], None, "string")),
+            {"PX_LAST": "string"},
+        )
+        _CASE.assertEqual(len(fake_engine.resolve_calls), 1)
+
+        schema_module.invalidate_schema("//blp/refdata")
+
+        parsed_after_invalidate = schema_module.ServiceSchema.from_json(json_schema)
+        _CASE.assertIsNot(parsed_after_invalidate, parsed_before)
+        _CASE.assertEqual(
+            asyncio.run(blp._resolve_field_types_cached(["PX_LAST"], None, "string")),
+            {"PX_LAST": "string"},
+        )
+        _CASE.assertEqual(len(fake_engine.resolve_calls), 2)
+
+        schema_module.clear_schema_cache()
+
+        parsed_after_clear = schema_module.ServiceSchema.from_json(json_schema)
+        _CASE.assertIsNot(parsed_after_clear, parsed_after_invalidate)
+        _CASE.assertEqual(
+            asyncio.run(blp._resolve_field_types_cached(["PX_LAST"], None, "string")),
+            {"PX_LAST": "string"},
+        )
+        _CASE.assertEqual(len(fake_engine.resolve_calls), 3)
+    finally:
+        schema_module._parse_service_schema_json.cache_clear()
+        blp._clear_field_type_resolution_cache()
+
+    _CASE.assertEqual(fake_engine.invalidated, ["//blp/refdata"])
+    _CASE.assertEqual(fake_engine.clear_calls, 1)

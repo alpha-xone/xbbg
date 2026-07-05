@@ -3634,13 +3634,16 @@ fn render_json(
         .collect::<Vec<_>>()
         .join(",\n");
 
+    let build_mode = xbbg_bench::build_mode();
     format!(
-        "{{\n  \"suite\": \"xbbg_benchmark_suite\",\n  \"timestamp\": {},\n  \"profile\": \"{}\",\n  \"profile_mode\": \"{}\",\n  \"bench_only\": {},\n  \"git_sha\": \"{}\",\n  \"bloomberg\": {{\n    \"host\": \"{}\",\n    \"port\": {}\n  }},\n  \"synthetic_shape\": {{\n    \"bdp_securities\": {},\n    \"bdp_fields\": {},\n    \"bdh_securities\": {},\n    \"bdh_dates\": {},\n    \"bdh_fields\": {},\n    \"bdtick_ticks\": {},\n    \"bql_rows\": {},\n    \"bql_columns\": {},\n    \"sub_messages\": {},\n    \"sub_topics\": {},\n    \"sub_fields\": {}\n  }},\n  \"benchmarks\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"suite\": \"xbbg_benchmark_suite\",\n  \"timestamp\": {},\n  \"profile\": \"{}\",\n  \"profile_mode\": \"{}\",\n  \"bench_only\": {},\n  \"git_sha\": \"{}\",\n  \"target_cpu\": {{ \"native\": {} }},\n  \"debug_build\": {},\n  \"bloomberg\": {{\n    \"host\": \"{}\",\n    \"port\": {}\n  }},\n  \"synthetic_shape\": {{\n    \"bdp_securities\": {},\n    \"bdp_fields\": {},\n    \"bdh_securities\": {},\n    \"bdh_dates\": {},\n    \"bdh_fields\": {},\n    \"bdtick_ticks\": {},\n    \"bql_rows\": {},\n    \"bql_columns\": {},\n    \"sub_messages\": {},\n    \"sub_topics\": {},\n    \"sub_fields\": {}\n  }},\n  \"benchmarks\": [\n{}\n  ]\n}}\n",
         timestamp,
         config.profile.as_str(),
         config.profile_mode.as_str(),
         render_optional_string(config.only.as_deref()),
         escape_json(git_sha),
+        build_mode.target_cpu_native,
+        build_mode.debug_build,
         escape_json(&blp_host()),
         blp_port(),
         shape.bdp_securities,

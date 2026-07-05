@@ -4,7 +4,7 @@
 //! without JSON intermediate serialization.
 
 use arrow_array::RecordBatch;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use tokio::sync::oneshot;
 use xbbg_log::trace;
 
@@ -23,8 +23,10 @@ pub struct BulkDataState {
     columns: ColumnSet,
     /// Discovered scalar sub-field names, in first-seen order across all rows.
     subfield_names: Vec<String>,
-    /// Membership set for O(1) duplicate checks while preserving `subfield_names` order.
-    subfield_name_set: HashSet<String>,
+    /// Interned-name key to `subfield_names` index for allocation-free row decode.
+    subfield_index_by_key: HashMap<usize, usize>,
+    /// Per-row scratch bitmap for fields seen while walking one bulk row.
+    seen_subfields: Vec<bool>,
     /// Response-level diagnostics (eidData / securityError) attached to the
     /// result batch as schema metadata.
     response_meta: ResponseMetadata,
@@ -39,7 +41,8 @@ impl BulkDataState {
             field_name: field,
             columns: ColumnSet::new(),
             subfield_names: Vec::new(),
-            subfield_name_set: HashSet::new(),
+            subfield_index_by_key: HashMap::new(),
+            seen_subfields: Vec::new(),
             response_meta: ResponseMetadata::default(),
             reply,
         }
@@ -173,48 +176,55 @@ impl BulkDataState {
                 self.columns.append_str("ticker", ticker);
                 self.columns.append_str("field", &self.field_name);
 
-                self.discover_subfields(&row);
-
-                // Extract sub-field values in the full discovered order. ColumnSet
-                // pads missing late columns for earlier rows and appends nulls for
-                // fields absent from this row.
-                let subfield_names = &self.subfield_names;
-                let columns = &mut self.columns;
-                for subfield_name in subfield_names {
-                    Self::append_subfield(columns, &row, subfield_name);
-                }
+                self.append_row_subfields(&row);
 
                 self.columns.end_row();
             }
         }
     }
 
-    fn discover_subfields(&mut self, row: &Element<'_>) {
+    fn append_row_subfields(&mut self, row: &Element<'_>) {
+        self.seen_subfields.fill(false);
+
         for child in row.children() {
             if !should_emit_scalar_field(&child) {
                 continue;
             }
 
-            let name = child.name().as_str().to_string();
-            if !self.subfield_name_set.insert(name.clone()) {
+            let idx = self.resolve_subfield_index(&child);
+            if self.seen_subfields[idx] {
                 continue;
             }
+            self.seen_subfields[idx] = true;
 
-            self.columns
-                .set_type_hint(&name, arrow_type_for_element(&child));
-            self.subfield_names.push(name);
+            let name = self.subfield_names[idx].as_str();
+            if let Some(value) = child.get_value(0) {
+                self.columns.append(name, value);
+            } else {
+                self.columns.append_null(name);
+            }
+        }
+
+        for (idx, name) in self.subfield_names.iter().enumerate() {
+            if !self.seen_subfields[idx] {
+                self.columns.append_null(name);
+            }
         }
     }
 
-    fn append_subfield(columns: &mut ColumnSet, row: &Element<'_>, subfield_name: &str) {
-        if let Some(subfield_elem) = row.get_by_str(subfield_name) {
-            if let Some(value) = subfield_elem.get_value(0) {
-                columns.append(subfield_name, value);
-            } else {
-                columns.append_null(subfield_name);
-            }
-        } else {
-            columns.append_null(subfield_name);
+    fn resolve_subfield_index(&mut self, child: &Element<'_>) -> usize {
+        let key = child.name_key();
+        if let Some(&idx) = self.subfield_index_by_key.get(&key) {
+            return idx;
         }
+
+        let name = child.name_str().to_string();
+        let idx = self.subfield_names.len();
+        self.columns
+            .set_type_hint(&name, arrow_type_for_element(child));
+        self.subfield_names.push(name);
+        self.subfield_index_by_key.insert(key, idx);
+        self.seen_subfields.push(false);
+        idx
     }
 }

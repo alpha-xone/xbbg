@@ -14,12 +14,12 @@ use std::hint::black_box;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 
 use xbbg_async::engine::state::SubscriptionMetrics;
 use xbbg_async::engine::{
-    SharedSubscriptionStatus, SlabKey, SubscriptionEventLevel, SubscriptionStatusState,
+    SharedSubscriptionStatus, SlabKey, SubscriptionEventLevel, SubscriptionStatusHandle,
+    SubscriptionStatusState,
 };
 use xbbg_async::field_cache::{FieldInfo, FieldTypeResolver};
 
@@ -67,7 +67,7 @@ fn make_status_state(n_topics: usize) -> SubscriptionStatusState {
 }
 
 fn make_shared_status(n_topics: usize) -> SharedSubscriptionStatus {
-    Arc::new(ArcSwap::from_pointee(make_status_state(n_topics)))
+    Arc::new(SubscriptionStatusHandle::new(make_status_state(n_topics)))
 }
 
 // ---------------------------------------------------------------------------
@@ -78,11 +78,11 @@ fn bench_field_cache_get(c: &mut Criterion) {
     let mut group = c.benchmark_group("field_cache_get");
     for size in [100, 5000] {
         let resolver = make_resolver(size);
+        let key = format!("F{}", size / 2);
         group.bench_with_input(BenchmarkId::new("entries", size), &size, |b, _| {
             b.iter(|| {
-                // Look up a key near the middle — definitely present.
-                let key = format!("F{}", size / 2);
-                black_box(resolver.get(black_box(&key)))
+                // Look up a prebuilt key near the middle — definitely present.
+                black_box(resolver.get(black_box(key.as_str())))
             });
         });
     }
@@ -95,10 +95,14 @@ fn bench_field_cache_insert(c: &mut Criterion) {
     group.bench_function("single_key_on_1000_entry_cache", |b| {
         let resolver = make_resolver(1000);
         let mut counter = 1000usize;
-        b.iter(|| {
-            counter += 1;
-            resolver.insert(black_box(make_field_info(counter)));
-        });
+        b.iter_batched(
+            || {
+                counter += 1;
+                make_field_info(counter)
+            },
+            |info| resolver.insert(black_box(info)),
+            BatchSize::SmallInput,
+        );
     });
     group.finish();
 }
@@ -166,12 +170,23 @@ fn bench_status_load_topic_for_key(c: &mut Criterion) {
         let shared = make_shared_status(n_topics);
         let key: SlabKey = n_topics / 2;
         group.bench_with_input(
-            BenchmarkId::new("load_topic_for_key", n_topics),
+            BenchmarkId::new("load_topic_for_key_borrowed", n_topics),
             &n_topics,
             |b, _| {
                 b.iter(|| {
                     let snap = shared.load();
-                    // Map to owned String to avoid returning a ref tied to the guard.
+                    if let Some(topic) = snap.topic_for_key(black_box(key)) {
+                        black_box(topic);
+                    }
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("load_topic_for_key_owned_string", n_topics),
+            &n_topics,
+            |b, _| {
+                b.iter(|| {
+                    let snap = shared.load();
                     black_box(snap.topic_for_key(black_box(key)).map(str::to_string))
                 });
             },
@@ -184,19 +199,22 @@ fn bench_status_rcu_record_subscription_event(c: &mut Criterion) {
     let mut group = c.benchmark_group("subscription_status_rcu_subscription_event");
     for n_topics in [10, 100] {
         let shared = make_shared_status(n_topics);
+        let topic = "TOPIC0 US Equity".to_string();
         group.bench_with_input(BenchmarkId::new("topics", n_topics), &n_topics, |b, _| {
-            b.iter(|| {
-                shared.rcu(|current| {
-                    let mut next = (**current).clone();
-                    next.record_subscription_event(
-                        black_box("BenchEvent"),
-                        black_box(Some("TOPIC0 US Equity".to_string())),
-                        black_box(None),
-                        black_box(SubscriptionEventLevel::Info),
-                    );
-                    Arc::new(next)
-                });
-            });
+            b.iter_batched(
+                || topic.clone(),
+                |topic| {
+                    shared.update(|next| {
+                        next.record_subscription_event(
+                            black_box("BenchEvent"),
+                            black_box(Some(topic)),
+                            black_box(None),
+                            black_box(SubscriptionEventLevel::Info),
+                        );
+                    });
+                },
+                BatchSize::SmallInput,
+            );
         });
     }
     group.finish();
@@ -206,19 +224,22 @@ fn bench_status_rcu_record_service_state(c: &mut Criterion) {
     let mut group = c.benchmark_group("subscription_status_rcu_service_state");
     for n_topics in [10, 100] {
         let shared = make_shared_status(n_topics);
+        let service = "//blp/mktdata".to_string();
         group.bench_with_input(BenchmarkId::new("topics", n_topics), &n_topics, |b, _| {
-            b.iter(|| {
-                shared.rcu(|current| {
-                    let mut next = (**current).clone();
-                    next.record_service_state(
-                        black_box("//blp/mktdata".to_string()),
-                        black_box(true),
-                        black_box("ServiceOpened"),
-                        black_box(None),
-                    );
-                    Arc::new(next)
-                });
-            });
+            b.iter_batched(
+                || service.clone(),
+                |service| {
+                    shared.update(|next| {
+                        next.record_service_state(
+                            black_box(service),
+                            black_box(true),
+                            black_box("ServiceOpened"),
+                            black_box(None),
+                        );
+                    });
+                },
+                BatchSize::SmallInput,
+            );
         });
     }
     group.finish();
@@ -231,10 +252,8 @@ fn bench_status_rcu_mark_topic_streaming(c: &mut Criterion) {
         let key: SlabKey = 0;
         group.bench_with_input(BenchmarkId::new("topics", n_topics), &n_topics, |b, _| {
             b.iter(|| {
-                shared.rcu(|current| {
-                    let mut next = (**current).clone();
+                shared.update(|next| {
                     next.mark_topic_streaming(black_box(key));
-                    Arc::new(next)
                 });
             });
         });
@@ -245,21 +264,26 @@ fn bench_status_rcu_mark_topic_streaming(c: &mut Criterion) {
 fn bench_status_rcu_burst(c: &mut Criterion) {
     let mut group = c.benchmark_group("subscription_status_burst_100_writes");
     let shared = make_shared_status(50);
+    let topics: Vec<String> = (0..100u64)
+        .map(|i| format!("TOPIC{} US Equity", i % 50))
+        .collect();
     group.bench_function("50_topic_state_100_sequential_rcus", |b| {
-        b.iter(|| {
-            for i in 0..100u64 {
-                shared.rcu(|current| {
-                    let mut next = (**current).clone();
-                    next.record_subscription_event(
-                        "BenchBurst",
-                        Some(format!("TOPIC{} US Equity", i % 50)),
-                        None,
-                        SubscriptionEventLevel::Info,
-                    );
-                    Arc::new(next)
-                });
-            }
-        });
+        b.iter_batched(
+            || topics.clone(),
+            |topics| {
+                for topic in topics {
+                    shared.update(|next| {
+                        next.record_subscription_event(
+                            black_box("BenchBurst"),
+                            black_box(Some(topic)),
+                            black_box(None),
+                            black_box(SubscriptionEventLevel::Info),
+                        );
+                    });
+                }
+            },
+            BatchSize::SmallInput,
+        );
     });
     group.finish();
 }

@@ -12,7 +12,7 @@ use arrow_array::{ArrayRef, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
+use std::{borrow::Cow, collections::{BTreeMap, HashSet}, sync::Arc};
 use tokio::sync::oneshot;
 
 use super::typed_builder::ColumnSet;
@@ -20,6 +20,13 @@ use super::value_utils::top_level_response_error;
 use xbbg_core::{BlpError, Message};
 
 const BQL_TYPED_JSON_MAX_BYTES: usize = 32 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BqlColumnKind {
+    Numeric,
+    String,
+    Infer,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,13 +89,6 @@ enum BqlCell<'a> {
 }
 
 impl BqlCell<'_> {
-    fn is_null(&self) -> bool {
-        matches!(self, Self::Null)
-    }
-
-    fn is_number(&self) -> bool {
-        matches!(self, Self::Number(_))
-    }
 
     fn append_as_string(&self, builder: &mut StringBuilder) {
         match self {
@@ -291,7 +291,7 @@ impl BqlState {
         let mut id_values: &[BqlCell<'_>] = &[];
         type FieldCol<'a> = (String, &'a [BqlCell<'a>], Option<&'a str>);
         let mut field_columns: Vec<FieldCol<'_>> = Vec::new();
-
+        let mut field_column_names: HashSet<String> = HashSet::new();
         for (field_name, field_data) in results_obj {
             // Extract idColumn values (only need to do this once).
             if id_values.is_empty() {
@@ -309,7 +309,7 @@ impl BqlState {
                     continue;
                 };
                 let col_name_lower = col_name.to_lowercase();
-                if field_columns.iter().any(|(n, _, _)| n == &col_name_lower) {
+                if !field_column_names.insert(col_name_lower.clone()) {
                     continue;
                 }
                 field_columns.push((
@@ -338,6 +338,7 @@ impl BqlState {
             }
 
             field_columns.push((field_name.to_string(), values, val_type));
+            field_column_names.insert(field_name.to_string());
         }
 
         // Build Arrow arrays.
@@ -352,59 +353,14 @@ impl BqlState {
         let mut arrays: Vec<ArrayRef> = vec![Arc::new(id_builder.finish())];
 
         for (name, values, type_hint) in &field_columns {
-            let is_numeric = match type_hint {
-                Some(t)
-                    if t.eq_ignore_ascii_case("DOUBLE")
-                        || t.eq_ignore_ascii_case("FLOAT")
-                        || t.eq_ignore_ascii_case("INT32")
-                        || t.eq_ignore_ascii_case("INT64")
-                        || t.eq_ignore_ascii_case("INTEGER") =>
-                {
-                    true
-                }
-                Some(t)
-                    if t.eq_ignore_ascii_case("STRING")
-                        || t.eq_ignore_ascii_case("DATE")
-                        || t.eq_ignore_ascii_case("DATETIME") =>
-                {
-                    false
-                }
-                _ => values
-                    .iter()
-                    .take(row_count)
-                    .filter(|v| !v.is_null())
-                    .all(BqlCell::is_number),
-            };
-
-            if is_numeric {
-                let mut builder = Self::float_builder(row_count);
-                for row_idx in 0..row_count {
-                    match values.get(row_idx) {
-                        Some(BqlCell::Number(n)) => builder.append_value(*n),
-                        Some(BqlCell::String(s)) => {
-                            // Try to parse string as number.
-                            if let Ok(f) = s.parse::<f64>() {
-                                builder.append_value(f);
-                            } else {
-                                builder.append_null();
-                            }
-                        }
-                        _ => builder.append_null(),
-                    }
-                }
-                fields.push(Field::new(name.as_str(), DataType::Float64, true));
-                arrays.push(Arc::new(builder.finish()));
-            } else {
-                let mut builder = Self::string_builder(row_count);
-                for row_idx in 0..row_count {
-                    match values.get(row_idx) {
-                        Some(value) => value.append_as_string(&mut builder),
-                        None => builder.append_null(),
-                    }
-                }
-                fields.push(Field::new(name.as_str(), DataType::Utf8, true));
-                arrays.push(Arc::new(builder.finish()));
-            }
+            Self::append_bql_cell_column(
+                name.as_str(),
+                values,
+                *type_hint,
+                row_count,
+                &mut fields,
+                &mut arrays,
+            );
         }
 
         let schema = Arc::new(Schema::new(fields));
@@ -459,7 +415,7 @@ impl BqlState {
         let mut id_values: &[JsonValue] = &[];
         type FieldCol<'a> = (String, &'a [JsonValue], Option<&'a str>);
         let mut field_columns: Vec<FieldCol<'_>> = Vec::new();
-
+        let mut field_column_names: HashSet<String> = HashSet::new();
         for field_name in &field_names {
             let field_data = &results_obj[*field_name];
 
@@ -482,7 +438,7 @@ impl BqlState {
                         continue;
                     };
                     let col_name_lower = col_name.to_lowercase();
-                    if field_columns.iter().any(|(n, _, _)| n == &col_name_lower) {
+                    if !field_column_names.insert(col_name_lower.clone()) {
                         continue;
                     }
                     let sec_type = sec_col.get("type").and_then(|t| t.as_str());
@@ -511,6 +467,7 @@ impl BqlState {
             }
 
             field_columns.push((field_name.to_string(), values, val_type));
+            field_column_names.insert(field_name.to_string());
         }
 
         let row_count = id_values.len();
@@ -527,31 +484,160 @@ impl BqlState {
         let mut arrays: Vec<ArrayRef> = vec![Arc::new(id_builder.finish())];
 
         for (name, values, type_hint) in &field_columns {
-            let is_numeric = match type_hint {
-                Some(t)
-                    if t.eq_ignore_ascii_case("DOUBLE")
-                        || t.eq_ignore_ascii_case("FLOAT")
-                        || t.eq_ignore_ascii_case("INT32")
-                        || t.eq_ignore_ascii_case("INT64")
-                        || t.eq_ignore_ascii_case("INTEGER") =>
-                {
-                    true
-                }
-                Some(t)
-                    if t.eq_ignore_ascii_case("STRING")
-                        || t.eq_ignore_ascii_case("DATE")
-                        || t.eq_ignore_ascii_case("DATETIME") =>
-                {
-                    false
-                }
-                _ => values
-                    .iter()
-                    .take(row_count)
-                    .filter(|v| !v.is_null())
-                    .all(|v| matches!(v, JsonValue::Number(_))),
-            };
+            Self::append_json_value_column(
+                name.as_str(),
+                values,
+                *type_hint,
+                row_count,
+                &mut fields,
+                &mut arrays,
+            );
+        }
 
-            if is_numeric {
+        let schema = Arc::new(Schema::new(fields));
+        RecordBatch::try_new(schema, arrays).map_err(|e| BlpError::Internal {
+            detail: format!("Failed to create RecordBatch: {}", e),
+        })
+    }
+
+    /// Parse a cached/generated BQL JSON payload for benchmark-only replay.
+    ///
+    /// This is intentionally hidden behind `bench-internals` so production builds
+    /// do not expose benchmark hooks or carry profiling behavior in public APIs.
+    #[cfg(feature = "bench-internals")]
+    pub fn parse_bql_json_for_bench(&self, json_str: &str) -> Result<RecordBatch, BlpError> {
+        self.parse_bql_json(json_str)
+    }
+
+    fn column_kind(type_hint: Option<&str>) -> BqlColumnKind {
+        match type_hint {
+            Some(t)
+                if t.eq_ignore_ascii_case("DOUBLE")
+                    || t.eq_ignore_ascii_case("FLOAT")
+                    || t.eq_ignore_ascii_case("INT32")
+                    || t.eq_ignore_ascii_case("INT64")
+                    || t.eq_ignore_ascii_case("INTEGER") =>
+            {
+                BqlColumnKind::Numeric
+            }
+            Some(t)
+                if t.eq_ignore_ascii_case("STRING")
+                    || t.eq_ignore_ascii_case("DATE")
+                    || t.eq_ignore_ascii_case("DATETIME") =>
+            {
+                BqlColumnKind::String
+            }
+            _ => BqlColumnKind::Infer,
+        }
+    }
+
+    fn append_bql_cell_column(
+        name: &str,
+        values: &[BqlCell<'_>],
+        type_hint: Option<&str>,
+        row_count: usize,
+        fields: &mut Vec<Field>,
+        arrays: &mut Vec<ArrayRef>,
+    ) {
+        match Self::column_kind(type_hint) {
+            BqlColumnKind::Numeric => {
+                let mut builder = Self::float_builder(row_count);
+                for row_idx in 0..row_count {
+                    match values.get(row_idx) {
+                        Some(BqlCell::Number(n)) => builder.append_value(*n),
+                        Some(BqlCell::String(s)) => {
+                            if let Ok(f) = s.parse::<f64>() {
+                                builder.append_value(f);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        _ => builder.append_null(),
+                    }
+                }
+                fields.push(Field::new(name, DataType::Float64, true));
+                arrays.push(Arc::new(builder.finish()));
+            }
+            BqlColumnKind::String => {
+                let mut builder = Self::string_builder(row_count);
+                for row_idx in 0..row_count {
+                    match values.get(row_idx) {
+                        Some(value) => value.append_as_string(&mut builder),
+                        None => builder.append_null(),
+                    }
+                }
+                fields.push(Field::new(name, DataType::Utf8, true));
+                arrays.push(Arc::new(builder.finish()));
+            }
+            BqlColumnKind::Infer => {
+                Self::append_inferred_bql_cell_column(name, values, row_count, fields, arrays);
+            }
+        }
+    }
+
+    fn append_inferred_bql_cell_column(
+        name: &str,
+        values: &[BqlCell<'_>],
+        row_count: usize,
+        fields: &mut Vec<Field>,
+        arrays: &mut Vec<ArrayRef>,
+    ) {
+        let mut numeric_values: Vec<Option<f64>> = Vec::with_capacity(row_count);
+        let mut string_builder: Option<StringBuilder> = None;
+
+        for row_idx in 0..row_count {
+            if let Some(builder) = string_builder.as_mut() {
+                match values.get(row_idx) {
+                    Some(value) => value.append_as_string(builder),
+                    None => builder.append_null(),
+                }
+                continue;
+            }
+
+            match values.get(row_idx) {
+                Some(BqlCell::Number(n)) => numeric_values.push(Some(*n)),
+                Some(BqlCell::Null) | None => numeric_values.push(None),
+                Some(value) => {
+                    let mut builder = Self::string_builder(row_count);
+                    for numeric in &numeric_values {
+                        match numeric {
+                            Some(n) => builder.append_value(n.to_string()),
+                            None => builder.append_null(),
+                        }
+                    }
+                    value.append_as_string(&mut builder);
+                    string_builder = Some(builder);
+                }
+            }
+        }
+
+        if let Some(mut builder) = string_builder {
+            fields.push(Field::new(name, DataType::Utf8, true));
+            arrays.push(Arc::new(builder.finish()));
+            return;
+        }
+
+        let mut builder = Self::float_builder(row_count);
+        for numeric in numeric_values {
+            match numeric {
+                Some(n) => builder.append_value(n),
+                None => builder.append_null(),
+            }
+        }
+        fields.push(Field::new(name, DataType::Float64, true));
+        arrays.push(Arc::new(builder.finish()));
+    }
+
+    fn append_json_value_column(
+        name: &str,
+        values: &[JsonValue],
+        type_hint: Option<&str>,
+        row_count: usize,
+        fields: &mut Vec<Field>,
+        arrays: &mut Vec<ArrayRef>,
+    ) {
+        match Self::column_kind(type_hint) {
+            BqlColumnKind::Numeric => {
                 let mut builder = Self::float_builder(row_count);
                 for row_idx in 0..row_count {
                     match values.get(row_idx) {
@@ -568,35 +654,87 @@ impl BqlState {
                         _ => builder.append_null(),
                     }
                 }
-                fields.push(Field::new(name.as_str(), DataType::Float64, true));
+                fields.push(Field::new(name, DataType::Float64, true));
                 arrays.push(Arc::new(builder.finish()));
-            } else {
+            }
+            BqlColumnKind::String => {
                 let mut builder = Self::string_builder(row_count);
                 for row_idx in 0..row_count {
                     match values.get(row_idx) {
-                        Some(JsonValue::String(s)) => builder.append_value(s),
-                        Some(JsonValue::Null) | None => builder.append_null(),
-                        Some(other) => builder.append_value(other.to_string()),
+                        Some(value) => Self::append_json_as_string(value, &mut builder),
+                        None => builder.append_null(),
                     }
                 }
-                fields.push(Field::new(name.as_str(), DataType::Utf8, true));
+                fields.push(Field::new(name, DataType::Utf8, true));
                 arrays.push(Arc::new(builder.finish()));
+            }
+            BqlColumnKind::Infer => {
+                Self::append_inferred_json_value_column(name, values, row_count, fields, arrays);
+            }
+        }
+    }
+
+    fn append_inferred_json_value_column(
+        name: &str,
+        values: &[JsonValue],
+        row_count: usize,
+        fields: &mut Vec<Field>,
+        arrays: &mut Vec<ArrayRef>,
+    ) {
+        let mut numeric_values: Vec<Option<f64>> = Vec::with_capacity(row_count);
+        let mut string_builder: Option<StringBuilder> = None;
+
+        for row_idx in 0..row_count {
+            if let Some(builder) = string_builder.as_mut() {
+                match values.get(row_idx) {
+                    Some(value) => Self::append_json_as_string(value, builder),
+                    None => builder.append_null(),
+                }
+                continue;
+            }
+
+            match values.get(row_idx) {
+                Some(JsonValue::Number(n)) => {
+                    numeric_values.push(Some(n.as_f64().unwrap_or(f64::NAN)));
+                }
+                Some(JsonValue::Null) | None => numeric_values.push(None),
+                Some(value) => {
+                    let mut builder = Self::string_builder(row_count);
+                    for numeric in &numeric_values {
+                        match numeric {
+                            Some(n) => builder.append_value(n.to_string()),
+                            None => builder.append_null(),
+                        }
+                    }
+                    Self::append_json_as_string(value, &mut builder);
+                    string_builder = Some(builder);
+                }
             }
         }
 
-        let schema = Arc::new(Schema::new(fields));
-        RecordBatch::try_new(schema, arrays).map_err(|e| BlpError::Internal {
-            detail: format!("Failed to create RecordBatch: {}", e),
-        })
+        if let Some(mut builder) = string_builder {
+            fields.push(Field::new(name, DataType::Utf8, true));
+            arrays.push(Arc::new(builder.finish()));
+            return;
+        }
+
+        let mut builder = Self::float_builder(row_count);
+        for numeric in numeric_values {
+            match numeric {
+                Some(n) => builder.append_value(n),
+                None => builder.append_null(),
+            }
+        }
+        fields.push(Field::new(name, DataType::Float64, true));
+        arrays.push(Arc::new(builder.finish()));
     }
 
-    /// Parse a cached/generated BQL JSON payload for benchmark-only replay.
-    ///
-    /// This is intentionally hidden behind `bench-internals` so production builds
-    /// do not expose benchmark hooks or carry profiling behavior in public APIs.
-    #[cfg(feature = "bench-internals")]
-    pub fn parse_bql_json_for_bench(&self, json_str: &str) -> Result<RecordBatch, BlpError> {
-        self.parse_bql_json(json_str)
+    fn append_json_as_string(value: &JsonValue, builder: &mut StringBuilder) {
+        match value {
+            JsonValue::String(s) => builder.append_value(s),
+            JsonValue::Null => builder.append_null(),
+            other => builder.append_value(other.to_string()),
+        }
     }
 
     fn string_builder(row_count: usize) -> StringBuilder {
@@ -677,8 +815,7 @@ impl BqlState {
                 let num_children = row.num_children();
                 for j in 0..num_children {
                     if let Some(child) = row.get_at(j) {
-                        let name = child.name();
-                        let name_str = name.as_str();
+                        let name_str = child.name_str();
                         if let Some(value) = child.get_value(0) {
                             self.columns.append(name_str, value);
                         } else {
@@ -715,11 +852,11 @@ impl BqlState {
                 let n = element.num_children();
                 for i in 0..n {
                     if let Some(child) = element.get_at(i) {
-                        let name = child.name();
+                        let name = child.name_str();
                         let child_path = if path.is_empty() {
-                            name.as_str().to_string()
+                            name.to_string()
                         } else {
-                            format!("{}.{}", path, name.as_str())
+                            format!("{}.{}", path, name)
                         };
                         self.flatten_element(&child_path, &child);
                     }

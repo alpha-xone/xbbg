@@ -11,7 +11,13 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BLPAPI_ROOT");
     println!("cargo:rerun-if-env-changed=BLPAPI_PREGENERATED_BINDINGS");
     println!("cargo:rerun-if-env-changed=BLPAPI_BINDINGS_EXPORT_PATH");
-    println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
+    println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
+    // Precise source tracking: Cargo reruns build scripts on their own change
+    // only when told to. Without these, editing the allowlist or the libclang
+    // helper would not retrigger binding generation.
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=libclang.rs");
+    println!("cargo:rerun-if-changed=Cargo.toml");
 
     // Resolve include and lib directories from environment (precedence order)
     let (include_dir, lib_dir) =
@@ -40,6 +46,10 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
     let bindings_out = out_dir.join("bindings.rs");
 
+    // Track the concrete headers we compile against so SDK swaps under the
+    // same env vars retrigger generation.
+    println!("cargo:rerun-if-changed={}", include_dir.display());
+
     if let Some(pregenerated_bindings) = env::var_os("BLPAPI_PREGENERATED_BINDINGS") {
         let pregenerated_bindings = PathBuf::from(pregenerated_bindings);
         if !pregenerated_bindings.is_file() {
@@ -48,19 +58,27 @@ fn main() {
                 pregenerated_bindings.display()
             );
         }
+        println!("cargo:rerun-if-changed={}", pregenerated_bindings.display());
 
         copy_bindings(&pregenerated_bindings, &bindings_out)
             .unwrap_or_else(|e| panic!("blpapi-sys: {}", e));
 
-        if let Some(export_path) = env::var_os("BLPAPI_BINDINGS_EXPORT_PATH") {
-            let export_path = PathBuf::from(export_path);
-            copy_bindings(&pregenerated_bindings, &export_path)
-                .unwrap_or_else(|e| panic!("blpapi-sys: {}", e));
-        }
-
+        export_bindings_if_requested(&pregenerated_bindings);
         return;
     }
 
+    // SDK-local bindings cache: bindgen over 40+ headers costs seconds on every
+    // clean build (wheels, napi, CI matrices) even though the pinned SDK never
+    // changes. Cache the generated file next to the SDK version it came from
+    // (gitignored with the rest of vendor/) keyed by target + a hash of this
+    // build script and Cargo.toml (so allowlist or bindgen-dependency changes
+    // invalidate it). Delete the `.bindgen-cache` directory to force regeneration.
+    let cache_path = bindings_cache_path(&include_dir);
+    if let Some(cache) = cache_path.as_deref().filter(|path| path.is_file()) {
+        copy_bindings(cache, &bindings_out).unwrap_or_else(|e| panic!("blpapi-sys: {}", e));
+        export_bindings_if_requested(&bindings_out);
+        return;
+    }
     libclang::prepare_windows_libclang_alias(&out_dir)
         .unwrap_or_else(|e| panic!("blpapi-sys: {}", e));
 
@@ -90,12 +108,53 @@ fn main() {
         .write_to_file(&bindings_out)
         .unwrap_or_else(|e| panic!("Failed to write bindings: {}", e));
 
+    // Populate the SDK-local cache; failure to cache is not a build failure
+    // (read-only checkouts, sandboxed builds).
+    if let Some(cache) = cache_path.as_deref() {
+        if copy_bindings(&bindings_out, cache).is_err() {
+            println!(
+                "cargo:warning=blpapi-sys: could not write bindings cache at {}",
+                cache.display()
+            );
+        }
+    }
+
+    export_bindings_if_requested(&bindings_out);
+}
+
+fn export_bindings_if_requested(bindings: &Path) {
     if let Some(export_path) = env::var_os("BLPAPI_BINDINGS_EXPORT_PATH") {
         let export_path = PathBuf::from(export_path);
-        copy_bindings(&bindings_out, &export_path).unwrap_or_else(|e| panic!("blpapi-sys: {}", e));
+        copy_bindings(bindings, &export_path).unwrap_or_else(|e| panic!("blpapi-sys: {}", e));
     }
 }
 
+/// Cache file for generated bindings, next to the SDK the headers came from:
+/// `<sdk-version-dir>/.bindgen-cache/bindings-<target>-<hash>.rs`.
+///
+/// The hash covers this build script and Cargo.toml, so allowlist edits or a
+/// bindgen dependency bump invalidate the cache. The SDK version is implied by
+/// the directory the cache lives in.
+fn bindings_cache_path(include_dir: &Path) -> Option<PathBuf> {
+    let sdk_dir = include_dir.parent()?;
+    let target = env::var("TARGET").ok()?;
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").ok()?);
+
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a offset basis
+    for source in ["build.rs", "libclang.rs", "Cargo.toml"] {
+        let contents = fs::read(manifest_dir.join(source)).ok()?;
+        for byte in contents {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3); // FNV-1a prime
+        }
+    }
+
+    Some(
+        sdk_dir
+            .join(".bindgen-cache")
+            .join(format!("bindings-{}-{:016x}.rs", target, hash)),
+    )
+}
 fn copy_bindings(src: &Path, dst: &Path) -> Result<(), String> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent).map_err(|e| {

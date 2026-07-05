@@ -116,12 +116,13 @@ impl HistDataStreamState {
         }
 
         // Create builders for this chunk
-        let mut ticker_builder = StringBuilder::new();
-        let mut date_builder = Date32Builder::new();
+        let mut ticker_builder =
+            StringBuilder::with_capacity(n, ticker.len().saturating_mul(n));
+        let mut date_builder = Date32Builder::with_capacity(n);
         let mut field_builders: Vec<Float64Builder> = self
             .field_names
             .iter()
-            .map(|_| Float64Builder::new())
+            .map(|_| Float64Builder::with_capacity(n))
             .collect();
 
         for i in 0..n {
@@ -179,7 +180,9 @@ impl HistDataStreamState {
             .map(|b| Arc::new(b.finish()) as ArrayRef)
             .collect();
 
-        let mut columns: Vec<ArrayRef> = vec![Arc::new(ticker_array), Arc::new(date_array)];
+        let mut columns: Vec<ArrayRef> = Vec::with_capacity(2 + field_arrays.len());
+        columns.push(Arc::new(ticker_array));
+        columns.push(Arc::new(date_array));
         columns.extend(field_arrays);
 
         RecordBatch::try_new(schema.clone(), columns).ok()

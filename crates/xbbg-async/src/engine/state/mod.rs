@@ -30,12 +30,12 @@ pub use intradaybar_stream::IntradayBarStreamState;
 pub use intradaytick::IntradayTickState;
 pub use intradaytick_stream::IntradayTickStreamState;
 pub use refdata::{LongMode, OutputFormat, RefDataState};
-pub use subscription::{SubscriptionMetrics, SubscriptionState};
+pub use subscription::{MessageOutcome, SubscriptionMetrics, SubscriptionState};
 pub use update::{
     FieldIndex, FieldKind, FieldLayout, FieldMeta, SubscriptionUpdate, TopicId, UpdateField,
     UpdateValue,
 };
-pub use update_arrow::subscription_update_to_record_batch;
+pub use update_arrow::{subscription_update_to_record_batch, SubscriptionArrowBatcher};
 pub(crate) use value_utils::ResponseMetadata;
 pub use value_utils::{
     FieldExceptionMeta, SecurityErrorMeta, METADATA_KEY_EID_DATA, METADATA_KEY_FIELD_EXCEPTIONS,

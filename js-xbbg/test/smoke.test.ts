@@ -1,4 +1,3 @@
-import { Field, Int32, Schema, Table, tableToIPC } from 'apache-arrow';
 import { expectTypeOf } from 'vitest';
 
 import { tableFromNativeArrowBatch } from '../src/arrow-zero-copy';
@@ -33,8 +32,8 @@ function fakeNativeSubscription(): any {
     add: async () => undefined,
     fields: ['BID', 'ASK'],
     isActive: true,
-    nextArrow: async () => null,
-    nextUpdate: async () => null,
+    nextArrowBatch: async () => null,
+    nextUpdates: async () => null,
     remove: async () => undefined,
     stats: {
       batchesSent: 0,
@@ -56,11 +55,13 @@ function typedBuffer(view: ArrayBufferView): Buffer {
   return Buffer.from(view.buffer, view.byteOffset, view.byteLength);
 }
 
-function metadataIpc(metadata: Record<string, string>): Buffer {
-  const field = new Field('answer', new Int32(), false);
-  const schema = new Schema([field], new Map(Object.entries(metadata)));
-  const table = new Table(schema);
-  return Buffer.from(tableToIPC(table, 'stream'));
+function metadataBatch(metadata: Record<string, string>): NativeArrowZeroCopyBatch {
+  return {
+    columns: [],
+    kind: 'zeroCopy',
+    metadata,
+    numRows: 0,
+  };
 }
 
 function captureRequests(): api.Engine & { readonly calls: RequestInput[] } {
@@ -540,17 +541,25 @@ describe('native Arrow zero-copy table construction', () => {
       add: async () => {},
       fields: [],
       isActive: true,
-      nextArrow: async () => Promise.resolve(null),
-      nextUpdate: async () =>
+      nextArrowBatch: async () => Promise.resolve(null),
+      nextUpdates: async () =>
         Promise.resolve({
-          kind: 'update',
-          topic: 'XBTUSD Curncy',
-          topicId: 1,
-          timestampUs: 123,
-          layoutVersion: 1,
-          fields: ['answer'],
-          values: [42],
-          valueKinds: ['i32'],
+          kind: 'batch',
+          layout: { fields: ['answer'], kinds: ['i32'], version: 1 },
+          updates: [
+            {
+              boolValues: [null],
+              f64Values: [null],
+              fieldIndices: [0],
+              i32Values: [42],
+              i64Values: [null],
+              layoutVersion: 1,
+              stringValues: [null],
+              timestampUs: 123,
+              topic: 'XBTUSD Curncy',
+              topicId: 1,
+            },
+          ],
         }),
       remove: async () => {},
       stats: { batchesSent: 0, droppedBatches: 0, messagesReceived: 0, slowConsumer: false },
@@ -587,8 +596,8 @@ describe('native Arrow zero-copy table construction', () => {
       add: async () => {},
       fields: [],
       isActive: true,
-      nextArrow: async () => Promise.resolve(null),
-      nextUpdate: async () => Promise.resolve(null),
+      nextArrowBatch: async () => Promise.resolve(null),
+      nextUpdates: async () => Promise.resolve(null),
       remove: async () => {},
       stats: { batchesSent: 0, droppedBatches: 0, messagesReceived: 0, slowConsumer: false },
       tickers: [],
@@ -613,20 +622,20 @@ describe('native Arrow zero-copy table construction', () => {
 
   it('parses JSON result metadata and ignores absent or malformed convenience payloads', async () => {
     const engine = Object.create(api.Engine.prototype) as api.Engine;
-    const buffers = [
-      metadataIpc({
+    const batches = [
+      metadataBatch({
         'xbbg.eid_data': '{"IBM US Equity":[101,202]}',
         'xbbg.field_exceptions':
           '{"IBM US Equity":[{"field":"PX_BAD","category":"BAD_FLD","code":9,"subcategory":"INVALID_FIELD","message":"bad field"}]}',
         'xbbg.security_errors':
           '{"MSFT US Equity":{"category":"BAD_SEC","code":"10","subcategory":"INVALID_SECURITY","message":"bad security"}}',
       }),
-      metadataIpc({}),
-      metadataIpc({ 'xbbg.eid_data': '{not-json' }),
+      metadataBatch({}),
+      metadataBatch({ 'xbbg.eid_data': '{not-json' }),
     ];
     Reflect.set(engine, 'inner', {
       request: async () => {
-        const next = buffers.shift();
+        const next = batches.shift();
         if (next === undefined) {
           throw new Error('unexpected request');
         }
@@ -689,11 +698,12 @@ describe('engine wrapper request plumbing', () => {
       add: async () => {},
       fields: [],
       isActive: true,
-      nextArrow: async () => Promise.resolve(null),
+      nextArrowBatch: async () => Promise.resolve(null),
       remove: async () => {},
       stats: { batchesSent: 0, droppedBatches: 0, messagesReceived: 0, slowConsumer: false },
       tickers: [],
       unsubscribeArrow: async () => Promise.resolve(null),
+      unsubscribe: async () => Promise.resolve(null),
     };
     const engine = Object.create(api.Engine.prototype) as api.Engine;
     (engine as unknown as { inner: unknown }).inner = {
@@ -830,12 +840,12 @@ describe('engine wrapper request plumbing', () => {
   it('splits OverrideSpec security overrides at the native request boundary', async () => {
     const captured: unknown[] = [];
     const engine = Object.create(api.Engine.prototype) as api.Engine;
-    (engine as unknown as { inner: { request(params: unknown): Promise<Buffer> } }).inner = {
-      request: async (params: unknown) => {
+    Reflect.set(engine, 'inner', {
+      requestRaw: async (params: unknown) => {
         captured.push(params);
         return Buffer.from([]);
       },
-    };
+    });
 
     await engine.requestRaw({
       fields: ['PX_LAST'],

@@ -326,7 +326,7 @@ fn test_subscription_arrow_adapter_emits_utc_timestamp_column() {
             1,
             vec![FieldMeta::new("LAST_PRICE", 0, FieldKind::Unknown)],
         )),
-        values: Box::from([]),
+        values: smallvec::SmallVec::new(),
     };
 
     let batch = subscription_update_to_record_batch(&update)

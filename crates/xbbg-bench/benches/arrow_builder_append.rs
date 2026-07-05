@@ -14,13 +14,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::{ ArrayRef, Float64Array };
-use arrow_schema::{ DataType, Field, Schema };
+use arrow_schema::{ArrowError, DataType, Field, Schema};
 use arrow_array::RecordBatch;
 use xbbg_async::engine::state::typed_builder::{ArrowType, TypedBuilder};
 use xbbg_core::Value;
 
 const DEFAULT_ROWS: usize = 100_000;
-const DEFAULT_ITERATIONS: usize = 5;
+const DEFAULT_ITERATIONS: usize = 10;
+const DEFAULT_WARMUP: usize = 2;
 
 struct ColumnSet {
     fields: Vec<String>,
@@ -78,7 +79,7 @@ impl ColumnSet {
         self.rows += 1;
     }
 
-    fn finish(mut self) -> Result<RecordBatch, arrow::error::ArrowError> {
+    fn finish(mut self) -> Result<RecordBatch, ArrowError> {
         let mut fields = Vec::with_capacity(self.fields.len());
         let mut arrays = Vec::with_capacity(self.fields.len());
 
@@ -90,10 +91,7 @@ impl ColumnSet {
         RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)
     }
 
-    fn finish_with_order(
-        mut self,
-        order: &[&str],
-    ) -> Result<RecordBatch, arrow::error::ArrowError> {
+    fn finish_with_order(mut self, order: &[&str]) -> Result<RecordBatch, ArrowError> {
         let mut fields = Vec::with_capacity(order.len());
         let mut arrays = Vec::with_capacity(order.len());
 
@@ -117,8 +115,10 @@ struct BenchResult {
     columns: usize,
     iterations: usize,
     values_per_iteration: usize,
-    best_ns: u128,
-    avg_ns: u128,
+    warmup_iterations: usize,
+    min_ns: u128,
+    mean_ns: u128,
+    p50_ns: u128,
     rows_per_second: f64,
     values_per_second: f64,
 }
@@ -126,32 +126,80 @@ struct BenchResult {
 fn main() {
     let rows = env_usize("ARROW_BENCH_ROWS", DEFAULT_ROWS);
     let iterations = env_usize("ARROW_BENCH_ITERATIONS", DEFAULT_ITERATIONS);
+    let warmup_iterations = env_usize("BENCH_WARMUP", DEFAULT_WARMUP);
 
-    let scenarios: &[(&str, usize, fn(usize) -> usize)] = &[
-        ("dense_float64", 1, bench_dense_float64),
-        ("sparse_float64_null", 1, bench_sparse_float64_null),
-        ("dense_string", 1, bench_dense_string),
-        ("mixed_5_column_rows", 5, bench_mixed_5_column_rows),
-        ("wide_100_column_rows", 100, bench_wide_100_column_rows),
-        (
-            "late_column_null_backfill",
-            2,
-            bench_late_column_null_backfill,
-        ),
-        (
-            "record_batch_finalization",
-            5,
-            bench_record_batch_finalization,
-        ),
+    let dense_strings: Vec<String> = (0..1024)
+        .map(|idx| format!("SECURITY_{idx:04}"))
+        .collect();
+    let mixed_hints = vec![
+        ("ticker".to_string(), ArrowType::String),
+        ("px_last".to_string(), ArrowType::Float64),
+        ("volume".to_string(), ArrowType::Int64),
+        ("is_active".to_string(), ArrowType::Bool),
+        ("trade_date".to_string(), ArrowType::Date32),
     ];
+    let wide_names: Vec<String> = (0..100).map(|col| format!("px_{col:03}")).collect();
+    let wide_hints: Vec<(String, ArrowType)> = wide_names
+        .iter()
+        .cloned()
+        .map(|name| (name, ArrowType::Float64))
+        .collect();
+    let late_hints = vec![
+        ("px_last".to_string(), ArrowType::Float64),
+        ("late_string".to_string(), ArrowType::String),
+    ];
+    let finalization_field_names: Vec<String> = (0..5).map(|col| format!("value_{col}")).collect();
 
-    let mut results = Vec::with_capacity(scenarios.len());
-    for &(name, columns, scenario) in scenarios {
-        results.push(run_scenario(name, rows, columns, iterations, scenario));
-    }
+    let mut results = Vec::with_capacity(7);
+    results.push(run_scenario("dense_float64", rows, 1, iterations, warmup_iterations, || {
+        bench_dense_float64(rows)
+    }));
+    results.push(run_scenario(
+        "sparse_float64_null",
+        rows,
+        1,
+        iterations,
+        warmup_iterations,
+        || bench_sparse_float64_null(rows),
+    ));
+    results.push(run_scenario("dense_string", rows, 1, iterations, warmup_iterations, || {
+        bench_dense_string(rows, &dense_strings)
+    }));
+    results.push(run_scenario(
+        "mixed_5_column_rows",
+        rows,
+        5,
+        iterations,
+        warmup_iterations,
+        || bench_mixed_5_column_rows(rows, &mixed_hints),
+    ));
+    results.push(run_scenario(
+        "wide_100_column_rows",
+        rows,
+        100,
+        iterations,
+        warmup_iterations,
+        || bench_wide_100_column_rows(rows, &wide_hints, &wide_names),
+    ));
+    results.push(run_scenario(
+        "late_column_null_backfill",
+        rows,
+        2,
+        iterations,
+        warmup_iterations,
+        || bench_late_column_null_backfill(rows, &late_hints),
+    ));
+    results.push(run_scenario(
+        "record_batch_finalization",
+        rows,
+        5,
+        iterations,
+        warmup_iterations,
+        || bench_record_batch_finalization(rows, &finalization_field_names),
+    ));
 
     print_table(&results);
-    write_results(&results, rows, iterations);
+    write_results(&results, rows, iterations, warmup_iterations);
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
@@ -162,37 +210,48 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn run_scenario(
+fn run_scenario<F>(
     name: &'static str,
     rows: usize,
     columns: usize,
     iterations: usize,
-    scenario: fn(usize) -> usize,
-) -> BenchResult {
+    warmup_iterations: usize,
+    mut scenario: F,
+) -> BenchResult
+where
+    F: FnMut() -> usize,
+{
+    for _ in 0..warmup_iterations {
+        black_box(scenario());
+    }
+
     let mut timings = Vec::with_capacity(iterations);
     let mut values_per_iteration = 0;
 
     for _ in 0..iterations {
         let started = Instant::now();
-        values_per_iteration = scenario(rows);
+        values_per_iteration = scenario();
         timings.push(started.elapsed());
     }
 
-    let best = timings.iter().copied().min().unwrap_or(Duration::ZERO);
+    let min = timings.iter().copied().min().unwrap_or(Duration::ZERO);
     let total_ns: u128 = timings.iter().map(Duration::as_nanos).sum();
-    let avg_ns = total_ns / iterations as u128;
-    let avg_secs = avg_ns as f64 / 1_000_000_000.0;
+    let mean_ns = total_ns / iterations as u128;
+    let p50_ns = percentile_ns(&timings, 50.0);
+    let mean_secs = mean_ns as f64 / 1_000_000_000.0;
 
     BenchResult {
         name,
         rows,
         columns,
         iterations,
+        warmup_iterations,
         values_per_iteration,
-        best_ns: best.as_nanos(),
-        avg_ns,
-        rows_per_second: rows as f64 / avg_secs,
-        values_per_second: values_per_iteration as f64 / avg_secs,
+        min_ns: min.as_nanos(),
+        mean_ns,
+        p50_ns,
+        rows_per_second: rows as f64 / mean_secs,
+        values_per_second: values_per_iteration as f64 / mean_secs,
     }
 }
 
@@ -222,8 +281,7 @@ fn bench_sparse_float64_null(rows: usize) -> usize {
     rows
 }
 
-fn bench_dense_string(rows: usize) -> usize {
-    let values: Vec<String> = (0..1024).map(|idx| format!("SECURITY_{idx:04}")).collect();
+fn bench_dense_string(rows: usize, values: &[String]) -> usize {
     let mut builder = TypedBuilder::new(ArrowType::String);
 
     for row in 0..rows {
@@ -235,14 +293,8 @@ fn bench_dense_string(rows: usize) -> usize {
     rows
 }
 
-fn bench_mixed_5_column_rows(rows: usize) -> usize {
-    let mut cols = ColumnSet::with_type_hints([
-        ("ticker".to_string(), ArrowType::String),
-        ("px_last".to_string(), ArrowType::Float64),
-        ("volume".to_string(), ArrowType::Int64),
-        ("is_active".to_string(), ArrowType::Bool),
-        ("trade_date".to_string(), ArrowType::Date32),
-    ]);
+fn bench_mixed_5_column_rows(rows: usize, hints: &[(String, ArrowType)]) -> usize {
+    let mut cols = ColumnSet::with_type_hints(hints.iter().cloned());
 
     for row in 0..rows {
         cols.append("ticker", Value::String("AAPL US Equity"));
@@ -258,10 +310,12 @@ fn bench_mixed_5_column_rows(rows: usize) -> usize {
     rows * 5
 }
 
-fn bench_wide_100_column_rows(rows: usize) -> usize {
-    let hints = (0..100).map(|col| (format!("px_{col:03}"), ArrowType::Float64));
-    let mut cols = ColumnSet::with_type_hints(hints);
-    let names: Vec<String> = (0..100).map(|col| format!("px_{col:03}")).collect();
+fn bench_wide_100_column_rows(
+    rows: usize,
+    hints: &[(String, ArrowType)],
+    names: &[String],
+) -> usize {
+    let mut cols = ColumnSet::with_type_hints(hints.iter().cloned());
 
     for row in 0..rows {
         for (col, name) in names.iter().enumerate() {
@@ -275,11 +329,8 @@ fn bench_wide_100_column_rows(rows: usize) -> usize {
     rows * 100
 }
 
-fn bench_late_column_null_backfill(rows: usize) -> usize {
-    let mut cols = ColumnSet::with_type_hints([
-        ("px_last".to_string(), ArrowType::Float64),
-        ("late_string".to_string(), ArrowType::String),
-    ]);
+fn bench_late_column_null_backfill(rows: usize, hints: &[(String, ArrowType)]) -> usize {
+    let mut cols = ColumnSet::with_type_hints(hints.iter().cloned());
     let late_at = rows / 2;
 
     for row in 0..rows {
@@ -297,16 +348,16 @@ fn bench_late_column_null_backfill(rows: usize) -> usize {
     rows * 2
 }
 
-fn bench_record_batch_finalization(rows: usize) -> usize {
+fn bench_record_batch_finalization(rows: usize, field_names: &[String]) -> usize {
     let mut fields = Vec::with_capacity(5);
     let mut arrays = Vec::with_capacity(5);
 
-    for col in 0..5 {
+    for (col, name) in field_names.iter().enumerate() {
         let mut builder = TypedBuilder::new(ArrowType::Float64);
         for row in 0..rows {
             builder.append_value(Some(Value::Float64(row as f64 + col as f64)));
         }
-        fields.push(Field::new(format!("value_{col}"), DataType::Float64, true));
+        fields.push(Field::new(name.clone(), DataType::Float64, true));
         arrays.push(builder.finish());
     }
 
@@ -331,19 +382,20 @@ fn direct_arrow_record_batch(rows: usize) -> RecordBatch {
 
 fn print_table(results: &[BenchResult]) {
     println!(
-        "{:<30} {:>10} {:>8} {:>12} {:>14} {:>14} {:>14}",
-        "scenario", "rows", "cols", "avg_ms", "best_ms", "rows/s", "values/s"
+        "{:<30} {:>10} {:>8} {:>12} {:>12} {:>12} {:>14} {:>14}",
+        "scenario", "rows", "cols", "mean_ms", "min_ms", "p50_ms", "rows/s", "values/s"
     );
-    println!("{}", "-".repeat(110));
+    println!("{}", "-".repeat(124));
 
     for result in results {
         println!(
-            "{:<30} {:>10} {:>8} {:>12.3} {:>14.3} {:>14.0} {:>14.0}",
+            "{:<30} {:>10} {:>8} {:>12.3} {:>12.3} {:>12.3} {:>14.0} {:>14.0}",
             result.name,
             result.rows,
             result.columns,
-            nanos_to_millis(result.avg_ns),
-            nanos_to_millis(result.best_ns),
+            nanos_to_millis(result.mean_ns),
+            nanos_to_millis(result.min_ns),
+            nanos_to_millis(result.p50_ns),
             result.rows_per_second,
             result.values_per_second,
         );
@@ -354,10 +406,17 @@ fn nanos_to_millis(ns: u128) -> f64 {
     ns as f64 / 1_000_000.0
 }
 
-fn write_results(results: &[BenchResult], rows: usize, iterations: usize) {
+fn percentile_ns(timings: &[Duration], percentile: f64) -> u128 {
+    let mut values: Vec<u128> = timings.iter().map(Duration::as_nanos).collect();
+    values.sort_unstable();
+    let idx = (((values.len() - 1) as f64) * percentile / 100.0).round() as usize;
+    values[idx]
+}
+
+fn write_results(results: &[BenchResult], rows: usize, iterations: usize, warmup_iterations: usize) {
     let timestamp = unix_timestamp();
-    let json = results_json(results, rows, iterations, timestamp);
-    let dir = PathBuf::from("benchmarks/results");
+    let json = results_json(results, rows, iterations, warmup_iterations, timestamp);
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benchmarks/results");
     let timestamped = dir.join(format!("arrow_builder_append_{timestamp}.json"));
     let latest = dir.join("arrow_builder_append_latest.json");
 
@@ -372,13 +431,28 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
-fn results_json(results: &[BenchResult], rows: usize, iterations: usize, timestamp: u64) -> String {
+fn results_json(
+    results: &[BenchResult],
+    rows: usize,
+    iterations: usize,
+    warmup_iterations: usize,
+    timestamp: u64,
+) -> String {
+    let build_mode = xbbg_bench::build_mode();
     let mut json = String::new();
     writeln!(&mut json, "{{").unwrap();
     writeln!(&mut json, "  \"benchmark\": \"arrow_builder_append\",").unwrap();
     writeln!(&mut json, "  \"timestamp_unix\": {timestamp},").unwrap();
     writeln!(&mut json, "  \"rows\": {rows},").unwrap();
     writeln!(&mut json, "  \"iterations\": {iterations},").unwrap();
+    writeln!(&mut json, "  \"warmup_iterations\": {warmup_iterations},").unwrap();
+    writeln!(
+        &mut json,
+        "  \"target_cpu\": {{ \"native\": {} }},",
+        build_mode.target_cpu_native
+    )
+    .unwrap();
+    writeln!(&mut json, "  \"debug_build\": {},", build_mode.debug_build).unwrap();
     writeln!(&mut json, "  \"results\": [").unwrap();
 
     for (idx, result) in results.iter().enumerate() {
@@ -395,12 +469,19 @@ fn results_json(results: &[BenchResult], rows: usize, iterations: usize, timesta
         writeln!(&mut json, "      \"iterations\": {},", result.iterations).unwrap();
         writeln!(
             &mut json,
+            "      \"warmup_iterations\": {},",
+            result.warmup_iterations
+        )
+        .unwrap();
+        writeln!(
+            &mut json,
             "      \"values_per_iteration\": {},",
             result.values_per_iteration
         )
         .unwrap();
-        writeln!(&mut json, "      \"best_ns\": {},", result.best_ns).unwrap();
-        writeln!(&mut json, "      \"avg_ns\": {},", result.avg_ns).unwrap();
+        writeln!(&mut json, "      \"min_ns\": {},", result.min_ns).unwrap();
+        writeln!(&mut json, "      \"mean_ns\": {},", result.mean_ns).unwrap();
+        writeln!(&mut json, "      \"p50_ns\": {},", result.p50_ns).unwrap();
         writeln!(
             &mut json,
             "      \"rows_per_second\": {:.3},",

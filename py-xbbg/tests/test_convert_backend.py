@@ -120,12 +120,37 @@ class TestConvertBackendPyArrow:
 
 
 class TestConvertBackendPandas:
-    def test_convert_pandas_returns_dataframe(self, arrow_table: Any):
+    def test_convert_pandas_prefers_pyarrow_when_available(
+        self, arrow_table: Any, monkeypatch: pytest.MonkeyPatch
+    ):
         pd = pytest.importorskip("pandas")
+        pa = pytest.importorskip("pyarrow")
+        import xbbg.backend as backend_module
+
+        real_import_backend = backend_module._import_backend_module
+        calls: list[str] = []
+
+        class PyArrowProxy:
+            def table(self, value: Any) -> Any:
+                calls.append("pyarrow.table")
+                return pa.table(value)
+
+        def import_backend(backend: Backend | str, *, feature: str | None = None) -> Any:
+            if Backend(backend) is Backend.PYARROW:
+                calls.append("import pyarrow")
+                return PyArrowProxy()
+            return real_import_backend(backend, feature=feature)
+
+        monkeypatch.setattr(backend_module, "_import_backend_module", import_backend)
+
         result = convert_backend_frame(arrow_table, Backend.PANDAS)
+
         assert isinstance(result, pd.DataFrame)
+        assert result.shape == (arrow_table.num_rows, arrow_table.num_columns)
         assert list(result.columns) == arrow_table.column_names
-        assert len(result) == arrow_table.num_rows
+        assert result["ticker"].tolist() == ["AAPL US Equity", "MSFT US Equity"]
+        assert result["px_last"].tolist() == [150.0, 380.0]
+        assert calls == ["import pyarrow", "pyarrow.table"]
 
     def test_attach_xbbg_metadata_attrs_copies_present_native_metadata(self):
         pd = pytest.importorskip("pandas")
@@ -148,22 +173,32 @@ class TestConvertBackendPandas:
         assert frame.attrs["xbbg_security_errors"] == {"BAD Ticker": {"message": "bad security"}}
         assert "xbbg_field_exceptions" not in frame.attrs
 
-    def test_convert_pandas_does_not_require_pyarrow(self, arrow_table: Any, monkeypatch: pytest.MonkeyPatch):
+    def test_convert_pandas_falls_back_when_pyarrow_import_raises(
+        self, arrow_table: Any, monkeypatch: pytest.MonkeyPatch
+    ):
         pd = pytest.importorskip("pandas")
-        del pd
-        if importlib.util.find_spec("pyarrow") is not None:
-            pytest.skip("environment has pyarrow installed; isolated no-pyarrow coverage owns this assertion")
+        import xbbg.backend as backend_module
 
-        real_import = __import__
+        real_import_backend = backend_module._import_backend_module
+        attempted_pyarrow = False
 
-        def guarded_import(name: str, *args: Any, **kwargs: Any) -> Any:
-            if name == "pyarrow" or name.startswith("pyarrow."):
-                raise AssertionError("pandas conversion must not import optional Arrow bindings")
-            return real_import(name, *args, **kwargs)
+        def import_backend(backend: Backend | str, *, feature: str | None = None) -> Any:
+            nonlocal attempted_pyarrow
+            if Backend(backend) is Backend.PYARROW:
+                attempted_pyarrow = True
+                raise ImportError("pyarrow unavailable")
+            return real_import_backend(backend, feature=feature)
 
-        monkeypatch.setattr("builtins.__import__", guarded_import)
+        monkeypatch.setattr(backend_module, "_import_backend_module", import_backend)
+
         result = convert_backend_frame(arrow_table, Backend.PANDAS)
-        assert len(result) == arrow_table.num_rows
+
+        assert attempted_pyarrow is True
+        assert isinstance(result, pd.DataFrame)
+        assert result.shape == (arrow_table.num_rows, arrow_table.num_columns)
+        assert list(result.columns) == arrow_table.column_names
+        assert result["ticker"].tolist() == ["AAPL US Equity", "MSFT US Equity"]
+        assert result["px_last"].tolist() == [150.0, 380.0]
 
 
 class TestConvertBackendPolars:
@@ -195,6 +230,9 @@ class TestConvertBackendDuckDB:
 class TestConvertBackendNarwhals:
     def _block_dataframe_backend_imports(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _block_imports(monkeypatch, "pyarrow", "pandas", "polars", "arro3")
+        import xbbg.backend as backend_module
+
+        backend_module._best_narwhals_backend.cache_clear()
         monkeypatch.setattr("xbbg.backend._native_narwhals_fallback_warned", True)
 
     def test_convert_narwhals_prefers_pyarrow_when_available(self, arrow_table: Any):

@@ -51,10 +51,14 @@ uv pip install pdblp
 # Run all benchmarks
 python py-xbbg/benchmarks/run_all.py
 
+# Run all benchmarks without the offline handoff lane
+python py-xbbg/benchmarks/run_all.py --no-offline
+
 # Run specific benchmark
 python py-xbbg/benchmarks/bench_bdp.py
 python py-xbbg/benchmarks/bench_bdh.py
 python py-xbbg/benchmarks/bench_bdib.py
+python py-xbbg/benchmarks/bench_handoff_offline.py --quick
 ```
 
 ---
@@ -63,12 +67,13 @@ python py-xbbg/benchmarks/bench_bdib.py
 
 | Script | Operations | Data Points |
 |--------|-----------|-------------|
-| `bench_bdp.py` | Reference data (bdp) | ~10-20 |
-| `bench_bdh.py` | Historical data (bdh) | ~15-30 |
-| `bench_bdib.py` | Intraday bars (bdib) | ~50-100 |
-| `bench_bdtick.py` | Tick data (bdtick) | ~100-200 |
-| `bench_bql.py` | BQL queries | ~10-20 |
-| `run_all.py` | All benchmarks | ~200-350 |
+| `bench_bdp.py` | Reference data (bdp) | ~10-20 live |
+| `bench_bdh.py` | Historical data (bdh) | ~15-30 live |
+| `bench_bdib.py` | Intraday bars (bdib) | ~50-100 live |
+| `bench_bdtick.py` | Tick data (bdtick) | ~100-200 live |
+| `bench_bql.py` | BQL queries | ~10-20 live |
+| `bench_handoff_offline.py` | Native Arrow handoff conversions | 0 live; fixture data |
+| `run_all.py` | All benchmarks, including offline handoff by default | ~200-350 live |
 
 ---
 
@@ -98,9 +103,11 @@ Results are saved to `results/`:
 
 ```
 results/
-├── benchmark_YYYYMMDD_HHMMSS.json    # Raw data
-├── benchmark_YYYYMMDD_HHMMSS.md      # Markdown report
-└── latest.json                        # Symlink to latest run
+├── benchmark_YYYYMMDD_HHMMSS.json       # Raw data
+├── benchmark_YYYYMMDD_HHMMSS.md         # Markdown report
+├── handoff_offline_YYYYMMDD_HHMMSS.json # Offline handoff results
+├── handoff_offline_latest.json          # Latest offline handoff run
+└── latest.json                          # Symlink to latest run
 ```
 
 ### Example Output
@@ -149,6 +156,7 @@ Speedup vs pdblp:       7.1x faster, 3.9x less memory
 ## Notes
 
 - **Bloomberg connection required**: Tests need active Bloomberg terminal or BPIPE
+- **Offline handoff benchmark**: `bench_handoff_offline.py` uses in-process fixture data only; no Bloomberg connection is required.
 - **Data limits**: Be mindful of Bloomberg data limits when running frequently
 - **Timing variability**: Network latency affects results; run multiple iterations
 - **Package versions**: Results are version-specific; document versions used
