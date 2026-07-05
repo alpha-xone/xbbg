@@ -143,6 +143,8 @@ Supported auth methods:
 
 Tool calls are handled on the user's machine and forwarded only to the Bloomberg runtime/API endpoint configured by the user (`XBBG_MCP_HOST` / `XBBG_HOST`, default `localhost:8194`) under that user's Bloomberg agreements and entitlements. Results are returned only to the MCP client process that launched the server.
 
+Bloomberg validates entitlements at request time, including per-security and per-field access. A valid local session can still return empty or partial results when the user's DAPI, SAPI/B-PIPE, or ZFP entitlement set does not cover the requested data.
+
 The server reads configuration from environment variables and does not persist request data, credentials, or Bloomberg responses to disk.
 
 ## Smoke test
