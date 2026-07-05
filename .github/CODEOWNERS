@@ -4,29 +4,29 @@
 
 # Global owners - all files default to these owners
 # Note: To use teams, the repository must be owned by an organization
-* @alpha-xone @kj55-dev
+* @alpha-xone
 
 # Core library code
-/xbbg/ @alpha-xone @kj55-dev
-/xbbg/core/ @alpha-xone @kj55-dev
-/xbbg/io/ @alpha-xone @kj55-dev
-/xbbg/markets/ @alpha-xone @kj55-dev
+/xbbg/ @alpha-xone
+/xbbg/core/ @alpha-xone
+/xbbg/io/ @alpha-xone
+/xbbg/markets/ @alpha-xone
 
 # Tests
-/xbbg/tests/ @alpha-xone @kj55-dev
-/tests/ @alpha-xone @kj55-dev
+/xbbg/tests/ @alpha-xone
+/tests/ @alpha-xone
 
-/README.md @alpha-xone @kj55-dev
-/SECURITY.md @alpha-xone @kj55-dev
+/README.md @alpha-xone
+/SECURITY.md @alpha-xone
 
 # GitHub workflows and configuration
-/.github/ @alpha-xone @kj55-dev
+/.github/ @alpha-xone
 
 # Build and project configuration
-/pyproject.toml @alpha-xone @kj55-dev
-/MANIFEST.in @alpha-xone @kj55-dev
-/uv.lock @alpha-xone @kj55-dev
+/pyproject.toml @alpha-xone
+/MANIFEST.in @alpha-xone
+/uv.lock @alpha-xone
 
 # Examples
-/py-xbbg/examples/ @alpha-xone @kj55-dev
+/py-xbbg/examples/ @alpha-xone
 
