@@ -158,6 +158,7 @@ def test_ext_exports_new_workflows():
 
 def test_pivot_bdp_to_wide_uses_native_pyo3_pivot_for_xbbg_narwhals(monkeypatch):
     import narwhals.stable.v1 as nw
+
     import xbbg._core as core_module
     from xbbg._core import ArrowTable
     from xbbg.ext._utils import _pivot_bdp_to_wide
@@ -189,6 +190,7 @@ def test_pivot_bdp_to_wide_uses_native_pyo3_pivot_for_xbbg_narwhals(monkeypatch)
 
 def test_pivot_bdp_to_wide_keeps_foreign_frames_on_pure_narwhals_path(monkeypatch):
     import narwhals.stable.v1 as nw
+
     import xbbg._core as core_module
     from xbbg.ext._utils import _pivot_bdp_to_wide
 

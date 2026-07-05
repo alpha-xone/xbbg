@@ -52,16 +52,11 @@ const schemaCache = new Map<string, CachedArrowSchema>();
 function schemaFingerprint(batch: NativeArrowZeroCopyBatch): string {
   const columns = batch.columns
     .map((column) =>
-      [
-        column.name,
-        column.type,
-        column.nullable ? '1' : '0',
-        column.timezone ?? '',
-      ].join('\u0000'),
+      [column.name, column.type, column.nullable ? '1' : '0', column.timezone ?? ''].join('\u0000'),
     )
     .join('\u0001');
   const metadata = Object.entries(batch.metadata)
-    .sort(([left], [right]) => left.localeCompare(right))
+    .toSorted(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}\u0000${value}`)
     .join('\u0001');
   return `${columns}\u0002${metadata}`;
@@ -74,15 +69,18 @@ function cachedSchema(batch: NativeArrowZeroCopyBatch): CachedArrowSchema {
     return cached;
   }
   const types = batch.columns.map(arrowType);
-  const fields = batch.columns.map(
-    (column, index) => new Field(column.name, types[index] as DataType, column.nullable),
-  );
+  const fields = batch.columns.map((column, index) => {
+    const type = types[index];
+    if (type === undefined) {
+      throw new Error(`Missing Arrow type for column ${column.name}`);
+    }
+    return new Field(column.name, type, column.nullable);
+  });
   const schema = new Schema(fields, new Map(Object.entries(batch.metadata)));
   const created = { fields, schema, structType: new Struct(fields), types };
   schemaCache.set(fingerprint, created);
   return created;
 }
-
 
 function unsupportedNativeArrowType(type: never): never {
   throw new Error(`Unsupported native Arrow column type: ${String(type)}`);
@@ -96,9 +94,13 @@ interface TypedArrayConstructor<T extends ArrayBufferView> {
 export function tableFromNativeArrowBatch(batch: NativeArrowZeroCopyBatch): Table {
   const retainedBuffers: Buffer[] = [];
   const cached = cachedSchema(batch);
-  const children = batch.columns.map((column, index) =>
-    dataFromColumn(column, retainedBuffers, cached.types[index] as DataType),
-  );
+  const children = batch.columns.map((column, index) => {
+    const type = cached.types[index];
+    if (type === undefined) {
+      throw new Error(`Missing cached Arrow type for column ${column.name}`);
+    }
+    return dataFromColumn(column, retainedBuffers, type);
+  });
 
   const structData = makeData({
     children,
@@ -207,40 +209,16 @@ function dataFromColumn(
       return scalarData(column, retainedBuffers, nullBitmap, type, BigInt64Array);
     }
     case 'timestamp_ms': {
-      return scalarData(
-        column,
-        retainedBuffers,
-        nullBitmap,
-        type,
-        BigInt64Array,
-      );
+      return scalarData(column, retainedBuffers, nullBitmap, type, BigInt64Array);
     }
     case 'timestamp_ns': {
-      return scalarData(
-        column,
-        retainedBuffers,
-        nullBitmap,
-        type,
-        BigInt64Array,
-      );
+      return scalarData(column, retainedBuffers, nullBitmap, type, BigInt64Array);
     }
     case 'timestamp_s': {
-      return scalarData(
-        column,
-        retainedBuffers,
-        nullBitmap,
-        type,
-        BigInt64Array,
-      );
+      return scalarData(column, retainedBuffers, nullBitmap, type, BigInt64Array);
     }
     case 'timestamp_us': {
-      return scalarData(
-        column,
-        retainedBuffers,
-        nullBitmap,
-        type,
-        BigInt64Array,
-      );
+      return scalarData(column, retainedBuffers, nullBitmap, type, BigInt64Array);
     }
     case 'uint8': {
       return scalarData(column, retainedBuffers, nullBitmap, type, Uint8Array);

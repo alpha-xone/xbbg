@@ -166,16 +166,17 @@ impl IntradayBarStreamState {
             ]))
         });
 
-        let mut columns: Vec<ArrayRef> = Vec::with_capacity(9);
-        columns.push(Arc::new(ticker_builder.finish()));
-        columns.push(Arc::new(time_builder.finish().with_timezone("UTC")));
-        columns.push(Arc::new(open_builder.finish()));
-        columns.push(Arc::new(high_builder.finish()));
-        columns.push(Arc::new(low_builder.finish()));
-        columns.push(Arc::new(close_builder.finish()));
-        columns.push(Arc::new(volume_builder.finish()));
-        columns.push(Arc::new(num_events_builder.finish()));
-        columns.push(Arc::new(value_builder.finish()));
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(ticker_builder.finish()),
+            Arc::new(time_builder.finish().with_timezone("UTC")),
+            Arc::new(open_builder.finish()),
+            Arc::new(high_builder.finish()),
+            Arc::new(low_builder.finish()),
+            Arc::new(close_builder.finish()),
+            Arc::new(volume_builder.finish()),
+            Arc::new(num_events_builder.finish()),
+            Arc::new(value_builder.finish()),
+        ];
 
         RecordBatch::try_new(schema.clone(), columns).ok()
     }

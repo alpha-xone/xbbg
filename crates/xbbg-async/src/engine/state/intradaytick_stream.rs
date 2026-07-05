@@ -169,12 +169,13 @@ impl IntradayTickStreamState {
             ]))
         });
 
-        let mut columns: Vec<ArrayRef> = Vec::with_capacity(5);
-        columns.push(Arc::new(ticker_builder.finish()));
-        columns.push(Arc::new(time_builder.finish().with_timezone("UTC")));
-        columns.push(Arc::new(type_builder.finish()));
-        columns.push(Arc::new(value_builder.finish()));
-        columns.push(Arc::new(size_builder.finish()));
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(ticker_builder.finish()),
+            Arc::new(time_builder.finish().with_timezone("UTC")),
+            Arc::new(type_builder.finish()),
+            Arc::new(value_builder.finish()),
+            Arc::new(size_builder.finish()),
+        ];
 
         RecordBatch::try_new(schema.clone(), columns).ok()
     }

@@ -36,8 +36,7 @@ pub use xbbg_sys::{
 // --- Element functions ---
 pub use xbbg_sys::{
     blpapi_Element_datatype, blpapi_Element_getElement, blpapi_Element_getElementAt,
-    blpapi_Element_getValueAsBool, blpapi_Element_getValueAsBytes,
-    blpapi_Element_getValueAsChar,
+    blpapi_Element_getValueAsBool, blpapi_Element_getValueAsBytes, blpapi_Element_getValueAsChar,
     blpapi_Element_getValueAsElement, blpapi_Element_getValueAsFloat64,
     blpapi_Element_getValueAsInt32, blpapi_Element_getValueAsInt64,
     blpapi_Element_getValueAsString, blpapi_Element_isArray, blpapi_Element_isNull,

@@ -12,7 +12,11 @@ use arrow_array::{ArrayRef, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-use std::{borrow::Cow, collections::{BTreeMap, HashSet}, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 use tokio::sync::oneshot;
 
 use super::typed_builder::ColumnSet;
@@ -89,7 +93,6 @@ enum BqlCell<'a> {
 }
 
 impl BqlCell<'_> {
-
     fn append_as_string(&self, builder: &mut StringBuilder) {
         match self {
             Self::String(s) => builder.append_value(s.as_ref()),

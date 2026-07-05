@@ -116,8 +116,7 @@ impl HistDataStreamState {
         }
 
         // Create builders for this chunk
-        let mut ticker_builder =
-            StringBuilder::with_capacity(n, ticker.len().saturating_mul(n));
+        let mut ticker_builder = StringBuilder::with_capacity(n, ticker.len().saturating_mul(n));
         let mut date_builder = Date32Builder::with_capacity(n);
         let mut field_builders: Vec<Float64Builder> = self
             .field_names

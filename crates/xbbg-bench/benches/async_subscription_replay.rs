@@ -16,8 +16,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use arrow_array::{ArrayRef, RecordBatch};
 use arrow_array::builder::{StringBuilder, TimestampMicrosecondBuilder};
+use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use xbbg_async::engine::state::typed_builder::{ArrowType, TypedBuilder};
 use xbbg_bench::write_json;
@@ -256,26 +256,30 @@ impl ReplayState {
 
 fn synthetic_value(field: &str, row: usize) -> Option<Value<'static>> {
     match field {
-        "LAST_PRICE" => {
-            (row % 17 != 0).then(|| Value::Float64(100.0 + (row % 10_000) as f64 * 0.01))
-        }
-        "BID" => (row % 11 != 0).then(|| Value::Float64(99.95 + (row % 10_000) as f64 * 0.01)),
-        "ASK" => (row % 13 != 0).then(|| Value::Float64(100.05 + (row % 10_000) as f64 * 0.01)),
-        "BID_SIZE" => (row % 5 != 0).then(|| Value::Int32((row % 1_000) as i32 + 1)),
-        "ASK_SIZE" => (row % 7 != 0).then(|| Value::Int64((row % 2_000) as i64 + 1)),
-        "IS_DELAYED_STREAM" => Some(Value::Bool(row % 19 == 0)),
-        "TRADE_TIME" => (row % 23 != 0)
-            .then(|| Value::TimestampMicros(1_700_000_000_000_000_i64 + row as i64 * 250)),
+        "LAST_PRICE" => (!row.is_multiple_of(17))
+            .then_some(Value::Float64(100.0 + (row % 10_000) as f64 * 0.01)),
+        "BID" => (!row.is_multiple_of(11))
+            .then_some(Value::Float64(99.95 + (row % 10_000) as f64 * 0.01)),
+        "ASK" => (!row.is_multiple_of(13))
+            .then_some(Value::Float64(100.05 + (row % 10_000) as f64 * 0.01)),
+        "BID_SIZE" => (!row.is_multiple_of(5)).then_some(Value::Int32((row % 1_000) as i32 + 1)),
+        "ASK_SIZE" => (!row.is_multiple_of(7)).then_some(Value::Int64((row % 2_000) as i64 + 1)),
+        "IS_DELAYED_STREAM" => Some(Value::Bool(row.is_multiple_of(19))),
+        "TRADE_TIME" => (!row.is_multiple_of(23)).then_some(Value::TimestampMicros(
+            1_700_000_000_000_000_i64 + row as i64 * 250,
+        )),
         "CONDITION_CODE" => match row % 9 {
             0 => None,
             1 => Some(Value::String("OPEN")),
             2 => Some(Value::String("CLOSE")),
             _ => Some(Value::String("REGULAR")),
         },
-        "RT_PX_CHG_NET_1D" => (row % 3 != 0).then(|| Value::Float64((row as f64 % 200.0) - 100.0)),
-        "VOLUME" => (row % 4 != 0).then(|| Value::Int64(1_000_000 + row as i64 * 10)),
-        "MKTDATA_EVENT_TYPE" => (row % 6 != 0).then(|| Value::String("TRADE")),
-        "MKTDATA_EVENT_SUBTYPE" => (row % 10 != 0).then(|| Value::String("SUMMARY")),
+        "RT_PX_CHG_NET_1D" => {
+            (!row.is_multiple_of(3)).then_some(Value::Float64((row as f64 % 200.0) - 100.0))
+        }
+        "VOLUME" => (!row.is_multiple_of(4)).then_some(Value::Int64(1_000_000 + row as i64 * 10)),
+        "MKTDATA_EVENT_TYPE" => (!row.is_multiple_of(6)).then_some(Value::String("TRADE")),
+        "MKTDATA_EVENT_SUBTYPE" => (!row.is_multiple_of(10)).then_some(Value::String("SUMMARY")),
         _ => None,
     }
 }
@@ -460,10 +464,19 @@ fn print_results(config: &BenchConfig, results: &[IterationResult]) {
         .map(|result| result.rows_per_sec)
         .sum::<f64>()
         / results.len() as f64;
-    let min_elapsed_us = results.iter().map(|result| result.elapsed_us).min().unwrap_or_default();
+    let min_elapsed_us = results
+        .iter()
+        .map(|result| result.elapsed_us)
+        .min()
+        .unwrap_or_default();
     let p50_elapsed_us = percentile_elapsed_us(results, 50.0);
     println!("\n  Average rows/sec: {:.0}", avg_rows_per_sec);
-    println!("  Elapsed us min/mean/p50: {}/{:.2}/{:.2}", min_elapsed_us, results.iter().map(|result| result.elapsed_us).sum::<u128>() as f64 / results.len() as f64, p50_elapsed_us);
+    println!(
+        "  Elapsed us min/mean/p50: {}/{:.2}/{:.2}",
+        min_elapsed_us,
+        results.iter().map(|result| result.elapsed_us).sum::<u128>() as f64 / results.len() as f64,
+        p50_elapsed_us
+    );
     println!("{:=<88}\n", "");
 }
 

@@ -1064,7 +1064,10 @@ function normalizeBackend(backend: BackendKind | undefined): BackendKind {
   );
 }
 
-function nativeArrowToBackend(batch: NativeArrowZeroCopyBatch, backend: BackendKind | undefined): unknown {
+function nativeArrowToBackend(
+  batch: NativeArrowZeroCopyBatch,
+  backend: BackendKind | undefined,
+): unknown {
   const selected = normalizeBackend(backend);
   const table = tableFromNativeArrowBatch(batch);
   const metadata = metadataRecordFromMap(table.schema.metadata);
@@ -1211,9 +1214,9 @@ export class Tick {
     let positions = this.rowPositions;
     if (positions === undefined) {
       const built: number[] = [];
-      this.update.fieldIndices.forEach((index, position) => {
+      for (const [position, index] of this.update.fieldIndices.entries()) {
         built[index] = position;
-      });
+      }
       positions = built;
       this.rowPositions = positions;
     }

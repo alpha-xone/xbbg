@@ -154,7 +154,6 @@ impl ExchangeCache {
         Ok(())
     }
 
-
     fn publish_snapshot(&self, write_cache: &HashMap<String, ExchangeInfo>) {
         self.cache.store(Arc::new(write_cache.clone()));
     }

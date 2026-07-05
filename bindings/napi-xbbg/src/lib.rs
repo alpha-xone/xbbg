@@ -1217,9 +1217,8 @@ impl JsEngine {
             .get_operation(&service, &operation)
             .await
             .map_err(blp_async_error_to_napi)?;
-        let serialized = serde_json::to_string(&op).map_err(|e| {
-            Error::new(Status::GenericFailure, format!("serialize operation: {e}"))
-        })?;
+        let serialized = serde_json::to_string(&op)
+            .map_err(|e| Error::new(Status::GenericFailure, format!("serialize operation: {e}")))?;
         self.schema_json_cache
             .lock()
             .expect("schema JSON cache poisoned")
@@ -1535,7 +1534,11 @@ impl JsEngine {
     }
 
     #[napi]
-    pub async fn recipe_cdx_ticker(&self, gen_ticker: String, dt: String) -> napi::Result<NativeArrowBatch> {
+    pub async fn recipe_cdx_ticker(
+        &self,
+        gen_ticker: String,
+        dt: String,
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::futures::recipe_cdx_ticker(&engine, gen_ticker, dt)
             .await
@@ -1685,7 +1688,10 @@ impl JsEngine {
     }
 
     #[napi]
-    pub async fn recipe_issuer_isins(&self, bond_isins: Vec<String>) -> napi::Result<NativeArrowBatch> {
+    pub async fn recipe_issuer_isins(
+        &self,
+        bond_isins: Vec<String>,
+    ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
         let batch = xbbg_recipes::identifiers::recipe_issuer_isins(&engine, bond_isins)
             .await
@@ -1858,7 +1864,7 @@ impl JsSubscription {
         }
 
         let mut last_layout = self.scalar_layout_version.lock().await;
-        Ok(to_native_update_batch(updates, &mut *last_layout))
+        Ok(to_native_update_batch(updates, &mut last_layout))
     }
 
     #[napi]
@@ -2213,7 +2219,7 @@ impl JsSubscription {
             let mut current_version = None;
             for update in drained_updates {
                 if current_version.is_some_and(|version| version != update.layout.version) {
-                    if let Some(batch) = to_native_update_batch(current, &mut *last_layout) {
+                    if let Some(batch) = to_native_update_batch(current, &mut last_layout) {
                         remaining.push(batch);
                     }
                     current = Vec::new();
@@ -2221,7 +2227,7 @@ impl JsSubscription {
                 current_version = Some(update.layout.version);
                 current.push(update);
             }
-            if let Some(batch) = to_native_update_batch(current, &mut *last_layout) {
+            if let Some(batch) = to_native_update_batch(current, &mut last_layout) {
                 remaining.push(batch);
             }
         }

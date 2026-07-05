@@ -214,17 +214,14 @@ impl RefDataState {
         }
 
         let row_count = match self.format {
-            OutputFormat::Long => self
-                .long_columns
-                .as_ref()
-                .map_or_else(
-                    || {
-                        self.typed_long_columns
-                            .as_ref()
-                            .map_or_else(|| self.columns.row_count(), TypedLongColumns::row_count)
-                    },
-                    LongStringColumns::row_count,
-                ),
+            OutputFormat::Long => self.long_columns.as_ref().map_or_else(
+                || {
+                    self.typed_long_columns
+                        .as_ref()
+                        .map_or_else(|| self.columns.row_count(), TypedLongColumns::row_count)
+                },
+                LongStringColumns::row_count,
+            ),
             OutputFormat::Wide => self
                 .wide_columns
                 .as_ref()
@@ -315,10 +312,10 @@ impl RefDataState {
         };
         if self.format == OutputFormat::Long && self.long_mode == LongMode::Typed {
             if let Some(columns) = self.typed_long_columns.as_mut() {
-                columns.reserve_if_empty(security_data.len().saturating_mul(self.field_names.len()));
+                columns
+                    .reserve_if_empty(security_data.len().saturating_mul(self.field_names.len()));
             }
         }
-
 
         // Iterate through each security
         for sec in security_data.values() {
@@ -511,7 +508,8 @@ impl RefDataState {
             return;
         }
         if let Some(typed_columns) = self.typed_long_columns.as_mut() {
-            for (field_name, field_lookup_name) in self.field_names.iter().zip(&self.field_lookup_names)
+            for (field_name, field_lookup_name) in
+                self.field_names.iter().zip(&self.field_lookup_names)
             {
                 let value = field_data
                     .get(field_lookup_name)

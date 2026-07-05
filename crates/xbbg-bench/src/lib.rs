@@ -142,7 +142,6 @@ pub fn build_mode() -> BuildMode {
     }
 }
 
-
 /// Parse iteration count from env var, with default.
 pub fn env_iterations(var: &str, default: usize) -> usize {
     std::env::var(var)

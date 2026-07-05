@@ -3,9 +3,9 @@
 //! This evaluation harness compares parse-only serde_json and simd-json costs.
 //! Production parsing remains unchanged.
 
-use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use serde_json::Value;
+use std::hint::black_box;
 
 fn bench_bql_json_parsers(c: &mut Criterion) {
     let cases: [(&'static str, usize, &'static [&'static str]); 3] = [
@@ -24,25 +24,34 @@ fn bench_bql_json_parsers(c: &mut Criterion) {
         let bytes = json.len() as u64;
         group.throughput(Throughput::Bytes(bytes));
 
-        group.bench_with_input(BenchmarkId::new("serde_json_from_str", scenario), &json, |b, json| {
-            b.iter(|| {
-                let parsed: Value = serde_json::from_str(black_box(json.as_str()))
-                    .expect("synthetic BQL fixture should parse with serde_json");
-                black_box(parsed);
-            });
-        });
-
-        group.bench_with_input(BenchmarkId::new("simd_json_from_slice", scenario), &json, |b, json| {
-            b.iter_batched(
-                || json.as_bytes().to_vec(),
-                |mut bytes| {
-                    let parsed: Value = simd_json::serde::from_slice(black_box(bytes.as_mut_slice()))
-                        .expect("synthetic BQL fixture should parse with simd-json");
+        group.bench_with_input(
+            BenchmarkId::new("serde_json_from_str", scenario),
+            &json,
+            |b, json| {
+                b.iter(|| {
+                    let parsed: Value = serde_json::from_str(black_box(json.as_str()))
+                        .expect("synthetic BQL fixture should parse with serde_json");
                     black_box(parsed);
-                },
-                BatchSize::SmallInput,
-            );
-        });
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("simd_json_from_slice", scenario),
+            &json,
+            |b, json| {
+                b.iter_batched(
+                    || json.as_bytes().to_vec(),
+                    |mut bytes| {
+                        let parsed: Value =
+                            simd_json::serde::from_slice(black_box(bytes.as_mut_slice()))
+                                .expect("synthetic BQL fixture should parse with simd-json");
+                        black_box(parsed);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
     }
     group.finish();
 }

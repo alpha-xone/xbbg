@@ -278,8 +278,8 @@ function patchDarwinNativeAddon(binaryPath: string, sdkLibDir: string): void {
 }
 
 // Release by default: this artifact feeds packaging and benchmarks, and a debug
-// addon silently bypasses the workspace release profile (fat LTO, opt-level=3,
-// panic=abort). Pass --debug for local iteration builds.
+// Addon silently bypasses the workspace release profile (fat LTO, opt-level=3,
+// Panic=abort). Pass --debug for local iteration builds.
 const profile: 'debug' | 'release' = process.argv.includes('--debug') ? 'debug' : 'release';
 const artifactPath = resolveBuildArtifact(profile);
 const outputPath = path.join(packageDir, nativeBinaryName);

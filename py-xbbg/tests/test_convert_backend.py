@@ -120,9 +120,7 @@ class TestConvertBackendPyArrow:
 
 
 class TestConvertBackendPandas:
-    def test_convert_pandas_prefers_pyarrow_when_available(
-        self, arrow_table: Any, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_convert_pandas_prefers_pyarrow_when_available(self, arrow_table: Any, monkeypatch: pytest.MonkeyPatch):
         pd = pytest.importorskip("pandas")
         pa = pytest.importorskip("pyarrow")
         import xbbg.backend as backend_module

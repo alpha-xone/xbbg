@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 import type { Table } from 'apache-arrow';
-import type { NativeArrowColumn, NativeArrowZeroCopyBatch } from '../src/napi';
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { tableFromNativeArrowBatch } from '../src/arrow-zero-copy';
+import type { NativeArrowColumn, NativeArrowZeroCopyBatch } from '../src/napi';
 
 const SCRIPT_DIR = __dirname;
 const RESULTS_DIR = path.join(SCRIPT_DIR, 'results');
@@ -105,13 +105,19 @@ function parseArgs(argv: readonly string[]): CliArgs {
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === undefined) {
+      throw new Error(`Missing argument at index ${index}`);
+    }
     switch (arg) {
       case '--help':
       case '-h':
         help = true;
         break;
       case '--iterations':
-        iterations = parsePositiveInteger(readArg(argv, (index += 1), '--iterations'), '--iterations');
+        iterations = parsePositiveInteger(
+          readArg(argv, (index += 1), '--iterations'),
+          '--iterations',
+        );
         break;
       case '--json':
         json = true;
@@ -161,16 +167,24 @@ function envInteger(name: string, fallback: number): number {
 }
 
 function parsePositiveInteger(value: string, name: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0 || String(parsed) !== value.replace(/^0+(?=\d)/, '')) {
+  const parsed = Math.trunc(Number(value));
+  if (
+    !Number.isFinite(parsed) ||
+    parsed <= 0 ||
+    String(parsed) !== value.replace(/^0+(?=\d)/u, '')
+  ) {
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
 }
 
 function parseNonNegativeInteger(value: string, name: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < 0 || String(parsed) !== value.replace(/^0+(?=\d)/, '')) {
+  const parsed = Math.trunc(Number(value));
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < 0 ||
+    String(parsed) !== value.replace(/^0+(?=\d)/u, '')
+  ) {
     throw new Error(`${name} must be a non-negative integer`);
   }
   return parsed;
@@ -211,7 +225,9 @@ function typedBuffer(view: ArrayBufferView): Buffer {
 
 function buildFixture(shape: Shape): Fixture {
   const started = performance.now();
-  const columns = Array.from({ length: shape.columns }, (_, index) => buildColumn(shape.rows, index));
+  const columns = Array.from({ length: shape.columns }, (_, index) =>
+    buildColumn(shape.rows, index),
+  );
   const batch: NativeArrowZeroCopyBatch = {
     columns,
     kind: 'zeroCopy',
@@ -259,6 +275,7 @@ function buildColumn(rows: number, columnIndex: number): NativeArrowColumn {
     case 'utf8':
       return stringColumn(name, rows, columnIndex);
   }
+  return unreachableColumnKind(kind);
 }
 
 function scalarColumn(
@@ -282,7 +299,9 @@ function stringColumn(name: string, rows: number, columnIndex: number): NativeAr
   const chunks: Buffer[] = [];
   let byteLength = 0;
   for (let row = 0; row < rows; row += 1) {
-    const chunk = Buffer.from(`SEC${String(row % 10_000).padStart(4, '0')}:${String(columnIndex).padStart(2, '0')}`);
+    const chunk = Buffer.from(
+      `SEC${String(row % 10_000).padStart(4, '0')}:${String(columnIndex).padStart(2, '0')}`,
+    );
     chunks.push(chunk);
     byteLength += chunk.byteLength;
     offsets[row + 1] = byteLength;
@@ -303,14 +322,19 @@ function buildRows(shape: Shape): Record<string, unknown>[] {
   return Array.from({ length: shape.rows }, (_, row) => {
     const record: Record<string, unknown> = {};
     for (let column = 0; column < shape.columns; column += 1) {
-      record[names[column] as string] = jsonValue(row, column);
+      const name = names[column];
+      if (name === undefined) {
+        throw new Error(`Missing generated column name at index ${column}`);
+      }
+      record[name] = jsonValue(row, column);
     }
     return record;
   });
 }
 
 function jsonValue(row: number, column: number): unknown {
-  switch (columnKind(column)) {
+  const kind = columnKind(column);
+  switch (kind) {
     case 'float64':
       return row * 0.25 + column / 10;
     case 'int64':
@@ -320,6 +344,7 @@ function jsonValue(row: number, column: number): unknown {
     case 'timestamp_us':
       return new Date(Date.UTC(2024, 0, 2, 9, 30, 0) + row).toISOString();
   }
+  return unreachableColumnKind(kind);
 }
 
 function consumeRowsColumns(table: Table): number {
@@ -350,8 +375,8 @@ function valueChecksum(value: unknown): number {
   if (value instanceof Date) {
     return value.getTime() % 997;
   }
-  if (typeof value === 'object' && 'toString' in value) {
-    return String(value).length;
+  if (typeof value === 'object') {
+    return JSON.stringify(value)?.length ?? 1;
   }
   return 1;
 }
@@ -362,6 +387,24 @@ function consumeJsonRows(rows: readonly Record<string, unknown>[]): number {
     checksum += Object.keys(row).length;
   }
   return checksum;
+}
+
+function isJsonRecordRows(value: unknown): value is Record<string, unknown>[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (row): row is Record<string, unknown> =>
+        typeof row === 'object' && row !== null && !Array.isArray(row),
+    )
+  );
+}
+
+function unreachableColumnKind(kind: never): never {
+  throw new Error(`Unsupported benchmark column kind: ${String(kind)}`);
+}
+
+function unreachableScenario(scenario: never): never {
+  throw new Error(`Unsupported benchmark scenario: ${String(scenario)}`);
 }
 
 function runScenario(
@@ -417,15 +460,22 @@ function runScenarioOnce(fixture: Fixture, scenario: ScenarioName): number {
       return consumeRowsColumns(table);
     }
     case 'jsonParseBaseline': {
-      const parsed = JSON.parse(fixture.jsonPayload) as Record<string, unknown>[];
+      const parsed: unknown = JSON.parse(fixture.jsonPayload);
+      if (!isJsonRecordRows(parsed)) {
+        throw new Error('JSON baseline payload must decode to rows');
+      }
       return consumeJsonRows(parsed);
     }
   }
+  return unreachableScenario(scenario);
 }
 
 function summarizeDurations(durations: readonly number[]): DurationSummary {
-  const sorted = [...durations].sort((left, right) => left - right);
-  const mean = durations.length === 0 ? 0 : durations.reduce((sum, value) => sum + value, 0) / durations.length;
+  const sorted = [...durations].toSorted((left, right) => left - right);
+  const mean =
+    durations.length === 0
+      ? 0
+      : durations.reduce((sum, value) => sum + value, 0) / durations.length;
   return {
     meanMs: round(mean),
     medianMs: round(percentile(sorted, 50)),
@@ -440,7 +490,8 @@ function standardDeviation(values: readonly number[], mean: number): number {
   if (values.length <= 1) {
     return 0;
   }
-  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1);
+  const variance =
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1);
   return Math.sqrt(variance);
 }
 
@@ -481,11 +532,17 @@ function detectAddonProfile(): string {
 
 function writeResults(document: BenchmarkDocument, resultsDir: string): string {
   fs.mkdirSync(resultsDir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:]/gu, '')
+    .replace(/\.\d{3}Z$/u, 'Z');
   const outputPath = path.join(resultsDir, `handoff_offline_${stamp}.json`);
   document.outputPath = outputPath;
   fs.writeFileSync(outputPath, JSON.stringify(document, null, 2));
-  fs.writeFileSync(path.join(resultsDir, 'handoff_offline_latest.json'), JSON.stringify(document, null, 2));
+  fs.writeFileSync(
+    path.join(resultsDir, 'handoff_offline_latest.json'),
+    JSON.stringify(document, null, 2),
+  );
   return outputPath;
 }
 
@@ -516,7 +573,9 @@ async function main(): Promise<void> {
 
   for (const shape of shapes) {
     if (!args.json) {
-      console.log(`\nBuilding fixture ${shape.rows}x${shape.columns} (setup excluded from timings)...`);
+      console.log(
+        `\nBuilding fixture ${shape.rows}x${shape.columns} (setup excluded from timings)...`,
+      );
     }
     const fixture = buildFixture(shape);
     if (!args.json) {

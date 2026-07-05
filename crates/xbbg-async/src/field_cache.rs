@@ -647,7 +647,10 @@ mod tests {
         let after = resolver.cache.load_full();
         assert!(!Arc::ptr_eq(&before, &after));
         assert_eq!(after.len(), 2);
-        assert_eq!(resolver.get_arrow_type("PX_LAST").as_deref(), Some("float64"));
+        assert_eq!(
+            resolver.get_arrow_type("PX_LAST").as_deref(),
+            Some("float64")
+        );
         assert_eq!(resolver.get_arrow_type("VOLUME").as_deref(), Some("int64"));
 
         let after_reads = resolver.cache.load_full();
@@ -659,8 +662,10 @@ mod tests {
     #[test]
     fn evicts_oldest_inserted_field_when_bound_is_exceeded() {
         let dir = tempfile::tempdir().unwrap();
-        let resolver =
-            FieldTypeResolver::with_cache_path_and_max_entries(dir.path().join("field_cache.json"), 2);
+        let resolver = FieldTypeResolver::with_cache_path_and_max_entries(
+            dir.path().join("field_cache.json"),
+            2,
+        );
 
         resolver.insert_many([
             field_info("FIRST", "float64"),

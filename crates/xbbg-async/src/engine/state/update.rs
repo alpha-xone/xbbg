@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use smallvec::SmallVec;
 use xbbg_core::{DataType as BlpDataType, Value};
@@ -62,7 +62,6 @@ pub enum UpdateValue {
     TimestampMicros(i64),
 }
 pub type StringValueCache = Option<(u64, Arc<str>)>;
-
 
 impl FieldLayout {
     pub fn new(version: u32, fields: Vec<FieldMeta>) -> Self {

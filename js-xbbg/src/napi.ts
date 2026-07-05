@@ -65,9 +65,9 @@ export interface NativeArrowZeroCopyBatch {
 }
 
 // Scalar subscription rows use columnar, per-row typed option arrays instead of
-// serde_json values. At each value position exactly one typed array carries a
-// non-null payload; int64/time64/timestamp values are decimal strings so JS can
-// materialize BigInt lazily without losing precision.
+// Serde_json values. At each value position exactly one typed array carries a
+// Non-null payload; int64/time64/timestamp values are decimal strings so JS can
+// Materialize BigInt lazily without losing precision.
 export type NativeSubscriptionFieldKind =
   | 'unknown'
   | 'bool'
@@ -105,14 +105,8 @@ export interface NativeSubscriptionUpdateBatch {
 }
 
 export interface NativeSubscription {
-  nextUpdates(
-    maxItems?: number,
-    maxWaitMs?: number,
-  ): Promise<NativeSubscriptionUpdateBatch | null>;
-  nextArrowBatch(
-    maxRows?: number,
-    maxWaitMs?: number,
-  ): Promise<NativeArrowZeroCopyBatch | null>;
+  nextUpdates(maxItems?: number, maxWaitMs?: number): Promise<NativeSubscriptionUpdateBatch | null>;
+  nextArrowBatch(maxRows?: number, maxWaitMs?: number): Promise<NativeArrowZeroCopyBatch | null>;
   add(tickers: readonly string[]): Promise<void>;
   remove(tickers: readonly string[]): Promise<void>;
   unsubscribe(drain: boolean): Promise<NativeSubscriptionUpdateBatch[] | null>;
@@ -184,15 +178,26 @@ export interface NativeEngine {
     price: number | undefined,
     benchmark: string | undefined,
   ): Promise<NativeArrowZeroCopyBatch>;
-  recipePreferreds(equityTicker: string, fields: readonly string[] | null): Promise<NativeArrowZeroCopyBatch>;
+  recipePreferreds(
+    equityTicker: string,
+    fields: readonly string[] | null,
+  ): Promise<NativeArrowZeroCopyBatch>;
   recipeCorporateBonds(
     ticker: string,
     ccy: string | undefined,
     fields: readonly string[] | null,
     activeOnly: boolean,
   ): Promise<NativeArrowZeroCopyBatch>;
-  recipeFutTicker(genTicker: string, dt: string, freq: string | undefined): Promise<NativeArrowZeroCopyBatch>;
-  recipeActiveFutures(genTicker: string, dt: string, freq: string | undefined): Promise<NativeArrowZeroCopyBatch>;
+  recipeFutTicker(
+    genTicker: string,
+    dt: string,
+    freq: string | undefined,
+  ): Promise<NativeArrowZeroCopyBatch>;
+  recipeActiveFutures(
+    genTicker: string,
+    dt: string,
+    freq: string | undefined,
+  ): Promise<NativeArrowZeroCopyBatch>;
   recipeFuturesCurve(
     genTicker: string,
     asof: string | undefined,
@@ -201,7 +206,11 @@ export interface NativeEngine {
     maxContracts: number | undefined,
   ): Promise<NativeArrowZeroCopyBatch>;
   recipeCdxTicker(genTicker: string, dt: string): Promise<NativeArrowZeroCopyBatch>;
-  recipeActiveCdx(genTicker: string, dt: string, lookbackDays: number | undefined): Promise<NativeArrowZeroCopyBatch>;
+  recipeActiveCdx(
+    genTicker: string,
+    dt: string,
+    lookbackDays: number | undefined,
+  ): Promise<NativeArrowZeroCopyBatch>;
   recipeDividend(
     tickers: readonly string[],
     startDate: string,
@@ -222,7 +231,10 @@ export interface NativeEngine {
     ccy: string | undefined,
     factor: number | undefined,
   ): Promise<NativeArrowZeroCopyBatch>;
-  recipeEtfHoldings(etfTicker: string, fields: readonly string[] | null): Promise<NativeArrowZeroCopyBatch>;
+  recipeEtfHoldings(
+    etfTicker: string,
+    fields: readonly string[] | null,
+  ): Promise<NativeArrowZeroCopyBatch>;
   recipeVolSurface(
     tickers: readonly string[],
     startDate: string,

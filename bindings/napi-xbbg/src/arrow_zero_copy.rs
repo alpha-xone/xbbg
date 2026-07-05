@@ -515,22 +515,26 @@ impl ToNapiValue for NativeArrowColumn {
             obj.set_named_property("timezone", timezone)?;
         }
         if let Some(buffer) = value.data {
-            if let Some(buffer) = external_buffer(&env, value.batch.clone(), buffer).map_err(|e| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("failed to expose Arrow data buffer: {e}"),
-                )
-            })? {
+            if let Some(buffer) =
+                external_buffer(&env, value.batch.clone(), buffer).map_err(|e| {
+                    Error::new(
+                        Status::GenericFailure,
+                        format!("failed to expose Arrow data buffer: {e}"),
+                    )
+                })?
+            {
                 obj.set_named_property("data", buffer)?;
             }
         }
         if let Some(buffer) = value.offsets {
-            if let Some(buffer) = external_buffer(&env, value.batch.clone(), buffer).map_err(|e| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("failed to expose Arrow offsets buffer: {e}"),
-                )
-            })? {
+            if let Some(buffer) =
+                external_buffer(&env, value.batch.clone(), buffer).map_err(|e| {
+                    Error::new(
+                        Status::GenericFailure,
+                        format!("failed to expose Arrow offsets buffer: {e}"),
+                    )
+                })?
+            {
                 obj.set_named_property("offsets", buffer)?;
             }
         }

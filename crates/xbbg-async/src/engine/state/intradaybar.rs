@@ -74,20 +74,19 @@ impl IntradayBarBuilders {
     }
 
     fn finish(&mut self) -> Vec<ArrayRef> {
-        let mut columns: Vec<ArrayRef> = Vec::with_capacity(9);
-        columns.push(Arc::new(self.ticker.finish()));
-        columns.push(Arc::new(self.time.finish().with_timezone("UTC")));
-        columns.push(Arc::new(self.open.finish()));
-        columns.push(Arc::new(self.high.finish()));
-        columns.push(Arc::new(self.low.finish()));
-        columns.push(Arc::new(self.close.finish()));
-        columns.push(Arc::new(self.volume.finish()));
-        columns.push(Arc::new(self.num_events.finish()));
-        columns.push(Arc::new(self.value.finish()));
-        columns
+        vec![
+            Arc::new(self.ticker.finish()),
+            Arc::new(self.time.finish().with_timezone("UTC")),
+            Arc::new(self.open.finish()),
+            Arc::new(self.high.finish()),
+            Arc::new(self.low.finish()),
+            Arc::new(self.close.finish()),
+            Arc::new(self.volume.finish()),
+            Arc::new(self.num_events.finish()),
+            Arc::new(self.value.finish()),
+        ]
     }
 }
-
 
 /// State for an intraday bar request (bdib).
 pub struct IntradayBarState {
@@ -201,11 +200,7 @@ impl IntradayBarState {
             Self::append_f64_field(&bar, &self.names.low, &mut self.builders.low);
             Self::append_f64_field(&bar, &self.names.close, &mut self.builders.close);
             Self::append_f64_field(&bar, &self.names.volume, &mut self.builders.volume);
-            Self::append_i32_field(
-                &bar,
-                &self.names.num_events,
-                &mut self.builders.num_events,
-            );
+            Self::append_i32_field(&bar, &self.names.num_events, &mut self.builders.num_events);
             Self::append_f64_field(&bar, &self.names.value, &mut self.builders.value);
         }
     }

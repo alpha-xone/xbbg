@@ -964,7 +964,6 @@ pub(crate) fn append_long_value_row<F>(
     columns.end_row();
 }
 
-
 fn civil_from_days(days: i64) -> (i32, u32, u32) {
     // Howard Hinnant's civil-from-days algorithm. `days` is relative to
     // 1970-01-01, matching Arrow Date32 and Bloomberg date extraction.
@@ -1331,9 +1330,17 @@ mod tests {
             .unwrap();
 
         let mut typed_refdata = TypedLongColumns::refdata();
-        typed_refdata.append_row("IBM US Equity", None, "PX_LAST", Some(Value::Float64(123.45)));
+        typed_refdata.append_row(
+            "IBM US Equity",
+            None,
+            "PX_LAST",
+            Some(Value::Float64(123.45)),
+        );
         let typed_refdata = typed_refdata.finish().unwrap();
-        assert_eq!(typed_refdata.schema().fields(), previous_refdata.schema().fields());
+        assert_eq!(
+            typed_refdata.schema().fields(),
+            previous_refdata.schema().fields()
+        );
 
         let mut previous_histdata = ColumnSet::new();
         previous_histdata.append_str("ticker", "IBM US Equity");
@@ -1364,7 +1371,10 @@ mod tests {
             Some(Value::Float64(123.45)),
         );
         let typed_histdata = typed_histdata.finish().unwrap();
-        assert_eq!(typed_histdata.schema().fields(), previous_histdata.schema().fields());
+        assert_eq!(
+            typed_histdata.schema().fields(),
+            previous_histdata.schema().fields()
+        );
     }
 
     fn tiny_batch() -> RecordBatch {

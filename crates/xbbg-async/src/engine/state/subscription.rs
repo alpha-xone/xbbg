@@ -296,11 +296,9 @@ impl SubscriptionState {
     fn subscription_data_arc(&mut self, msg: &Message) -> Option<Arc<str>> {
         self.subscription_data_index?;
         let key = msg.name_key();
-        for entry in &self.subscription_data_type_cache {
-            if let Some((cached_key, cached)) = entry {
-                if *cached_key == key {
-                    return Some(Arc::clone(cached));
-                }
+        for (cached_key, cached) in self.subscription_data_type_cache.iter().flatten() {
+            if *cached_key == key {
+                return Some(Arc::clone(cached));
             }
         }
         let value = Arc::<str>::from(msg.type_str());
@@ -314,9 +312,11 @@ impl SubscriptionState {
         let mut is_dataloss = false;
         for field in values {
             if field.index == self.event_type_index {
-                is_summary = matches!(&field.value, UpdateValue::Str(value) if value.as_ref() == "SUMMARY");
+                is_summary =
+                    matches!(&field.value, UpdateValue::Str(value) if value.as_ref() == "SUMMARY");
             } else if field.index == self.event_subtype_index {
-                is_dataloss = matches!(&field.value, UpdateValue::Str(value) if value.as_ref() == "DATALOSS");
+                is_dataloss =
+                    matches!(&field.value, UpdateValue::Str(value) if value.as_ref() == "DATALOSS");
             }
         }
         is_summary && is_dataloss
@@ -567,7 +567,9 @@ impl SubscriptionState {
                                 self.dropped_batches += 1;
                                 self.metrics.dropped_batches.fetch_add(1, Ordering::Relaxed);
                                 self.metrics.slow_consumer.store(true, Ordering::Relaxed);
-                                if self.dropped_batches == 1 || self.dropped_batches % 1024 == 0 {
+                                if self.dropped_batches == 1
+                                    || self.dropped_batches.is_multiple_of(1024)
+                                {
                                     xbbg_log::warn!(
                                         topic = %self.topic,
                                         dropped = self.dropped_batches,

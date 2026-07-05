@@ -99,7 +99,9 @@ fn main() {
     let session = match setup_subscription_session() {
         Ok(session) => session,
         Err(err) => {
-            println!("Skipping cached subscription benchmark: Bloomberg session unavailable ({err}).");
+            println!(
+                "Skipping cached subscription benchmark: Bloomberg session unavailable ({err})."
+            );
             return;
         }
     };
@@ -216,8 +218,8 @@ fn setup_subscription_session() -> Result<Session, String> {
         .and_then(|value| value.parse().ok())
         .unwrap_or(8194);
 
-    let mut options =
-        SessionOptions::new().map_err(|err| format!("failed to create session options: {err:?}"))?;
+    let mut options = SessionOptions::new()
+        .map_err(|err| format!("failed to create session options: {err:?}"))?;
     options
         .set_server_host(&host)
         .map_err(|err| format!("failed to set host: {err:?}"))?;

@@ -179,17 +179,14 @@ impl HistDataState {
         self.process_message(msg);
 
         let row_count = match self.format {
-            OutputFormat::Long => self
-                .long_columns
-                .as_ref()
-                .map_or_else(
-                    || {
-                        self.typed_long_columns
-                            .as_ref()
-                            .map_or_else(|| self.columns.row_count(), TypedLongColumns::row_count)
-                    },
-                    LongStringColumns::row_count,
-                ),
+            OutputFormat::Long => self.long_columns.as_ref().map_or_else(
+                || {
+                    self.typed_long_columns
+                        .as_ref()
+                        .map_or_else(|| self.columns.row_count(), TypedLongColumns::row_count)
+                },
+                LongStringColumns::row_count,
+            ),
             OutputFormat::Wide => self
                 .wide_columns
                 .as_ref()
@@ -364,7 +361,6 @@ impl HistDataState {
             }
         }
 
-
         // Iterate through each row (each date)
         for row in field_data.values() {
             // Get date value for this row
@@ -405,7 +401,8 @@ impl HistDataState {
             return;
         }
         if let Some(typed_columns) = self.typed_long_columns.as_mut() {
-            for (field_name, field_lookup_name) in self.field_names.iter().zip(&self.field_lookup_names)
+            for (field_name, field_lookup_name) in
+                self.field_names.iter().zip(&self.field_lookup_names)
             {
                 let value = row
                     .get(field_lookup_name)

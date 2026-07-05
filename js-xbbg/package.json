@@ -46,8 +46,8 @@
     "access": "public"
   },
   "scripts": {
-    "bench:subscription-replay": "tsx ./benchmarks/bench-subscription-replay.ts",
     "bench:handoff-offline": "tsx ./benchmarks/bench-handoff-offline.ts",
+    "bench:subscription-replay": "tsx ./benchmarks/bench-subscription-replay.ts",
     "build": "npm run build:native && npm run build:ts",
     "build:native": "tsx ./scripts/build-native.ts",
     "build:native:debug": "tsx ./scripts/build-native.ts --debug",

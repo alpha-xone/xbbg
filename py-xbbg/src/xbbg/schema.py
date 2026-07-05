@@ -113,7 +113,6 @@ def _parse_service_schema_json(json_str: str) -> ServiceSchema:
     return ServiceSchema.from_dict(json.loads(json_str))
 
 
-
 # Async API functions
 async def aget_schema(service: str) -> ServiceSchema:
     """Get schema for a service (async).

@@ -27,6 +27,22 @@ use super::{
     SubscriptionEventLevel, SubscriptionFailureKind, WorkerHealth, SESSION_STARTUP_TIMEOUT_MS,
 };
 
+type RegisteredSubscriptions = (
+    SubscriptionList,
+    Vec<SlabKey>,
+    Vec<Arc<SubscriptionMetrics>>,
+);
+
+struct SubscriptionRegistrationRequest {
+    topics: Vec<String>,
+    fields: Vec<String>,
+    all_fields: bool,
+    options: Vec<String>,
+    flush_threshold: Option<usize>,
+    overflow_policy: Option<OverflowPolicy>,
+    stream: mpsc::Sender<Result<SubscriptionUpdate, BlpError>>,
+}
+
 struct PendingServiceOpen {
     cid: i64,
     waiters: Vec<oneshot::Sender<Result<(), BlpError>>>,
@@ -83,7 +99,11 @@ impl SubscriptionWorkerShared {
         let deadline = Instant::now() + timeout;
         let mut startup = self.startup.lock();
         while startup.result.is_none() {
-            if self.startup_cv.wait_until(&mut startup, deadline).timed_out() {
+            if self
+                .startup_cv
+                .wait_until(&mut startup, deadline)
+                .timed_out()
+            {
                 return Err(BlpError::Timeout);
             }
         }
@@ -91,7 +111,11 @@ impl SubscriptionWorkerShared {
     }
 
     fn next_service_cid(&self) -> i64 {
-        SERVICE_OPEN_CID_TAG | self.next_service_open_id.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
+        SERVICE_OPEN_CID_TAG
+            | self
+                .next_service_open_id
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_add(1)
     }
 
     fn dispatch_event(self: &Arc<Self>, ev: xbbg_core::Event) {
@@ -100,8 +124,12 @@ impl SubscriptionWorkerShared {
             state.dispatch_event(ev, self);
         }));
         if result.is_err() {
-            self.health.store(WorkerHealth::Degraded as u8, Ordering::Release);
-            xbbg_log::error!(worker_id = self.id, "panic in subscription SDK callback; event dropped");
+            self.health
+                .store(WorkerHealth::Degraded as u8, Ordering::Release);
+            xbbg_log::error!(
+                worker_id = self.id,
+                "panic in subscription SDK callback; event dropped"
+            );
         }
     }
 
@@ -118,7 +146,9 @@ impl SubscriptionWorkerShared {
     }
 
     fn record_service_ready_if_already_open(&self, service: &str, was_open: bool) {
-        self.state.lock().record_service_ready_if_already_open(service, was_open);
+        self.state
+            .lock()
+            .record_service_ready_if_already_open(service, was_open);
     }
 
     fn record_service_open_error(&self, service: &str, error: &BlpError) {
@@ -156,23 +186,9 @@ impl SubscriptionWorkerShared {
 
     fn register_subscriptions(
         &self,
-        topics: Vec<String>,
-        fields: Vec<String>,
-        all_fields: bool,
-        options: Vec<String>,
-        flush_threshold: Option<usize>,
-        overflow_policy: Option<OverflowPolicy>,
-        stream: mpsc::Sender<Result<SubscriptionUpdate, BlpError>>,
-    ) -> Result<(SubscriptionList, Vec<SlabKey>, Vec<Arc<SubscriptionMetrics>>), BlpError> {
-        self.state.lock().register_subscriptions(
-            topics,
-            fields,
-            all_fields,
-            options,
-            flush_threshold,
-            overflow_policy,
-            stream,
-        )
+        request: SubscriptionRegistrationRequest,
+    ) -> Result<RegisteredSubscriptions, BlpError> {
+        self.state.lock().register_subscriptions(request)
     }
 
     fn cleanup_failed_subscribe(&self, keys: &[SlabKey]) {
@@ -189,7 +205,6 @@ impl SubscriptionWorkerShared {
     fn build_unsubscribe_list(&self, keys: Vec<SlabKey>) -> (SubscriptionList, usize) {
         self.state.lock().build_unsubscribe_list(keys)
     }
-
 }
 
 impl SubscriptionWorkerState {
@@ -267,17 +282,19 @@ impl SubscriptionWorkerState {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn register_subscriptions(
         &mut self,
-        topics: Vec<String>,
-        fields: Vec<String>,
-        all_fields: bool,
-        options: Vec<String>,
-        flush_threshold: Option<usize>,
-        overflow_policy: Option<OverflowPolicy>,
-        stream: mpsc::Sender<Result<SubscriptionUpdate, BlpError>>,
-    ) -> Result<(SubscriptionList, Vec<SlabKey>, Vec<Arc<SubscriptionMetrics>>), BlpError> {
+        request: SubscriptionRegistrationRequest,
+    ) -> Result<RegisteredSubscriptions, BlpError> {
+        let SubscriptionRegistrationRequest {
+            topics,
+            fields,
+            all_fields,
+            options,
+            flush_threshold,
+            overflow_policy,
+            stream,
+        } = request;
         let mut sub_list = SubscriptionList::new();
         let field_refs: Vec<&str> = fields.iter().map(String::as_str).collect();
         let options_str = options.join(",");
@@ -350,7 +367,11 @@ impl SubscriptionWorkerState {
                         );
                     });
                 }
-                xbbg_log::debug!(worker_id = self.id, key = key, "subscription pending cancel");
+                xbbg_log::debug!(
+                    worker_id = self.id,
+                    key = key,
+                    "subscription pending cancel"
+                );
             }
         }
 
@@ -452,7 +473,7 @@ impl SubscriptionWorkerState {
                         );
                         if let Some(status) = &self.status {
                             status.update(|next| {
-                                                                let topic = next.mark_topic_started(key);
+                                let topic = next.mark_topic_started(key);
                                 // Bloomberg sometimes includes partial-permission details in the
                                 // `reason` element of SubscriptionStarted (e.g. "only delayed data
                                 // authorized"). Surface it via the status event so callers see it.
@@ -462,7 +483,7 @@ impl SubscriptionWorkerState {
                                     reason.clone(),
                                     SubscriptionEventLevel::Info,
                                 );
-                                                            });
+                            });
                         }
                     }
                     "SubscriptionFailure" => {
@@ -475,14 +496,14 @@ impl SubscriptionWorkerState {
                                 state.mark_closing();
                                 if let Some(status) = &self.status {
                                     status.update(|next| {
-                                                                                let topic = next.mark_topic_unsubscribed(key);
+                                        let topic = next.mark_topic_unsubscribed(key);
                                         next.record_subscription_event(
                                             "SubscriptionCancelled",
                                             topic,
                                             reason.clone(),
                                             SubscriptionEventLevel::Info,
                                         );
-                                                                            });
+                                    });
                                 }
                             }
                             xbbg_log::debug!(
@@ -513,13 +534,13 @@ impl SubscriptionWorkerState {
                                 );
                                 if let Some(status) = &self.status {
                                     status.update(|next| {
-                                                                                next.record_subscription_event(
+                                        next.record_subscription_event(
                                             "SubscriptionFailure",
                                             Some(topic.clone()),
                                             Some(reason_text.clone()),
                                             SubscriptionEventLevel::Warning,
                                         );
-                                                                            });
+                                    });
                                 }
                                 if self.subs.is_empty() && self.pending_cancel.is_empty() {
                                     state.fail(BlpError::SubscriptionFailure {
@@ -542,14 +563,14 @@ impl SubscriptionWorkerState {
                                 state.mark_closing();
                                 if let Some(status) = &self.status {
                                     status.update(|next| {
-                                                                                let topic = next.mark_topic_unsubscribed(key);
+                                        let topic = next.mark_topic_unsubscribed(key);
                                         next.record_subscription_event(
                                             "SubscriptionTerminated",
                                             topic,
                                             reason.clone(),
                                             SubscriptionEventLevel::Info,
                                         );
-                                                                            });
+                                    });
                                 }
                             }
                             xbbg_log::debug!(
@@ -580,13 +601,13 @@ impl SubscriptionWorkerState {
                                 );
                                 if let Some(status) = &self.status {
                                     status.update(|next| {
-                                                                                next.record_subscription_event(
+                                        next.record_subscription_event(
                                             "SubscriptionTerminated",
                                             Some(topic.clone()),
                                             Some(reason_text.clone()),
                                             SubscriptionEventLevel::Warning,
                                         );
-                                                                            });
+                                    });
                                 }
                                 if self.subs.is_empty() && self.pending_cancel.is_empty() {
                                     state.fail(BlpError::SubscriptionFailure {
@@ -619,7 +640,7 @@ impl SubscriptionWorkerState {
                                 drop(snapshot);
                                 if let Some(topic) = topic {
                                     status.update(|next| {
-                                                                                next.set_topic_streams_active(&topic, true);
+                                        next.set_topic_streams_active(&topic, true);
                                         // Only emit a status event on a real transition
                                         // (avoids spamming on the initial activation which
                                         // already fires SubscriptionStarted right before).
@@ -631,7 +652,7 @@ impl SubscriptionWorkerState {
                                                 SubscriptionEventLevel::Info,
                                             );
                                         }
-                                                                            });
+                                    });
                                 }
                             }
                         }
@@ -658,7 +679,7 @@ impl SubscriptionWorkerState {
                                 drop(snapshot);
                                 if let Some(topic) = topic {
                                     status.update(|next| {
-                                                                                next.set_topic_streams_active(&topic, false);
+                                        next.set_topic_streams_active(&topic, false);
                                         if prev != Some(false) {
                                             next.record_subscription_event(
                                                 "SubscriptionStreamsDeactivated",
@@ -667,7 +688,7 @@ impl SubscriptionWorkerState {
                                                 SubscriptionEventLevel::Warning,
                                             );
                                         }
-                                                                            });
+                                    });
                                 }
                             }
                         }
@@ -691,22 +712,28 @@ impl SubscriptionWorkerState {
         }
     }
 
-    fn handle_session_status(&mut self, msg: &xbbg_core::Message<'_>, shared: &SubscriptionWorkerShared) {
+    fn handle_session_status(
+        &mut self,
+        msg: &xbbg_core::Message<'_>,
+        shared: &SubscriptionWorkerShared,
+    ) {
         let msg_type_name = msg.message_type();
         let msg_type = msg_type_name.as_str();
         match msg_type {
             "SessionStarted" => {
-                shared.health.store(WorkerHealth::Healthy as u8, Ordering::Release);
+                shared
+                    .health
+                    .store(WorkerHealth::Healthy as u8, Ordering::Release);
                 shared.resolve_startup(Ok(()));
                 xbbg_log::info!(worker_id = self.id, "session started");
                 if let Some(status) = &self.status {
                     status.update(|next| {
-                                                next.record_session_state(
+                        next.record_session_state(
                             SessionLifecycleState::Up,
                             "SessionStarted",
                             None,
                         );
-                                            });
+                    });
                 }
             }
             "SessionConnectionDown" => {
@@ -731,12 +758,12 @@ impl SubscriptionWorkerState {
                         ))
                     });
                     status.update(|next| {
-                                                next.record_session_state(
+                        next.record_session_state(
                             SessionLifecycleState::Down,
                             "SessionConnectionDown",
                             detail.clone(),
                         );
-                                            });
+                    });
                 }
             }
             "AuthorizationRevoked" => {
@@ -769,27 +796,37 @@ impl SubscriptionWorkerState {
                     });
                 }
                 self.clear_active_status();
-                shared.health.store(WorkerHealth::Dead as u8, Ordering::Release);
+                shared
+                    .health
+                    .store(WorkerHealth::Dead as u8, Ordering::Release);
                 if let Some(status) = &self.status {
                     let detail = reason.or_else(|| Some(format!("worker={}", self.id)));
                     status.update(|next| {
-                                                next.record_session_state(
+                        next.record_session_state(
                             SessionLifecycleState::Terminated,
                             "AuthorizationRevoked",
                             detail.clone(),
                         );
-                                            });
+                    });
                 }
             }
             "SessionStartupFailure" => {
                 let reason = extract_reason_description(msg);
-                shared.health.store(WorkerHealth::Dead as u8, Ordering::Release);
-                shared.resolve_startup(Err(session_start_error("subscription session startup failure", reason.clone())));
+                shared
+                    .health
+                    .store(WorkerHealth::Dead as u8, Ordering::Release);
+                shared.resolve_startup(Err(session_start_error(
+                    "subscription session startup failure",
+                    reason.clone(),
+                )));
                 xbbg_log::error!(worker_id = self.id, reason = %reason.as_deref().unwrap_or(""), "subscription session startup failed");
             }
             "SessionTerminated" => {
                 let reason = extract_reason_description(msg);
-                shared.resolve_startup(Err(session_start_error("subscription session terminated during startup", reason.clone())));
+                shared.resolve_startup(Err(session_start_error(
+                    "subscription session terminated during startup",
+                    reason.clone(),
+                )));
                 xbbg_log::error!(
                     worker_id = self.id,
                     active_subs = self.subs.len(),
@@ -816,16 +853,18 @@ impl SubscriptionWorkerState {
                 self.clear_active_status();
                 // Mark the worker Dead so the pool refuses to hand it out to
                 // new claims — the session ptr is terminated and can't be restarted.
-                shared.health.store(WorkerHealth::Dead as u8, Ordering::Release);
+                shared
+                    .health
+                    .store(WorkerHealth::Dead as u8, Ordering::Release);
                 if let Some(status) = &self.status {
                     let detail = reason.or_else(|| Some(format!("worker={}", self.id)));
                     status.update(|next| {
-                                                next.record_session_state(
+                        next.record_session_state(
                             SessionLifecycleState::Terminated,
                             "SessionTerminated",
                             detail.clone(),
                         );
-                                            });
+                    });
                 }
             }
             "SessionConnectionUp" => {
@@ -849,12 +888,12 @@ impl SubscriptionWorkerState {
                         ))
                     });
                     status.update(|next| {
-                                                next.record_session_state(
+                        next.record_session_state(
                             SessionLifecycleState::Up,
                             "SessionConnectionUp",
                             detail.clone(),
                         );
-                                            });
+                    });
                 }
             }
             _ => {
@@ -874,7 +913,10 @@ impl SubscriptionWorkerState {
                     .iter()
                     .find_map(|(service, open)| (open.cid == cid_int).then(|| service.clone()));
                 if let Some(service_name) = service {
-                    let open = self.pending_service_opens.remove(&service_name).expect("found pending open");
+                    let open = self
+                        .pending_service_opens
+                        .remove(&service_name)
+                        .expect("found pending open");
                     match msg_type {
                         "ServiceOpened" => {
                             self.open_services.insert(service_name.clone());
@@ -975,8 +1017,8 @@ impl SubscriptionWorkerState {
             "SlowConsumerWarning" => {
                 if let Some(status) = &self.status {
                     status.update(|next| {
-                                                next.record_admin_warning(msg_type, None);
-                                            });
+                        next.record_admin_warning(msg_type, None);
+                    });
                 }
                 xbbg_log::warn!(worker_id = self.id, "slow consumer warning");
             }
@@ -986,8 +1028,8 @@ impl SubscriptionWorkerState {
                 }
                 if let Some(status) = &self.status {
                     status.update(|next| {
-                                                next.record_admin_warning_cleared(msg_type, None);
-                                            });
+                        next.record_admin_warning_cleared(msg_type, None);
+                    });
                 }
                 xbbg_log::info!(worker_id = self.id, "slow consumer warning cleared");
             }
@@ -997,8 +1039,8 @@ impl SubscriptionWorkerState {
                 if correlation_count == 0 {
                     if let Some(status) = &self.status {
                         status.update(|next| {
-                                                        next.record_admin_data_loss(None, None);
-                                                    });
+                            next.record_admin_data_loss(None, None);
+                        });
                     }
                 }
                 for index in 0..correlation_count {
@@ -1013,8 +1055,8 @@ impl SubscriptionWorkerState {
                             state.on_dataloss(timestamp_us);
                             if let Some(status) = &self.status {
                                 status.update(|next| {
-                                                                        next.record_admin_data_loss(Some(topic.clone()), None);
-                                                                    });
+                                    next.record_admin_data_loss(Some(topic.clone()), None);
+                                });
                             }
                         }
                     }
@@ -1024,14 +1066,14 @@ impl SubscriptionWorkerState {
             _ => {
                 if let Some(status) = &self.status {
                     status.update(|next| {
-                                                next.push_event(
+                        next.push_event(
                             super::SubscriptionEventCategory::Admin,
                             SubscriptionEventLevel::Info,
                             msg_type,
                             None,
                             None,
                         );
-                                            });
+                    });
                 }
                 xbbg_log::debug!(worker_id = self.id, msg_type = msg_type, "admin event");
             }
@@ -1093,7 +1135,7 @@ impl SubscriptionWorkerState {
             );
         }
         status_arc.update(|next| {
-                        for (_, topic, elapsed_us) in &to_warn {
+            for (_, topic, elapsed_us) in &to_warn {
                 let detail = format!(
                     "topic has been streams-inactive for {}ms; SDK is still trying to recover",
                     elapsed_us / 1_000
@@ -1105,11 +1147,9 @@ impl SubscriptionWorkerState {
                     SubscriptionEventLevel::Warning,
                 );
             }
-                    });
+        });
     }
 }
-
-
 
 fn session_start_error(context: &str, reason: Option<String>) -> BlpError {
     BlpError::SessionStart {
@@ -1194,8 +1234,10 @@ impl SubscriptionCommandHandle {
             xbbg_log::error!(worker_id = self.worker_id(), service = %service, error = %e, "failed to open service");
             return Err(BlpAsyncError::BlpError(e));
         }
-        self.inner.shared.record_service_ready_if_already_open(&service, was_open);
-        let (sub_list, keys, metrics) = self.inner.shared.register_subscriptions(
+        self.inner
+            .shared
+            .record_service_ready_if_already_open(&service, was_open);
+        let request = SubscriptionRegistrationRequest {
             topics,
             fields,
             all_fields,
@@ -1203,7 +1245,12 @@ impl SubscriptionCommandHandle {
             flush_threshold,
             overflow_policy,
             stream,
-        ).map_err(BlpAsyncError::BlpError)?;
+        };
+        let (sub_list, keys, metrics) = self
+            .inner
+            .shared
+            .register_subscriptions(request)
+            .map_err(BlpAsyncError::BlpError)?;
         if let Err(e) = self.inner.session.subscribe(&sub_list, None) {
             self.inner.shared.cleanup_failed_subscribe(&keys);
             xbbg_log::error!(worker_id = self.worker_id(), error = %e, "subscribe failed");
@@ -1235,7 +1282,8 @@ impl SubscriptionCommandHandle {
             overflow_policy,
             stream,
             status,
-        ).await
+        )
+        .await
     }
 
     async fn ensure_service(&self, service: &str) -> Result<(), BlpError> {
@@ -1244,7 +1292,11 @@ impl SubscriptionCommandHandle {
         }
         let (should_open, cid_int, rx) = self.inner.shared.register_service_waiter(service);
         if should_open {
-            xbbg_log::info!(worker_id = self.worker_id(), service = service, "opening service on demand (async)");
+            xbbg_log::info!(
+                worker_id = self.worker_id(),
+                service = service,
+                "opening service on demand (async)"
+            );
             let cid = CorrelationId::Int(cid_int);
             if let Err(e) = self.inner.session.open_service_async(service, &cid) {
                 self.inner.shared.remove_pending_service_open(service);
@@ -1280,7 +1332,6 @@ impl SubscriptionCommandHandle {
     pub fn worker_id(&self) -> usize {
         self.inner.id
     }
-
 }
 
 pub struct SubscriptionWorkerHandle {
@@ -1291,7 +1342,11 @@ impl SubscriptionWorkerHandle {
     fn spawn(id: usize, config: Arc<EngineConfig>) -> Result<Self, BlpError> {
         let options = build_session_options(&config, true)?;
         let health = Arc::new(AtomicU8::new(WorkerHealth::Healthy as u8));
-        let shared = Arc::new(SubscriptionWorkerShared::new(id, Arc::clone(&config), Arc::clone(&health)));
+        let shared = Arc::new(SubscriptionWorkerShared::new(
+            id,
+            Arc::clone(&config),
+            Arc::clone(&health),
+        ));
         let handler_shared = Arc::clone(&shared);
         let session = AsyncSession::new(&options, move |event| {
             handler_shared.dispatch_event(event);
@@ -1390,7 +1445,10 @@ impl SubscriptionSessionPool {
             let mut chosen = None;
             while let Some(candidate) = available.pop() {
                 if candidate.health() == WorkerHealth::Dead {
-                    xbbg_log::warn!(worker_id = candidate.id(), "discarding dead subscription worker (SessionTerminated)");
+                    xbbg_log::warn!(
+                        worker_id = candidate.id(),
+                        "discarding dead subscription worker (SessionTerminated)"
+                    );
                     drop(candidate);
                     continue;
                 }
@@ -1398,12 +1456,20 @@ impl SubscriptionSessionPool {
                 break;
             }
             if let Some(handle) = chosen {
-                xbbg_log::debug!(worker_id = handle.id(), remaining = available.len(), "claimed session from pool");
+                xbbg_log::debug!(
+                    worker_id = handle.id(),
+                    remaining = available.len(),
+                    "claimed session from pool"
+                );
                 handle
             } else {
                 drop(available);
                 let new_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                xbbg_log::warn!(worker_id = new_id, initial_size = self.initial_size, "subscription pool exhausted or all dead, creating new session");
+                xbbg_log::warn!(
+                    worker_id = new_id,
+                    initial_size = self.initial_size,
+                    "subscription pool exhausted or all dead, creating new session"
+                );
                 SubscriptionWorkerHandle::spawn(new_id, self.config.clone()).map_err(|e| {
                     BlpAsyncError::BlpError(BlpError::Internal {
                         detail: format!("failed to create dynamic subscription worker: {}", e),
@@ -1420,12 +1486,19 @@ impl SubscriptionSessionPool {
 
     fn release(&self, handle: SubscriptionWorkerHandle) {
         if handle.health() == WorkerHealth::Dead {
-            xbbg_log::warn!(worker_id = handle.id(), "discarding dead subscription worker on release (SessionTerminated)");
+            xbbg_log::warn!(
+                worker_id = handle.id(),
+                "discarding dead subscription worker on release (SessionTerminated)"
+            );
             drop(handle);
             return;
         }
         let mut available = self.available.lock();
-        xbbg_log::debug!(worker_id = handle.id(), pool_size = available.len() + 1, "session returned to pool");
+        xbbg_log::debug!(
+            worker_id = handle.id(),
+            pool_size = available.len() + 1,
+            "session returned to pool"
+        );
         available.push(handle);
     }
 
@@ -1435,7 +1508,10 @@ impl SubscriptionSessionPool {
 
     pub fn signal_shutdown(&self) {
         let available = self.available.lock();
-        xbbg_log::info!(count = available.len(), "signaling subscription pool shutdown");
+        xbbg_log::info!(
+            count = available.len(),
+            "signaling subscription pool shutdown"
+        );
         for handle in available.iter() {
             handle.signal_shutdown();
         }
@@ -1443,7 +1519,10 @@ impl SubscriptionSessionPool {
 
     pub fn shutdown_blocking(&self) {
         let mut available = self.available.lock();
-        xbbg_log::info!(count = available.len(), "shutting down subscription pool (blocking)");
+        xbbg_log::info!(
+            count = available.len(),
+            "shutting down subscription pool (blocking)"
+        );
         for handle in available.iter_mut() {
             handle.shutdown_blocking();
         }

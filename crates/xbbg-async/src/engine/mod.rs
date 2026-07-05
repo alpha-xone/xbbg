@@ -26,10 +26,10 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
-use parking_lot::Mutex as ParkingMutex;
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType, SchemaRef, TimeUnit};
 use futures_util::stream::{self, StreamExt};
+use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::{mpsc, watch};
 
 use xbbg_core::{apply_session_identity_options, AuthConfig, BlpError, SessionOptions};
@@ -157,7 +157,6 @@ fn build_session_options(
 
     Ok(options)
 }
-
 
 fn attach_auth_context(error: BlpError, auth: Option<&AuthConfig>) -> BlpError {
     let Some(auth) = auth else {
@@ -1884,7 +1883,9 @@ impl Engine {
             });
         }
         let (tx, rx) = mpsc::channel(capacity);
-        let status = Arc::new(SubscriptionStatusHandle::new(SubscriptionStatusState::default()));
+        let status = Arc::new(SubscriptionStatusHandle::new(
+            SubscriptionStatusState::default(),
+        ));
 
         // Claim a session from the pool (uses Arc-based claim for 'static
         // lifetime). Run on the blocking pool: when the pool is exhausted,

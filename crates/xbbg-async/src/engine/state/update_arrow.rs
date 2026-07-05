@@ -88,9 +88,12 @@ impl SubscriptionArrowBatcher {
             false,
         ));
         fields.push(Field::new("topic", DataType::Utf8, false));
-        fields.extend(layout.fields.iter().map(|meta| {
-            Field::new(meta.name.as_ref(), arrow_datatype(meta.kind), true)
-        }));
+        fields.extend(
+            layout
+                .fields
+                .iter()
+                .map(|meta| Field::new(meta.name.as_ref(), arrow_datatype(meta.kind), true)),
+        );
 
         let mut builders = Vec::with_capacity(fields.len());
         builders.push(SubscriptionColumnBuilder::Timestamp(
@@ -271,7 +274,9 @@ impl SubscriptionColumnBuilder {
 
 fn append_string_value(builder: &mut StringBuilder, value: Option<&UpdateValue>) {
     match value {
-        Some(UpdateValue::Bool(value)) => builder.append_value(if *value { "true" } else { "false" }),
+        Some(UpdateValue::Bool(value)) => {
+            builder.append_value(if *value { "true" } else { "false" })
+        }
         Some(UpdateValue::I32(value)) => {
             let mut buffer = itoa::Buffer::new();
             builder.append_value(buffer.format(*value));
@@ -309,9 +314,7 @@ fn append_string_value(builder: &mut StringBuilder, value: Option<&UpdateValue>)
 mod tests {
     use super::*;
     use crate::engine::state::update::{FieldMeta, UpdateField};
-    use arrow_array::{
-        Array, Float64Array, Int32Array, StringArray, TimestampMicrosecondArray,
-    };
+    use arrow_array::{Array, Float64Array, Int32Array, StringArray, TimestampMicrosecondArray};
 
     fn layout(version: u32, fields: Vec<FieldMeta>) -> Arc<FieldLayout> {
         Arc::new(FieldLayout::new(version, fields))

@@ -13,9 +13,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arrow_array::{ ArrayRef, Float64Array };
-use arrow_schema::{ArrowError, DataType, Field, Schema};
 use arrow_array::RecordBatch;
+use arrow_array::{ArrayRef, Float64Array};
+use arrow_schema::{ArrowError, DataType, Field, Schema};
 use xbbg_async::engine::state::typed_builder::{ArrowType, TypedBuilder};
 use xbbg_core::Value;
 
@@ -128,9 +128,7 @@ fn main() {
     let iterations = env_usize("ARROW_BENCH_ITERATIONS", DEFAULT_ITERATIONS);
     let warmup_iterations = env_usize("BENCH_WARMUP", DEFAULT_WARMUP);
 
-    let dense_strings: Vec<String> = (0..1024)
-        .map(|idx| format!("SECURITY_{idx:04}"))
-        .collect();
+    let dense_strings: Vec<String> = (0..1024).map(|idx| format!("SECURITY_{idx:04}")).collect();
     let mixed_hints = vec![
         ("ticker".to_string(), ArrowType::String),
         ("px_last".to_string(), ArrowType::Float64),
@@ -150,53 +148,64 @@ fn main() {
     ];
     let finalization_field_names: Vec<String> = (0..5).map(|col| format!("value_{col}")).collect();
 
-    let mut results = Vec::with_capacity(7);
-    results.push(run_scenario("dense_float64", rows, 1, iterations, warmup_iterations, || {
-        bench_dense_float64(rows)
-    }));
-    results.push(run_scenario(
-        "sparse_float64_null",
-        rows,
-        1,
-        iterations,
-        warmup_iterations,
-        || bench_sparse_float64_null(rows),
-    ));
-    results.push(run_scenario("dense_string", rows, 1, iterations, warmup_iterations, || {
-        bench_dense_string(rows, &dense_strings)
-    }));
-    results.push(run_scenario(
-        "mixed_5_column_rows",
-        rows,
-        5,
-        iterations,
-        warmup_iterations,
-        || bench_mixed_5_column_rows(rows, &mixed_hints),
-    ));
-    results.push(run_scenario(
-        "wide_100_column_rows",
-        rows,
-        100,
-        iterations,
-        warmup_iterations,
-        || bench_wide_100_column_rows(rows, &wide_hints, &wide_names),
-    ));
-    results.push(run_scenario(
-        "late_column_null_backfill",
-        rows,
-        2,
-        iterations,
-        warmup_iterations,
-        || bench_late_column_null_backfill(rows, &late_hints),
-    ));
-    results.push(run_scenario(
-        "record_batch_finalization",
-        rows,
-        5,
-        iterations,
-        warmup_iterations,
-        || bench_record_batch_finalization(rows, &finalization_field_names),
-    ));
+    let results = vec![
+        run_scenario(
+            "dense_float64",
+            rows,
+            1,
+            iterations,
+            warmup_iterations,
+            || bench_dense_float64(rows),
+        ),
+        run_scenario(
+            "sparse_float64_null",
+            rows,
+            1,
+            iterations,
+            warmup_iterations,
+            || bench_sparse_float64_null(rows),
+        ),
+        run_scenario(
+            "dense_string",
+            rows,
+            1,
+            iterations,
+            warmup_iterations,
+            || bench_dense_string(rows, &dense_strings),
+        ),
+        run_scenario(
+            "mixed_5_column_rows",
+            rows,
+            5,
+            iterations,
+            warmup_iterations,
+            || bench_mixed_5_column_rows(rows, &mixed_hints),
+        ),
+        run_scenario(
+            "wide_100_column_rows",
+            rows,
+            100,
+            iterations,
+            warmup_iterations,
+            || bench_wide_100_column_rows(rows, &wide_hints, &wide_names),
+        ),
+        run_scenario(
+            "late_column_null_backfill",
+            rows,
+            2,
+            iterations,
+            warmup_iterations,
+            || bench_late_column_null_backfill(rows, &late_hints),
+        ),
+        run_scenario(
+            "record_batch_finalization",
+            rows,
+            5,
+            iterations,
+            warmup_iterations,
+            || bench_record_batch_finalization(rows, &finalization_field_names),
+        ),
+    ];
 
     print_table(&results);
     write_results(&results, rows, iterations, warmup_iterations);
@@ -413,7 +422,12 @@ fn percentile_ns(timings: &[Duration], percentile: f64) -> u128 {
     values[idx]
 }
 
-fn write_results(results: &[BenchResult], rows: usize, iterations: usize, warmup_iterations: usize) {
+fn write_results(
+    results: &[BenchResult],
+    rows: usize,
+    iterations: usize,
+    warmup_iterations: usize,
+) {
     let timestamp = unix_timestamp();
     let json = results_json(results, rows, iterations, warmup_iterations, timestamp);
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benchmarks/results");

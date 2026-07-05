@@ -372,12 +372,7 @@ impl AsyncSession {
     pub fn unsubscribe(&self, subs: &crate::SubscriptionList) -> Result<()> {
         // SAFETY: valid session/list pointers.
         let rc = unsafe {
-            crate::ffi::blpapi_Session_unsubscribe(
-                self.ptr,
-                subs.as_ptr(),
-                std::ptr::null(),
-                0,
-            )
+            crate::ffi::blpapi_Session_unsubscribe(self.ptr, subs.as_ptr(), std::ptr::null(), 0)
         };
 
         if rc != 0 {

@@ -70,8 +70,6 @@ def _clear_field_type_resolution_cache() -> None:
     _FIELD_TYPE_RESOLUTION_CACHE.clear()
 
 
-
-
 __all__ = list(BLP_MODULE_EXPORTS)
 
 
