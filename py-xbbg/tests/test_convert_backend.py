@@ -119,7 +119,6 @@ class TestConvertBackendPyArrow:
         assert result.num_rows == arrow_table.num_rows
 
 
-
 class TestConvertBackendPandas:
     def test_convert_pandas_prefers_pyarrow_when_available(self, arrow_table: Any, monkeypatch: pytest.MonkeyPatch):
         pd = pytest.importorskip("pandas")
