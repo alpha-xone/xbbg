@@ -59,18 +59,11 @@ pub(crate) struct ResponseMetadata {
 impl ResponseMetadata {
     /// Record `securityData[].eidData` (an int array element) for `ticker`.
     pub(crate) fn record_eid_data(&mut self, ticker: &str, eids: &Element<'_>) {
-        let n = eids.len();
-        if n == 0 {
-            return;
-        }
         let entry = self.eid_data.entry(ticker.to_string()).or_default();
-        for i in 0..n {
+        for i in 0..eids.len() {
             if let Some(eid) = eids.get_i32(i) {
                 entry.push(i64::from(eid));
             }
-        }
-        if entry.is_empty() {
-            self.eid_data.remove(ticker);
         }
     }
 
@@ -1388,6 +1381,39 @@ mod tests {
             vec![Arc::new(StringArray::from(vec!["IBM US Equity"]))],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn response_metadata_survives_on_zero_row_batch() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ticker",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]));
+        let empty = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(Vec::<String>::new()))],
+        )
+        .unwrap();
+        let mut metadata = ResponseMetadata::default();
+        metadata
+            .eid_data
+            .insert("IBM US Equity".to_string(), vec![14005, 35009]);
+        metadata
+            .eid_data
+            .insert("EMPTY US Equity".to_string(), Vec::new());
+
+        let batch = metadata.attach(empty);
+
+        assert_eq!(batch.num_rows(), 0);
+        assert_eq!(
+            batch
+                .schema_ref()
+                .metadata()
+                .get(METADATA_KEY_EID_DATA)
+                .map(String::as_str),
+            Some(r#"{"EMPTY US Equity":[],"IBM US Equity":[14005,35009]}"#)
+        );
     }
 
     #[test]

@@ -20,6 +20,10 @@ function engine(): XbbgEngineLike {
     bdib: vi.fn(async () => []),
     bdtick: vi.fn(async () => []),
     bds: vi.fn(async () => []),
+    checkEntitlements: vi.fn(async () => ({
+      entitled: true,
+      failedEids: [],
+    })),
     bflds: vi.fn(async () => []),
     bql: vi.fn(async () => []),
     bsrch: vi.fn(async () => []),

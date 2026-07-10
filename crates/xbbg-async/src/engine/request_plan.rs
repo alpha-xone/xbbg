@@ -343,7 +343,7 @@ fn validate_request_params_with_operation(
 
     validate_field_metadata_aliases(params, operation)?;
     validate_security_overrides(params, operation, raw)?;
-    validate_return_eids(params, operation, raw)?;
+    validate_return_eids(params, operation)?;
     PlannedRequestShape::from_params(operation, raw, params)?;
 
     if raw {
@@ -371,23 +371,26 @@ fn validate_request_params_with_operation(
     Ok(())
 }
 
-/// `returnEids` is a ReferenceDataRequest / HistoricalDataRequest element
-/// (bdp/bds/bdh). Reject it elsewhere instead of silently dropping the
-/// parameter; raw requests are power-user mode and pass through.
+/// `returnEids` is supported by Bloomberg's reference, historical, intraday
+/// bar, and intraday tick requests. Reject the first-class flag elsewhere;
+/// generic requests can still pass an explicit `returnEids` element.
 fn validate_return_eids(
     params: &RequestParams,
     operation: &Operation,
-    raw: bool,
 ) -> Result<(), BlpAsyncError> {
-    if !params.return_eids || raw {
+    if !params.return_eids {
         return Ok(());
     }
     match operation {
-        Operation::ReferenceData | Operation::HistoricalData => Ok(()),
+        Operation::ReferenceData
+        | Operation::HistoricalData
+        | Operation::IntradayBar
+        | Operation::IntradayTick => Ok(()),
         other => Err(BlpAsyncError::ConfigError {
             detail: format!(
-                "return_eids is only supported for ReferenceData and HistoricalData requests \
-                 (got {other}); pass the returnEids element explicitly for raw requests"
+                "return_eids is only supported for ReferenceData, HistoricalData, IntradayBar, \
+                 and IntradayTick requests (got {other}); generic requests may pass the \
+                 returnEids element explicitly"
             ),
         }),
     }

@@ -689,6 +689,93 @@ describe('native Arrow zero-copy table construction', () => {
     expect(malformedMetadata.metadata).toStrictEqual({ 'xbbg.eid_data': '{not-json' });
     expect(malformedMetadata.eidData).toBeUndefined();
   });
+  it.each([
+    ['ReferenceDataRequest', 'IBM US Equity'],
+    ['HistoricalDataRequest', 'MSFT US Equity'],
+    ['IntradayBarRequest', 'AAPL US Equity'],
+    ['IntradayTickRequest', 'NVDA US Equity'],
+  ])('exposes %s EIDs on empty JSON results', async (operation, security) => {
+    const engine = Object.create(api.Engine.prototype) as api.Engine;
+    const eidData = { [security]: [101, 202] };
+    Reflect.set(engine, 'inner', {
+      request: async () =>
+        metadataBatch({
+          'xbbg.eid_data': JSON.stringify(eidData),
+        }),
+    });
+
+    const result = await engine.request({
+      backend: api.Backend.JSON,
+      operation,
+      service: '//blp/refdata',
+    });
+    const resultMetadata = result as ResultMetadata;
+
+    expect(result).toHaveLength(0);
+    expect(resultMetadata.eidData).toStrictEqual(eidData);
+    expect(resultMetadata.metadata).toStrictEqual({
+      'xbbg.eid_data': JSON.stringify(eidData),
+    });
+  });
+
+  it('keeps generic result metadata on the result container rather than JSON rows', async () => {
+    const engine = Object.create(api.Engine.prototype) as api.Engine;
+    Reflect.set(engine, 'inner', {
+      request: async (): Promise<NativeArrowZeroCopyBatch> => ({
+        columns: [
+          {
+            data: typedBuffer(new Int32Array([42])),
+            length: 1,
+            name: 'value',
+            nullCount: 0,
+            nullable: false,
+            type: 'int32',
+          },
+        ],
+        kind: 'zeroCopy',
+        metadata: { 'xbbg.eid_data': '{"IBM US Equity":[101]}' },
+        numRows: 1,
+      }),
+    });
+
+    const result = (await engine.request({
+      backend: api.Backend.JSON,
+      operation: 'ReferenceDataRequest',
+      service: '//blp/refdata',
+    })) as unknown[] & ResultMetadata;
+
+    expect(result).toHaveLength(1);
+    expect(result.eidData).toStrictEqual({ 'IBM US Equity': [101] });
+    expect(result[0]).toMatchObject({ value: 42 });
+    expect(result[0]).not.toHaveProperty('eidData');
+    expect(result[0]).not.toHaveProperty('metadata');
+  });
+
+  it('passes EIDs flattened from result metadata to entitlement checks', async () => {
+    const entitlementCalls: { eids: readonly number[]; service: string }[] = [];
+    const engine = Object.create(api.Engine.prototype) as api.Engine;
+    Reflect.set(engine, 'inner', {
+      checkEntitlements: async (service: string, eids: readonly number[]) => {
+        entitlementCalls.push({ eids, service });
+        return { entitled: false, failedEids: [202] };
+      },
+      request: async () =>
+        metadataBatch({
+          'xbbg.eid_data': '{"IBM US Equity":[101,202],"MSFT US Equity":[303]}',
+        }),
+    });
+
+    const result = (await engine.request({
+      backend: api.Backend.JSON,
+      operation: 'ReferenceDataRequest',
+      service: '//blp/refdata',
+    })) as ResultMetadata;
+    const eids = Object.values(result.eidData ?? {}).flat();
+    const report = await engine.checkEntitlements('//blp/refdata', eids);
+
+    expect(entitlementCalls).toStrictEqual([{ eids: [101, 202, 303], service: '//blp/refdata' }]);
+    expect(report).toStrictEqual({ entitled: false, failedEids: [202] });
+  });
 });
 
 describe('engine wrapper request plumbing', () => {
@@ -869,7 +956,7 @@ describe('engine wrapper request plumbing', () => {
     });
   });
 
-  it('forwards returnEids on reference and historical request helpers', async () => {
+  it('forwards returnEids on every typed request helper', async () => {
     const engine = captureRequests();
 
     await engine.bdp(['IBM US Equity'], ['PX_LAST'], { returnEids: true });
@@ -879,8 +966,16 @@ describe('engine wrapper request plumbing', () => {
       returnEids: true,
       start: '2024-01-01',
     });
+    await engine.bdib('IBM US Equity', { returnEids: true });
+    await engine.bdtick('IBM US Equity', { returnEids: true });
 
-    expect(engine.calls.map((call) => call.returnEids)).toStrictEqual([true, true, true]);
+    expect(engine.calls.map((call) => call.returnEids)).toStrictEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
   });
 
   it('wraps native errors from entitlement methods', async () => {

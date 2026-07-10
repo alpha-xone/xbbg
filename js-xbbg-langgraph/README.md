@@ -130,6 +130,7 @@ Core Bloomberg request tools:
 - `xbbg_bds` - one Bloomberg bulk/table field.
 - `xbbg_bdib` - intraday bars; requires explicit `start`, `end`, and `interval`.
 - `xbbg_bdtick` - intraday ticks; requires explicit `start`, `end`, and event types when the default stream is not intended.
+- `xbbg_check_entitlements` - checks a nonempty EID list against `//blp/refdata` or an explicitly supplied Bloomberg service.
 - `xbbg_bql` - BQL expressions only.
 - `xbbg_bsrch` - Bloomberg search/grid requests, not normal security lookup.
 - `xbbg_bqr` - Bloomberg Quote Request / fixed-income dealer quotes; prefer identifiers such as `/isin/<ISIN>@<QUOTE_SOURCE> <MARKET_SECTOR>`.
@@ -145,6 +146,30 @@ Core Bloomberg request tools:
 - `xbbg_stream_snapshot` - bounded `//blp/mktdata` live observation that always unsubscribes.
 - `xbbg_mktbar_snapshot` - bounded `//blp/mktbar` live bar observation for one ticker.
 - `xbbg_depth_snapshot` - bounded `//blp/mktdepthdata` market-depth observation for one ticker.
+
+### Entitlement IDs
+
+The `xbbg_bdp`, `xbbg_bds`, `xbbg_bdh`, `xbbg_bdib`, and `xbbg_bdtick` inputs accept `returnEids: true`. These map only to Bloomberg's EID-capable `ReferenceDataRequest` (including BDS), `HistoricalDataRequest`, `IntradayBarRequest`, and `IntradayTickRequest` operations.
+
+When EIDs are requested, bounded tool artifacts retain result metadata alongside the bounded rows:
+
+```json
+{
+  "data": {
+    "rows": [],
+    "eidData": { "<TICKER> <MARKET_SECTOR>": [101, 202] },
+    "metadata": { "xbbg.eid_data": "{\"<TICKER> <MARKET_SECTOR>\":[101,202]}" }
+  },
+  "rowCount": 0,
+  "truncated": false
+}
+```
+
+Row bounding does not discard `eidData`, `metadata`, `securityErrors`, or `fieldExceptions`. Pass the collected IDs to `xbbg_check_entitlements`:
+
+```json
+{ "eids": [101, 202], "service": "//blp/refdata" }
+```
 
 Securities are passed through in the form the user supplied them: Bloomberg tickers as `<TICKER> <MARKET_SECTOR>` (for example `<TICKER> <EXCHANGE> Equity`, `<INDEX_TICKER> Index`, `<CCY_PAIR> Curncy`), raw ISINs as `/isin/<ISIN>`, raw CUSIPs as `/cusip/<CUSIP>`. The market sector ending is Bloomberg's yellow key — `Equity`, `Index`, `Curncy`, `Comdty`, `Corp`, `Govt`, `Muni`, `Mtge`, `M-Mkt`, or `Pfd` (preferred securities) — and request tools pass it through to Bloomberg unvalidated. The agent guidance and every securities/ticker field description instruct the model that the ticker format is a template, not authorization to construct one — identifiers are never converted into guessed tickers; `xbbg_resolve_isins` exists for explicit resolution. Note `xbbg_ext_ticker`'s `parse_ticker` is narrower than the request tools: it parses generic futures-style tickers only (`Index`/`Curncy`/`Comdty`/`Corp`, or `<ROOT><N> <EXCHANGE> Equity`) and rejects other sectors.
 BQL is passed as one complete expression string. Use placeholder shapes such as `get(<FIELD>) for('<TICKER> <MARKET_SECTOR>')`, `get(<FIELD_1>, <FIELD_2>) for(['<TICKER_1> <MARKET_SECTOR>', '<TICKER_2> <MARKET_SECTOR>'])`, `get(<FIELD>, <WEIGHT_FIELD>) for(holdings('<ETF_TICKER> <MARKET_SECTOR>'))`, or `get(<FIELD>) for(members('<INDEX_TICKER> <MARKET_SECTOR>')) with(...)`. Prefer `xbbg_bdp`/`xbbg_bdh` for simple reference or historical requests.

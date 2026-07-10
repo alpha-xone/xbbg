@@ -39,6 +39,7 @@ Latest release: xbbg==1.4.3 (release: [notes](https://github.com/xbbg-org/xbbg/r
 - [JavaScript and Node](#javascript-and-node)
 - [Configuration and engines](#configuration-and-engines)
 - [Common API surface](#common-api-surface)
+- [Entitlement IDs](#entitlement-ids)
 - [Output backends](#output-backends)
 - [Async usage](#async-usage)
 - [Subscriptions: raw, tick mode, and all fields](#subscriptions-raw-tick-mode-and-all-fields)
@@ -296,6 +297,40 @@ Use `Engine(...)` when an application needs a scoped engine with its own connect
 | Testing helpers | `xbbg.testing.create_mock_response`, `xbbg.testing.mock_engine` |
 
 Most sync helpers have async counterparts with an `a` prefix: `bdp` → `abdp`, `bdh` → `abdh`, `bdib` → `abdib`, `request` → `arequest`.
+
+## Entitlement IDs
+
+Bloomberg can return entitlement IDs only for these four request operations. Opt in with `return_eids=True`:
+
+| Bloomberg operation | Python routes |
+| --- | --- |
+| `ReferenceDataRequest` | `blp.bdp`, `blp.bds` (BDS uses the reference-data operation) |
+| `HistoricalDataRequest` | `blp.bdh` |
+| `IntradayBarRequest` | `blp.bdib` |
+| `IntradayTickRequest` | `blp.bdtick` |
+
+For example, request EIDs with intraday ticks and check them against the default `//blp/refdata` service:
+
+```python
+from xbbg import blp
+
+ticks = blp.bdtick(
+    "AAPL US Equity",
+    "2024-01-15T09:30:00",
+    "2024-01-15T10:00:00",
+    return_eids=True,
+    backend="native",
+)
+
+eid_data = ticks.eid_data or {}
+eids = sorted({eid for security_eids in eid_data.values() for eid in security_eids})
+if eids:
+    print(blp.check_entitlements(eids))
+```
+
+EID metadata remains available through the native `ArrowTable.eid_data` property, pandas `attrs["xbbg_eid_data"]`, or PyArrow schema metadata under `xbbg.eid_data`. Polars and DuckDB do not provide a stable entitlement-metadata side channel; use the native, PyArrow, or pandas backend when EIDs are required.
+
+This opt-in request metadata is separate from a subscription message's top-level `EID` field.
 
 ## Output backends
 

@@ -22,6 +22,7 @@ const REQUIRED_TOOL_INSTRUCTIONS = [
   "- xbbg_bds: Bloomberg bulk/table fields. Provide exactly one bulk field; do not use bds for ordinary multi-field reference data.",
   "- xbbg_bdib: intraday bars only. Provide one ticker, explicit ISO start/end datetimes with time components, a positive interval in minutes, and timezone context when datetimes are naive.",
   "- xbbg_bdtick: intraday tick data. Provide one ticker, explicit ISO start/end datetimes with time components, and explicit eventTypes unless the default event stream is intended. Use includeBrokerCodes or includeConditionCodes only when those columns are needed.",
+  "- xbbg_check_entitlements: checks whether the current Bloomberg identity is entitled to a nonempty list of EIDs returned by an EID-capable request. Usually use the default //blp/refdata service.",
   "- xbbg_bql: BQL expressions only when the user asks for BQL or the request is naturally expressed as a bounded BQL query. Keep queries short, explicit, and scoped to the requested universe.",
   "- xbbg_bsrch: Bloomberg search-grid or saved-search workflows only. Do not use it for ordinary security lookup.",
   "- xbbg_bqr: Bloomberg Quote Request / dealer quotes. Prefer fixed-income identifier inputs with a dealer quote source such as /isin/<ISIN>@<QUOTE_SOURCE> <MARKET_SECTOR>, explicit start/end datetimes with time components, and explicit event types.",
@@ -114,6 +115,9 @@ export const BDIB_DESCRIPTION =
 
 export const BDTICK_DESCRIPTION =
   'Bloomberg intraday tick data. Requires one ticker plus explicit ISO start/end datetimes with time components. Set eventTypes explicitly, for example ["<EVENT_TYPE>"], and includeBrokerCodes/includeConditionCodes only when needed.';
+
+export const CHECK_ENTITLEMENTS_DESCRIPTION =
+  "Check the current Bloomberg identity against entitlement IDs returned by a request with returnEids enabled. Accepts a nonempty integer EID list and defaults the service to //blp/refdata. This tool is read-only.";
 
 export const BQL_DESCRIPTION =
   "Bloomberg Query Language expression sent as one complete query string. Use for bounded universe analytics with placeholder-shaped syntax such as get(<FIELD>) for('<TICKER> <MARKET_SECTOR>'), holdings('<ETF_TICKER> <MARKET_SECTOR>'), members('<INDEX_TICKER> <MARKET_SECTOR>'), filters with with(...), or dates=range(...). Prefer xbbg_bdp/xbbg_bdh for simple reference or historical requests.";

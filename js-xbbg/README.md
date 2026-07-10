@@ -183,6 +183,31 @@ const cdxPricing = await xbbg.ext.cdx.acdx_pricing('CDX IG CDSI GEN 5Y Corp');
 const cdxRisk = await xbbg.ext.cdx.acdx_risk('CDX IG CDSI GEN 5Y Corp');
 ```
 
+## Entitlement IDs
+
+Set `returnEids: true` on `bdp`, `bds`, `bdh`, `bdib`, or `bdtick`. Bloomberg supports this option only for `ReferenceDataRequest` (including BDS), `HistoricalDataRequest`, `IntradayBarRequest`, and `IntradayTickRequest`.
+
+```ts
+import { Backend, connect, type ResultMetadata } from '@xbbg/core';
+
+const engine = await connect({ host: 'localhost', port: 8194 });
+const ticks = (await engine.bdtick('AAPL US Equity', {
+  start: '2024-01-15T09:30:00',
+  end: '2024-01-15T10:00:00',
+  eventTypes: ['TRADE'],
+  returnEids: true,
+  backend: Backend.JSON,
+})) as Array<Record<string, unknown>> & ResultMetadata;
+
+const eids = Object.values(ticks.eidData ?? {}).flat();
+if (eids.length > 0) {
+  const report = await engine.checkEntitlements('//blp/refdata', eids);
+  console.log(report);
+}
+```
+
+`eidData` belongs to the outer result container, not to individual rows. The outer result also exposes the raw schema metadata through `metadata`.
+
 ## Recipes
 
 High-level workflows that wrap common Bloomberg request patterns. Each recipe returns an Arrow `Table` by default (or a JSON/Polars result when `backend` is set) and errors are mapped to the standard `BlpError` hierarchy.

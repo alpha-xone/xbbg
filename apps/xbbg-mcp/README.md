@@ -15,9 +15,44 @@ The current server exposes request/response tools only:
 - `bql` - Bloomberg Query Language
 - `bsrch` - Bloomberg search
 - `bflds` - field metadata lookup
+- `check_entitlements` - entitlement-ID check for a Bloomberg service
 - `request` - generic raw/custom request path
 
 Responses are returned as bounded structured JSON with Arrow schema metadata so an agent can inspect the shape without receiving an unbounded payload.
+
+## Entitlement IDs
+
+Set `return_eids: true` only on routes backed by Bloomberg operations that support `returnEids`:
+
+| MCP route | Bloomberg operation | EID option |
+| --- | --- | --- |
+| `bdp`, `bds` | `ReferenceDataRequest` (including BDS/bulk) | `return_eids: true` |
+| `bdh` | `HistoricalDataRequest` | `return_eids: true` |
+| `bdib` | `IntradayBarRequest` | `return_eids: true` |
+| `request` | `IntradayTickRequest` | `return_eids: true` |
+
+The dedicated `bdp`, `bds`, `bdh`, and `bdib` tools advertise `return_eids` directly. Use the generic `request` tool for intraday ticks:
+
+```json
+{
+  "service": "//blp/refdata",
+  "operation": "IntradayTickRequest",
+  "extractor": "intraday_tick",
+  "security": "AAPL US Equity",
+  "start_datetime": "2024-01-15T09:30:00",
+  "end_datetime": "2024-01-15T10:00:00",
+  "event_types": ["TRADE"],
+  "return_eids": true
+}
+```
+
+Bounded results expose the EID map as structured JSON at `metadata["xbbg.eid_data"]`, alongside `schema`, `row_count`, `returned_rows`, `truncated`, and `rows`. Pass the collected IDs to the read-only `check_entitlements` tool; `service` defaults to `//blp/refdata`:
+
+```json
+{ "eids": [101, 202], "service": "//blp/refdata" }
+```
+
+The check result includes `service`, `eids`, `entitled`, and `failed_eids`.
 
 ## Install from GitHub Releases
 

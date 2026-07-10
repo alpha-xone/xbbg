@@ -13,7 +13,7 @@ use xbbg_log::trace;
 
 use super::typed_builder::{ArrowType, TypedBuilder};
 use super::value_utils::{
-    arrow_type_for_element, should_emit_scalar_field, top_level_response_error,
+    arrow_type_for_element, should_emit_scalar_field, top_level_response_error, ResponseMetadata,
 };
 use xbbg_core::{BlpError, Element, Message, Name};
 
@@ -57,6 +57,8 @@ pub struct IntradayTickState {
     seen_fields: Vec<bool>,
     /// Number of completed output rows.
     row_count: usize,
+    /// Response-level entitlement IDs attached as schema metadata.
+    response_meta: ResponseMetadata,
     /// Reply channel.
     pub reply: oneshot::Sender<Result<RecordBatch, BlpError>>,
 }
@@ -83,6 +85,7 @@ impl IntradayTickState {
             lookup_names,
             seen_fields: vec![false; CORE_TICK_FIELDS.len()],
             row_count: 0,
+            response_meta: ResponseMetadata::default(),
             reply,
         }
     }
@@ -127,10 +130,12 @@ impl IntradayTickState {
             arrays.push(field.builder.finish());
         }
 
-        let schema = Arc::new(Schema::new(fields));
-        RecordBatch::try_new(schema, arrays).map_err(|e| BlpError::Internal {
-            detail: format!("build IntradayTick RecordBatch: {e}"),
-        })
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|e| {
+            BlpError::Internal {
+                detail: format!("build IntradayTick RecordBatch: {e}"),
+            }
+        })?;
+        Ok(std::mem::take(&mut self.response_meta).attach(batch))
     }
 
     /// Process an IntradayTickResponse message using Element API.
@@ -152,7 +157,8 @@ impl IntradayTickState {
     /// ```
     ///
     /// Extra scalar children under `tickData.tickData[]` are appended as typed
-    /// columns. Metadata outside the tick array is intentionally ignored.
+    /// columns. Response metadata outside the tick array is attached to the
+    /// resulting Arrow schema.
     fn process_message(&mut self, msg: &Message) {
         let root = msg.elements();
 
@@ -160,6 +166,10 @@ impl IntradayTickState {
             trace!("No tickData in message");
             return;
         };
+
+        if let Some(eids) = tick_data_outer.get_by_str("eidData") {
+            self.response_meta.record_eid_data(&self.ticker, &eids);
+        }
 
         let Some(tick_data) = tick_data_outer.get_by_str("tickData") else {
             trace!("No inner tickData array in message");

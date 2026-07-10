@@ -88,7 +88,30 @@ __all__ = [
 fn main() -> Result<()> {
     let stub = _core::stub_info()?;
     stub.generate()?;
+    fix_generated_core_stub()?;
     write_top_level_stub()?;
+    Ok(())
+}
+
+fn fix_generated_core_stub() -> Result<()> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|bindings_dir| bindings_dir.parent())
+        .expect("pyo3-xbbg must live under <workspace>/bindings/pyo3-xbbg");
+    let core_stub = workspace_root.join("py-xbbg/src/xbbg/_core/__init__.pyi");
+    let generated = std::fs::read_to_string(&core_stub)?;
+    let untyped = "def check_entitlements(self, service: builtins.str, eids: typing.Sequence[builtins.int]) -> typing.Any:";
+    let typed = "def check_entitlements(self, service: builtins.str, eids: typing.Sequence[builtins.int]) -> typing.Awaitable[EntitlementReport]:";
+    if !generated.contains(untyped) {
+        return Err(std::io::Error::other(
+            "generated PyEngine.check_entitlements signature was not found",
+        )
+        .into());
+    }
+    std::fs::write(core_stub, generated.replacen(untyped, typed, 1))?;
     Ok(())
 }
 

@@ -15,7 +15,7 @@ use arrow_schema::{DataType, Field, Schema};
 use tokio::sync::mpsc;
 use xbbg_log::trace;
 
-use super::value_utils::top_level_response_error;
+use super::value_utils::{top_level_response_error, ResponseMetadata};
 use xbbg_core::{BlpError, Message};
 
 /// Streaming state for a historical data request (bdh).
@@ -102,16 +102,23 @@ impl HistDataStreamState {
             .and_then(|e| e.get_str(0))
             .unwrap_or("");
 
-        // Check for security error
-        if security_data.get_by_str("securityError").is_some() {
+        let mut response_meta = ResponseMetadata::default();
+        let has_eids = if let Some(eids) = security_data.get_by_str("eidData") {
+            response_meta.record_eid_data(ticker, &eids);
+            true
+        } else {
+            false
+        };
+
+        // A metadata-only response must still surface its entitlement IDs.
+        if security_data.get_by_str("securityError").is_some() && !has_eids {
             trace!(ticker = ticker, "Security has error, skipping");
             return None;
         }
 
-        // Get fieldData array
-        let field_data = security_data.get_by_str("fieldData")?;
-        let n = field_data.len();
-        if n == 0 {
+        let field_data = security_data.get_by_str("fieldData");
+        let n = field_data.as_ref().map_or(0, |data| data.len());
+        if n == 0 && !has_eids {
             return None;
         }
 
@@ -125,6 +132,9 @@ impl HistDataStreamState {
             .collect();
 
         for i in 0..n {
+            let field_data = field_data
+                .as_ref()
+                .expect("nonzero length requires fieldData");
             let Some(row) = field_data.get_element(i) else {
                 continue;
             };
@@ -184,6 +194,7 @@ impl HistDataStreamState {
         columns.push(Arc::new(date_array));
         columns.extend(field_arrays);
 
-        RecordBatch::try_new(schema.clone(), columns).ok()
+        let batch = RecordBatch::try_new(schema.clone(), columns).ok()?;
+        Some(response_meta.attach(batch))
     }
 }

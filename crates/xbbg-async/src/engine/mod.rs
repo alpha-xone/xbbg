@@ -910,9 +910,9 @@ pub struct RequestParams {
     pub field_types: Option<HashMap<String, String>>,
     /// Include security error rows in RefData long output when present.
     pub include_security_errors: bool,
-    /// Request entitlement IDs (`returnEids`) on reference/historical/bulk
-    /// requests; per-security EIDs surface in the batch metadata under
-    /// `xbbg.eid_data`.
+    /// Request entitlement IDs (`returnEids`) on reference, historical,
+    /// intraday bar, and intraday tick requests; per-security EIDs surface in
+    /// the batch metadata under `xbbg.eid_data`.
     pub return_eids: bool,
     /// Optional per-request field validation override.
     ///
@@ -3214,26 +3214,106 @@ mod tests {
     }
 
     #[test]
-    fn return_eids_rejected_for_unsupported_operations() {
-        let params = RequestParamsInput {
+    fn return_eids_validation_matches_supported_operations() {
+        let common = RequestParamsInput {
             service: Service::RefData.to_string(),
-            operation: Some(Operation::IntradayBar.to_string()),
             security: Some("AAPL US Equity".to_string()),
             start_datetime: Some("2024-01-02T00:00:00".to_string()),
             end_datetime: Some("2024-01-03T00:00:00".to_string()),
-            interval: Some(1),
             event_type: Some("TRADE".to_string()),
+            return_eids: Some(true),
+            ..Default::default()
+        };
+
+        for operation in [
+            Operation::ReferenceData,
+            Operation::HistoricalData,
+            Operation::IntradayBar,
+            Operation::IntradayTick,
+        ] {
+            let input = RequestParamsInput {
+                operation: Some(operation.to_string()),
+                securities: matches!(
+                    operation,
+                    Operation::ReferenceData | Operation::HistoricalData
+                )
+                .then(|| vec!["AAPL US Equity".to_string()]),
+                fields: matches!(
+                    operation,
+                    Operation::ReferenceData | Operation::HistoricalData
+                )
+                .then(|| vec!["PX_LAST".to_string()]),
+                start_date: matches!(operation, Operation::HistoricalData)
+                    .then(|| "20240102".to_string()),
+                end_date: matches!(operation, Operation::HistoricalData)
+                    .then(|| "20240103".to_string()),
+                interval: matches!(operation, Operation::IntradayBar).then_some(1),
+                ..common.clone()
+            };
+            let params = input.into_request_params().unwrap();
+            params
+                .validate()
+                .unwrap_or_else(|err| panic!("returnEids invalid for {operation}: {err}"));
+        }
+
+        let unsupported = RequestParamsInput {
+            service: Service::ApiFlds.to_string(),
+            operation: Some(Operation::FieldInfo.to_string()),
+            field_ids: Some(vec!["PX_LAST".to_string()]),
             return_eids: Some(true),
             ..Default::default()
         }
         .into_request_params()
         .unwrap();
-
-        let err = params.validate().expect_err("returnEids invalid for bdib");
+        let err = unsupported
+            .validate()
+            .expect_err("returnEids must be rejected for FieldInfo");
         assert!(
             err.to_string().contains("return_eids"),
             "unexpected error: {err}"
         );
+
+        let raw = RequestParamsInput {
+            service: Service::RefData.to_string(),
+            operation: Some(Operation::RawRequest.to_string()),
+            request_operation: Some(Operation::ReferenceData.to_string()),
+            return_eids: Some(true),
+            ..Default::default()
+        }
+        .into_request_params()
+        .unwrap();
+        raw.validate()
+            .expect("raw ReferenceData target supports returnEids");
+
+        let unsupported_raw = RequestParamsInput {
+            service: Service::RefData.to_string(),
+            operation: Some(Operation::RawRequest.to_string()),
+            request_operation: Some(Operation::FieldInfo.to_string()),
+            return_eids: Some(true),
+            ..Default::default()
+        }
+        .into_request_params()
+        .unwrap();
+        let err = unsupported_raw
+            .validate()
+            .expect_err("first-class returnEids must validate the raw target");
+        assert!(
+            err.to_string().contains("return_eids"),
+            "unexpected error: {err}"
+        );
+
+        let explicit_element = RequestParamsInput {
+            service: Service::RefData.to_string(),
+            operation: Some(Operation::RawRequest.to_string()),
+            request_operation: Some(Operation::FieldInfo.to_string()),
+            elements: Some(vec![("returnEids".to_string(), "true".to_string())]),
+            ..Default::default()
+        }
+        .into_request_params()
+        .unwrap();
+        explicit_element
+            .validate()
+            .expect("generic explicit returnEids element remains an escape hatch");
     }
 
     #[test]

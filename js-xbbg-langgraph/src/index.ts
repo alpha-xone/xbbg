@@ -49,6 +49,7 @@ export {
   createBdtickTool,
   createBdpTool,
   createBdsTool,
+  createCheckEntitlementsTool,
   createBfldsTool,
   createCorporateBondsTool,
   createEtfHoldingsTool,

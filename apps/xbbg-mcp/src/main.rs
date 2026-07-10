@@ -18,14 +18,15 @@ use serde_json::{json, Map, Number, Value};
 use tokio::sync::OnceCell;
 use xbbg_async::engine::{Engine, EngineConfig, RequestParams, RetryPolicy, ServerAddr, Transport};
 use xbbg_async::BlpAsyncError;
-use xbbg_core::{AuthConfig, BlpError};
+use xbbg_core::{AuthConfig, BlpError, EntitlementCheck};
 
 mod request_adapter;
 
 use request_adapter::{
     bdh_request_params, bdib_request_params, bdp_request_params, bds_request_params,
-    bflds_request_params, bql_request_params, bsrch_request_params, generic_request_params,
-    BdhArgs, BdibArgs, BdpArgs, BdsArgs, BfldsArgs, BqlArgs, BsrchArgs, RequestArgs,
+    bflds_request_params, bql_request_params, bsrch_request_params, check_entitlements_params,
+    generic_request_params, BdhArgs, BdibArgs, BdpArgs, BdsArgs, BfldsArgs, BqlArgs, BsrchArgs,
+    CheckEntitlementsArgs, RequestArgs, MAX_ENTITLEMENT_EIDS,
 };
 
 #[derive(Clone, Debug)]
@@ -204,7 +205,33 @@ impl XbbgMcpServer {
     }
 
     #[tool(
-        description = "Generic Bloomberg request. Supports raw/custom service and operation strings, including RawRequest via request_operation.",
+        description = "Check a nonempty list of Bloomberg entitlement IDs against a service. The service defaults to //blp/refdata.",
+        annotations(
+            title = "Check Bloomberg Entitlements",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn check_entitlements(
+        &self,
+        Parameters(args): Parameters<CheckEntitlementsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (service, eids) = check_entitlements_params(args)?;
+        let check = self
+            .engine()
+            .await?
+            .check_entitlements(&service, &eids)
+            .await
+            .map_err(map_request_error)?;
+        Ok(CallToolResult::structured(entitlement_check_to_json(
+            service, eids, check,
+        )))
+    }
+
+    #[tool(
+        description = "Generic Bloomberg request. Supports raw/custom service and operation strings, including RawRequest via request_operation. return_eids supports ReferenceDataRequest (including BDS/bulk), HistoricalDataRequest, IntradayBarRequest, and IntradayTickRequest.",
         annotations(
             title = "Bloomberg Raw Request",
             read_only_hint = true,
@@ -239,7 +266,7 @@ impl ServerHandler for XbbgMcpServer {
                     ),
             )
             .with_instructions(
-                "Use bdp, bdh, bds, bdib, bql, bsrch, bflds, or request. Results are JSON with schema metadata and bounded rows. This MCP server currently exposes host/port, selected auth env vars, and core pool settings rather than the full EngineConfig surface.",
+                "Use bdp, bdh, bds, bdib, bql, bsrch, bflds, check_entitlements, or request. Results are JSON with schema metadata and bounded rows. This MCP server currently exposes host/port, selected auth env vars, and core pool settings rather than the full EngineConfig surface.",
             )
     }
 }
@@ -439,6 +466,15 @@ where
     env_parse(keys, label, str::parse)
 }
 
+fn entitlement_check_to_json(service: String, eids: Vec<i32>, check: EntitlementCheck) -> Value {
+    json!({
+        "service": service,
+        "eids": eids,
+        "entitled": check.entitled,
+        "failed_eids": check.failed_eids,
+    })
+}
+
 fn env_parse<T, E, F>(keys: &[&str], label: &str, parser: F) -> Result<Option<T>, String>
 where
     F: Fn(&str) -> Result<T, E>,
@@ -523,6 +559,60 @@ fn map_blp_error(error: BlpError) -> ErrorData {
     }
 }
 
+const MAX_EID_METADATA_SECURITIES: usize = 1_000;
+const MAX_EID_METADATA_SECURITY_BYTES: usize = 64 * 1024;
+
+fn bounded_eid_metadata(raw: &str) -> (Value, Value, bool) {
+    let invalid = || {
+        (
+            json!({"invalid": true}),
+            json!({"total_eids": 0, "returned_eids": 0, "total_securities": 0, "returned_securities": 0, "valid": false}),
+            true,
+        )
+    };
+    let Ok(securities) = serde_json::from_str::<std::collections::BTreeMap<String, Vec<i32>>>(raw)
+    else {
+        return invalid();
+    };
+    if securities.values().flatten().any(|eid| *eid <= 0) {
+        return invalid();
+    }
+
+    let total_securities = securities.len();
+    let mut returned_securities = 0usize;
+    let mut returned_security_bytes = 0usize;
+    let mut total_eids = 0usize;
+    let mut returned_eids = 0usize;
+    let mut bounded = Map::with_capacity(total_securities.min(MAX_EID_METADATA_SECURITIES));
+    for (security, eids) in securities {
+        total_eids = total_eids.saturating_add(eids.len());
+        let security_bytes = security.len();
+        let within_security_budget = returned_securities < MAX_EID_METADATA_SECURITIES
+            && returned_security_bytes.saturating_add(security_bytes)
+                <= MAX_EID_METADATA_SECURITY_BYTES;
+        if !within_security_budget {
+            continue;
+        }
+        let remaining = MAX_ENTITLEMENT_EIDS.saturating_sub(returned_eids);
+        let kept = eids.into_iter().take(remaining).collect::<Vec<_>>();
+        returned_eids += kept.len();
+        returned_securities += 1;
+        returned_security_bytes += security_bytes;
+        bounded.insert(security, json!(kept));
+    }
+    (
+        Value::Object(bounded),
+        json!({
+            "total_eids": total_eids,
+            "returned_eids": returned_eids,
+            "total_securities": total_securities,
+            "returned_securities": returned_securities,
+            "valid": true,
+        }),
+        total_eids > returned_eids || total_securities > returned_securities,
+    )
+}
+
 fn record_batch_to_json(batch: &RecordBatch, limits: &ResultLimits) -> Result<Value, ErrorData> {
     let schema = batch.schema();
     let schema_json = schema
@@ -563,10 +653,19 @@ fn record_batch_to_json(batch: &RecordBatch, limits: &ResultLimits) -> Result<Va
     // xbbg.field_exceptions) ride on the Arrow schema metadata as JSON;
     // re-parse them into structured JSON so MCP clients see real objects.
     let mut metadata = Map::new();
+    let mut metadata_counts = Map::new();
+    let mut metadata_truncated = false;
     for (key, value) in schema.metadata() {
-        let parsed =
-            serde_json::from_str::<Value>(value).unwrap_or_else(|_| Value::String(value.clone()));
-        metadata.insert(key.clone(), parsed);
+        if key == "xbbg.eid_data" {
+            let (parsed, counts, truncated) = bounded_eid_metadata(value);
+            metadata.insert(key.clone(), parsed);
+            metadata_counts.insert(key.clone(), counts);
+            metadata_truncated |= truncated;
+        } else {
+            let parsed = serde_json::from_str::<Value>(value)
+                .unwrap_or_else(|_| Value::String(value.clone()));
+            metadata.insert(key.clone(), parsed);
+        }
     }
 
     let mut result = json!({
@@ -576,11 +675,15 @@ fn record_batch_to_json(batch: &RecordBatch, limits: &ResultLimits) -> Result<Va
         "truncated": {
             "rows": total_rows > returned_rows,
             "values": value_truncated,
+            "metadata": metadata_truncated,
         },
         "rows": rows,
     });
     if !metadata.is_empty() {
         result["metadata"] = Value::Object(metadata);
+    }
+    if !metadata_counts.is_empty() {
+        result["metadata_counts"] = Value::Object(metadata_counts);
     }
     Ok(result)
 }
@@ -743,7 +846,17 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             names,
-            ["bdh", "bdib", "bdp", "bds", "bflds", "bql", "bsrch", "request"]
+            [
+                "bdh",
+                "bdib",
+                "bdp",
+                "bds",
+                "bflds",
+                "bql",
+                "bsrch",
+                "check_entitlements",
+                "request"
+            ]
         );
 
         let tool_by_name = tools
@@ -759,6 +872,29 @@ mod tests {
         assert!(bdp_schema.get("tickers").is_some());
         assert!(bdp_schema.get("fields").is_some());
         assert!(bdp_schema.get("validate_fields").is_some());
+        assert!(bdp_schema.get("return_eids").is_some());
+
+        for tool_name in ["bdh", "bdib", "bds"] {
+            let schema = tool_by_name
+                .get(tool_name)
+                .expect("dedicated EID-capable tool")
+                .input_schema
+                .get("properties")
+                .expect("tool properties");
+            assert!(
+                schema.get("return_eids").is_some(),
+                "{tool_name} must advertise return_eids"
+            );
+        }
+
+        let entitlement_schema = tool_by_name
+            .get("check_entitlements")
+            .expect("check_entitlements tool")
+            .input_schema
+            .get("properties")
+            .expect("check_entitlements properties");
+        assert!(entitlement_schema.get("eids").is_some());
+        assert!(entitlement_schema.get("service").is_some());
 
         let generic_schema = tool_by_name
             .get("request")
@@ -767,7 +903,130 @@ mod tests {
             .get("properties")
             .expect("request properties");
         assert!(generic_schema.get("request_operation").is_some());
+        assert!(generic_schema.get("return_eids").is_some());
         assert!(generic_schema.get("request_id").is_some());
         assert!(generic_schema.get("jsonElements").is_none());
+    }
+
+    #[test]
+    fn entitlement_result_is_structured_json() {
+        let payload = entitlement_check_to_json(
+            "//blp/refdata".to_string(),
+            vec![101, 202],
+            EntitlementCheck {
+                entitled: false,
+                failed_eids: vec![202],
+            },
+        );
+
+        assert_eq!(
+            payload,
+            json!({
+                "service": "//blp/refdata",
+                "eids": [101, 202],
+                "entitled": false,
+                "failed_eids": [202],
+            })
+        );
+    }
+
+    #[test]
+    fn eid_metadata_remains_structured_json() {
+        let metadata = HashMap::from([(
+            "xbbg.eid_data".to_string(),
+            r#"{"IBM US Equity":[101,202]}"#.to_string(),
+        )]);
+        let schema = Arc::new(arrow::datatypes::Schema::new_with_metadata(
+            Vec::<arrow::datatypes::Field>::new(),
+            metadata,
+        ));
+        let batch = RecordBatch::new_empty(schema);
+
+        let payload = record_batch_to_json(
+            &batch,
+            &ResultLimits {
+                max_rows: 10,
+                max_string_chars: 100,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            payload["metadata"]["xbbg.eid_data"]["IBM US Equity"],
+            json!([101, 202])
+        );
+        assert_eq!(payload["truncated"]["metadata"], false);
+        assert_eq!(
+            payload["metadata_counts"]["xbbg.eid_data"],
+            json!({"total_eids": 2, "returned_eids": 2, "total_securities": 1, "returned_securities": 1, "valid": true})
+        );
+    }
+
+    #[test]
+    fn eid_metadata_is_bounded_with_explicit_counts() {
+        let at_limit = json!({
+            "IBM US Equity": (1..=MAX_ENTITLEMENT_EIDS).collect::<Vec<_>>()
+        })
+        .to_string();
+        let (value, counts, truncated) = bounded_eid_metadata(&at_limit);
+        assert_eq!(
+            value["IBM US Equity"].as_array().unwrap().len(),
+            MAX_ENTITLEMENT_EIDS
+        );
+        assert_eq!(counts["total_eids"], MAX_ENTITLEMENT_EIDS);
+        assert!(!truncated);
+
+        let over_limit = json!({
+            "A US Equity": (1..=6_000).collect::<Vec<_>>(),
+            "B US Equity": (1..=5_000).collect::<Vec<_>>(),
+        })
+        .to_string();
+        let (value, counts, truncated) = bounded_eid_metadata(&over_limit);
+        assert_eq!(value["A US Equity"].as_array().unwrap().len(), 6_000);
+        assert_eq!(value["B US Equity"].as_array().unwrap().len(), 4_000);
+        assert_eq!(counts["total_eids"], 11_000);
+        assert_eq!(counts["returned_eids"], MAX_ENTITLEMENT_EIDS);
+        assert!(truncated);
+
+        let many_securities = (0..=MAX_EID_METADATA_SECURITIES)
+            .map(|index| (format!("SEC{index:04}"), Vec::<i32>::new()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let (value, counts, truncated) =
+            bounded_eid_metadata(&serde_json::to_string(&many_securities).unwrap());
+        assert_eq!(
+            value.as_object().unwrap().len(),
+            MAX_EID_METADATA_SECURITIES
+        );
+        assert_eq!(counts["total_securities"], MAX_EID_METADATA_SECURITIES + 1);
+        assert_eq!(counts["returned_securities"], MAX_EID_METADATA_SECURITIES);
+        assert!(truncated);
+
+        let boundary_name = "X".repeat(MAX_EID_METADATA_SECURITY_BYTES);
+        let boundary_name_metadata = json!({ boundary_name: [] }).to_string();
+        let (value, counts, truncated) = bounded_eid_metadata(&boundary_name_metadata);
+        assert_eq!(value.as_object().unwrap().len(), 1);
+        assert_eq!(counts["returned_securities"], 1);
+        assert!(!truncated);
+
+        let oversized_name = "X".repeat(MAX_EID_METADATA_SECURITY_BYTES + 1);
+        let oversized_name_metadata = json!({ oversized_name: [] }).to_string();
+        let (value, counts, truncated) = bounded_eid_metadata(&oversized_name_metadata);
+        assert!(value.as_object().unwrap().is_empty());
+        assert_eq!(counts["total_securities"], 1);
+        assert_eq!(counts["returned_securities"], 0);
+        assert!(truncated);
+
+        for malformed in [
+            "{not json",
+            r#"{"IBM US Equity":{"nested":[101]}}"#,
+            r#"{"IBM US Equity":[101,"202"]}"#,
+            r#"{"IBM US Equity":[0]}"#,
+            r#"[101,202]"#,
+        ] {
+            let (invalid, counts, truncated) = bounded_eid_metadata(malformed);
+            assert_eq!(invalid, json!({"invalid": true}));
+            assert_eq!(counts["valid"], false);
+            assert!(truncated);
+        }
     }
 }

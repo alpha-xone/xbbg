@@ -13,12 +13,13 @@ use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use tokio::sync::oneshot;
 use xbbg_log::trace;
 
-use super::value_utils::top_level_response_error;
+use super::value_utils::{top_level_response_error, ResponseMetadata};
 use xbbg_core::{BlpError, Element, Message, Name, Value};
 
 struct IntradayBarNames {
     bar_data: Name,
     bar_tick_data: Name,
+    eid_data: Name,
     time: Name,
     open: Name,
     high: Name,
@@ -34,6 +35,7 @@ impl IntradayBarNames {
         Self {
             bar_data: Name::get_or_intern("barData"),
             bar_tick_data: Name::get_or_intern("barTickData"),
+            eid_data: Name::get_or_intern("eidData"),
             time: Name::get_or_intern("time"),
             open: Name::get_or_intern("open"),
             high: Name::get_or_intern("high"),
@@ -100,6 +102,8 @@ pub struct IntradayBarState {
     names: IntradayBarNames,
     /// Fixed Arrow builders for the output schema.
     builders: IntradayBarBuilders,
+    /// Response-level entitlement IDs attached as schema metadata.
+    response_meta: ResponseMetadata,
     /// Reply channel
     pub reply: oneshot::Sender<Result<RecordBatch, BlpError>>,
 }
@@ -118,6 +122,7 @@ impl IntradayBarState {
             ticker,
             names: IntradayBarNames::new(),
             builders: IntradayBarBuilders::new(),
+            response_meta: ResponseMetadata::default(),
             reply,
         }
     }
@@ -180,6 +185,10 @@ impl IntradayBarState {
             return;
         };
 
+        if let Some(eids) = bar_data.get(&self.names.eid_data) {
+            self.response_meta.record_eid_data(&self.ticker, &eids);
+        }
+
         // Get barTickData array
         let Some(bar_tick_data) = bar_data.get(&self.names.bar_tick_data) else {
             trace!("No barTickData in message");
@@ -221,9 +230,12 @@ impl IntradayBarState {
             Field::new("numEvents", DataType::Int32, true),
             Field::new("value", DataType::Float64, true),
         ]));
-        RecordBatch::try_new(schema, self.builders.finish()).map_err(|e| BlpError::Internal {
-            detail: format!("build IntradayBar RecordBatch: {e}"),
-        })
+        let batch = RecordBatch::try_new(schema, self.builders.finish()).map_err(|e| {
+            BlpError::Internal {
+                detail: format!("build IntradayBar RecordBatch: {e}"),
+            }
+        })?;
+        Ok(std::mem::take(&mut self.response_meta).attach(batch))
     }
 
     fn append_time_field(

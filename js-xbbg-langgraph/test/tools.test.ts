@@ -49,6 +49,10 @@ function fakeEngine(): XbbgEngineLike {
     bdib: vi.fn(async () => [{ time: "2024-01-02T09:30:00-05:00", close: 1 }]),
     bdtick: vi.fn(async () => [{ time: "2024-01-02T09:30:00-05:00", type: "TRADE", value: 1 }]),
     bds: vi.fn(async () => [{ member: "AAPL US Equity" }]),
+    checkEntitlements: vi.fn(async () => ({
+      entitled: true,
+      failedEids: [],
+    })),
     bflds: vi.fn(async () => [{ id: "PX_LAST" }]),
     bql: vi.fn(async () => [{ value: 1 }]),
     bsrch: vi.fn(async () => [{ security: "AAPL US Equity" }]),
@@ -136,7 +140,7 @@ function fakeCore(engine: XbbgEngineLike): XbbgCoreLike {
       setExchangeOverride: vi.fn(),
       validateGenericTicker: vi.fn(),
     },
-  } as unknown as XbbgCoreLike;
+  };
 }
 
 function byName(tools: readonly StructuredToolInterface[], name: string): StructuredToolInterface {
@@ -474,6 +478,171 @@ describe("Bloomberg request tools", () => {
     );
   });
 
+  it("forwards returnEids through all five capable typed request tools", async () => {
+    const engine = fakeEngine();
+    const tools = createBloombergTools({ core: fakeCore(engine) });
+    await invokeJson(byName(tools, "xbbg_bdp"), {
+      fields: ["PX_LAST"],
+      returnEids: true,
+      securities: ["AAPL US Equity"],
+    });
+    await invokeJson(byName(tools, "xbbg_bds"), {
+      field: "INDX_MEMBERS",
+      returnEids: true,
+      securities: ["SPX Index"],
+    });
+    await invokeJson(byName(tools, "xbbg_bdh"), {
+      end: "20240102",
+      fields: ["PX_LAST"],
+      returnEids: true,
+      securities: ["AAPL US Equity"],
+      start: "20240101",
+    });
+    await invokeJson(byName(tools, "xbbg_bdib"), {
+      end: "2024-01-02T10:00:00Z",
+      interval: 5,
+      returnEids: true,
+      start: "2024-01-02T09:30:00Z",
+      ticker: "AAPL US Equity",
+    });
+    await invokeJson(byName(tools, "xbbg_bdtick"), {
+      end: "2024-01-02T10:00:00Z",
+      returnEids: true,
+      start: "2024-01-02T09:30:00Z",
+      ticker: "AAPL US Equity",
+    });
+
+    for (const method of [engine.bdp, engine.bds, engine.bdh]) {
+      expect(method).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ returnEids: true }),
+      );
+    }
+    for (const method of [engine.bdib, engine.bdtick]) {
+      expect(method).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ returnEids: true }),
+      );
+    }
+  });
+
+  it("retains enumerable result metadata while limiting rows, including zero-row results", async () => {
+    const engine = fakeEngine();
+    const withMetadata = Object.assign([{ value: 1 }, { value: 2 }], {
+      eidData: { "AAPL US Equity": [101, 202] },
+      fieldExceptions: [{ fieldId: "BAD_FIELD" }],
+      metadata: { source: "ReferenceDataRequest" },
+      securityErrors: [{ security: "BAD US Equity" }],
+    });
+    vi.mocked(engine.bdp).mockResolvedValueOnce(withMetadata);
+    const tools = createBloombergTools({ core: fakeCore(engine), maxRows: 1 });
+
+    const [content, artifact] = await invokeArtifact(byName(tools, "xbbg_bdp"), {
+      fields: ["PX_LAST"],
+      returnEids: true,
+      securities: ["AAPL US Equity"],
+    });
+    expect(artifact).toMatchObject({
+      data: {
+        eidData: { "AAPL US Equity": [101, 202] },
+        fieldExceptions: [{ fieldId: "BAD_FIELD" }],
+        metadata: { source: "ReferenceDataRequest" },
+        rows: [{ value: 1 }],
+        securityErrors: [{ security: "BAD US Equity" }],
+      },
+      rowCount: 2,
+      truncated: true,
+    });
+    expect(JSON.parse(content.split("\n")[1] ?? "{}").data).toMatchObject({
+      eidData: { "AAPL US Equity": [101, 202] },
+      rows: [{ value: 1 }],
+    });
+
+    const emptyWithMetadata = Object.assign([], {
+      eidData: { "AAPL US Equity": [303] },
+      metadata: { source: "HistoricalDataRequest" },
+    });
+    vi.mocked(engine.bdh).mockResolvedValueOnce(emptyWithMetadata);
+    const empty = await invokeJson(byName(tools, "xbbg_bdh"), {
+      end: "20240102",
+      fields: ["PX_LAST"],
+      returnEids: true,
+      securities: ["AAPL US Equity"],
+      start: "20240101",
+    });
+    expect(empty).toMatchObject({
+      data: {
+        eidData: { "AAPL US Equity": [303] },
+        metadata: { source: "HistoricalDataRequest" },
+        rows: [],
+      },
+      rowCount: 0,
+    });
+
+    const remainingCases = [
+      {
+        input: { field: "INDX_MEMBERS", returnEids: true, securities: ["SPX Index"] },
+        method: engine.bds,
+        name: "xbbg_bds",
+      },
+      {
+        input: {
+          end: "2024-01-02T10:00:00Z",
+          interval: 5,
+          returnEids: true,
+          start: "2024-01-02T09:30:00Z",
+          ticker: "AAPL US Equity",
+        },
+        method: engine.bdib,
+        name: "xbbg_bdib",
+      },
+      {
+        input: {
+          end: "2024-01-02T10:00:00Z",
+          returnEids: true,
+          start: "2024-01-02T09:30:00Z",
+          ticker: "AAPL US Equity",
+        },
+        method: engine.bdtick,
+        name: "xbbg_bdtick",
+      },
+    ] as const;
+    for (const testCase of remainingCases) {
+      vi.mocked(testCase.method).mockResolvedValueOnce(
+        Object.assign([{ value: 1 }, { value: 2 }], {
+          eidData: { "AAPL US Equity": [404, 505] },
+        }),
+      );
+      const artifact = await invokeJson(byName(tools, testCase.name), testCase.input);
+      expect(artifact.data).toMatchObject({
+        eidData: { "AAPL US Equity": [404, 505] },
+        rows: [{ value: 1 }],
+      });
+    }
+  });
+
+  it("validates and invokes the read-only entitlement check with the default service", async () => {
+    const engine = fakeEngine();
+    const tools = createBloombergTools({ core: fakeCore(engine) });
+    const tool = byName(tools, "xbbg_check_entitlements");
+    const schema = toolParameterJsonSchema(tool) as Record<string, any>;
+    expect(schema.required).toContain("eids");
+    expect(schema.properties.eids.minItems).toBe(1);
+    expect(schema.properties.eids.maxItems).toBe(10_000);
+
+    const result = await invokeJson(tool, { eids: [101, 202] });
+    expect(engine.checkEntitlements).toHaveBeenCalledWith("//blp/refdata", [101, 202]);
+    expect(result).toMatchObject({
+      data: { entitled: true, failedEids: [] },
+      tool: "xbbg_check_entitlements",
+    });
+    await expect(tool.invoke({ eids: [] })).rejects.toThrow(/at least one/u);
+    await expect(tool.invoke({ eids: [1.5] })).rejects.toThrow(/integers/u);
+    await expect(tool.invoke({ eids: [0] })).rejects.toThrow(/positive integers/u);
+    await expect(tool.invoke({ eids: [2_147_483_648] })).rejects.toThrow(/32-bit/u);
+  });
+
   it("passes security identifiers unchanged and documents Bloomberg identifier syntax", async () => {
     const engine = fakeEngine();
     const tools = createBloombergTools({ core: fakeCore(engine) });
@@ -783,6 +952,148 @@ describe("Bloomberg request tools", () => {
     expect(output.data[0].text).toBe("1234…[truncated 6 chars]");
     expect(original).toEqual([{ text: "1234567890" }, { text: "second" }]);
   });
+
+  it("enforces aggregate EID bounds and reports exact retention counts", () => {
+    const first = Array.from({ length: 5_000 }, (_, index) => index + 1);
+    const second = Array.from({ length: 5_001 }, (_, index) => index + 5_001);
+    const exactRows = Object.assign([], {
+      eidData: { "AAPL US Equity": first, "MSFT US Equity": second.slice(0, 5_000) },
+    });
+    expect(limitResult(exactRows, 1, 100)).toMatchObject({
+      truncated: false,
+      value: { eidData: { "AAPL US Equity": first, "MSFT US Equity": second.slice(0, 5_000) } },
+    });
+
+    const overRows = Object.assign([], {
+      eidData: { "AAPL US Equity": first, "MSFT US Equity": second },
+    });
+    const result = limitResult(overRows, 1, 100);
+    expect(result).toMatchObject({
+      truncated: true,
+      value: {
+        eidDataTruncation: {
+          invalidSecurityCount: 0,
+          omittedSecurityCount: 0,
+          retainedEidCount: 10_000,
+          retainedSecurityCount: 2,
+          securityCounts: [
+            { originalCount: 5_000, retainedCount: 5_000 },
+            { originalCount: 5_001, retainedCount: 5_000 },
+          ],
+          totalEidCount: 10_001,
+          totalSecurityCount: 2,
+        },
+        rows: [],
+      },
+    });
+    expect((result.value as Record<string, any>).eidData["MSFT US Equity"]).toHaveLength(5_000);
+  });
+
+  it("enforces security-count and cumulative UTF-8 security-name budgets", () => {
+    const manySecurities = Object.fromEntries(
+      Array.from({ length: 1_001 }, (_, index) => [`SEC${String(index)}`, [index + 1]]),
+    );
+    const exactCount = limitResult(
+      Object.assign([], {
+        eidData: Object.fromEntries(Object.entries(manySecurities).slice(0, 1_000)),
+      }),
+      1,
+      100,
+    );
+    expect(exactCount.truncated).toBe(false);
+
+    const countLimited = limitResult(Object.assign([], { eidData: manySecurities }), 1, 100);
+    expect(countLimited).toMatchObject({
+      truncated: true,
+      value: {
+        eidDataTruncation: {
+          invalidSecurityCount: 0,
+          omittedSecurityCount: 1,
+          retainedEidCount: 1_000,
+          retainedSecurityCount: 1_000,
+          totalEidCount: 1_001,
+          totalSecurityCount: 1_001,
+        },
+      },
+    });
+    expect(Object.keys((countLimited.value as Record<string, any>).eidData)).toHaveLength(1_000);
+    expect(
+      (countLimited.value as Record<string, any>).eidDataTruncation.securityCounts,
+    ).toHaveLength(1_000);
+
+    const exactName = "é".repeat(32_768);
+    const exactBytes = limitResult(Object.assign([], { eidData: { [exactName]: [1] } }), 1, 100);
+    expect(exactBytes.truncated).toBe(false);
+    const byteLimited = limitResult(
+      Object.assign([], { eidData: { [exactName]: [1], overflow: [2] } }),
+      1,
+      100,
+    );
+    expect(byteLimited).toMatchObject({
+      truncated: true,
+      value: {
+        eidDataTruncation: {
+          invalidSecurityCount: 0,
+          omittedSecurityCount: 1,
+          retainedEidCount: 1,
+          retainedSecurityCount: 1,
+          securityCounts: [{ originalCount: 1, retainedCount: 1 }],
+          totalEidCount: 2,
+          totalSecurityCount: 2,
+        },
+      },
+    });
+    expect(Object.keys((byteLimited.value as Record<string, any>).eidData)).toEqual([exactName]);
+  });
+
+  it("preserves an own __proto__ security key with aligned accounting", () => {
+    const eidData = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(eidData, "__proto__", {
+      enumerable: true,
+      value: [101],
+    });
+    const result = limitResult(Object.assign([], { eidData }), 1, 100);
+    const limited = result.value as Record<string, any>;
+    expect(result.truncated).toBe(false);
+    expect(Object.hasOwn(limited.eidData, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(limited.eidData, "__proto__")?.value).toEqual([101]);
+    const parsed = JSON.parse(JSON.stringify(limited)) as Record<string, any>;
+    expect(Object.getOwnPropertyDescriptor(parsed.eidData, "__proto__")?.value).toEqual([101]);
+  });
+
+  it("omits malformed EID metadata without granting independent nested budgets", () => {
+    const whollySparse: unknown[] = [];
+    whollySparse.length = 2;
+    const partiallySparse: unknown[] = [1];
+    partiallySparse.length = 2;
+    const malformed = Object.assign([], {
+      eidData: {
+        A: { nested: Array.from({ length: 10_001 }, (_, index) => index) },
+        B: "not-an-eid-list",
+        C: [Array.from({ length: 10_001 }, (_, index) => index + 1)],
+        D: [1, "not-an-eid"],
+        E: [0],
+        F: whollySparse,
+        G: partiallySparse,
+      },
+    });
+    expect(limitResult(malformed, 1, 100)).toMatchObject({
+      truncated: true,
+      value: {
+        eidData: {},
+        eidDataTruncation: {
+          invalidSecurityCount: 7,
+          omittedSecurityCount: 0,
+          retainedEidCount: 0,
+          retainedSecurityCount: 0,
+          securityCounts: [],
+          totalEidCount: 0,
+          totalSecurityCount: 7,
+        },
+      },
+    });
+  });
+
   it("limits cyclic and excessively deep artifacts without recursion failure", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;

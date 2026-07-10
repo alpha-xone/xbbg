@@ -112,6 +112,7 @@ def __getattr__(name: str):
 if TYPE_CHECKING:
     # ``DateLike`` is also imported lazily below alongside ``_fmt_date``; the
     # second copy here keeps the static stubs visible to type-checkers / IDEs.
+    from xbbg._core import EntitlementReport
     from xbbg.ext._utils import DateLike
 
     def bdp(
@@ -151,6 +152,7 @@ if TYPE_CHECKING:
         *,
         backend: Backend | str | None = None,
         validate_fields: bool | None = None,
+        return_eids: bool = False,
         **kwargs: Any,
     ) -> DataFrameResult:
         """Sync Bloomberg bulk data (BDS). See ``abds`` for details."""
@@ -168,6 +170,7 @@ if TYPE_CHECKING:
         backend: Backend | str | None = None,
         request_tz: str | None = None,
         output_tz: str | None = None,
+        return_eids: bool = False,
         **kwargs: Any,
     ) -> DataFrameResult:
         """Sync Bloomberg intraday bar data (BDIB). See ``abdib`` for details."""
@@ -182,6 +185,7 @@ if TYPE_CHECKING:
         backend: Backend | str | None = None,
         request_tz: str | None = None,
         output_tz: str | None = None,
+        return_eids: bool = False,
         **kwargs: Any,
     ) -> DataFrameResult:
         """Sync Bloomberg tick data (BDTICK). See ``abdtick`` for details."""
@@ -474,7 +478,7 @@ async def aseat_type() -> str:
 async def acheck_entitlements(
     eids: Sequence[int],
     service: str = Service.REFDATA.value,
-):
+) -> EntitlementReport:
     """Check EID entitlements for the lazily authorized Bloomberg identity.
 
     The engine authorizes on first use: configured auth is used when present,
@@ -1657,8 +1661,9 @@ async def arequest(
         format: Output format hint for result structure.
         include_security_errors: Include ``__SECURITY_ERROR__`` rows for
             failed securities on ReferenceData requests.
-        return_eids: Request EID entitlement metadata for ReferenceData and
-            HistoricalData requests.
+        return_eids: Request EID entitlement metadata for ReferenceDataRequest
+            (including BDS bulk data), HistoricalDataRequest, IntradayBarRequest,
+            and IntradayTickRequest.
         validate_fields: Optional per-request override for field validation.
             ``True`` forces strict validation, ``False`` disables it, and
             ``None`` follows engine-level validation mode.
@@ -1857,7 +1862,10 @@ async def abdp(
             If None, types are auto-resolved from Bloomberg field metadata.
         include_security_errors: Include ``__SECURITY_ERROR__`` rows for
             securities that Bloomberg rejected.
-        return_eids: Request EID entitlement metadata on the returned ArrowTable.
+        return_eids: Request EID metadata. Native Arrow results expose
+            ``.eid_data``; pandas stores it in ``attrs["xbbg_eid_data"]``;
+            PyArrow preserves ``xbbg.eid_data`` in schema metadata.
+            Polars and DuckDB have no stable metadata channel.
         validate_fields: Optional per-request override for field validation.
             ``True`` forces strict validation, ``False`` disables it, and
             ``None`` follows engine-level validation mode.
@@ -1912,7 +1920,10 @@ async def abdh(
         validate_fields: Optional per-request override for field validation.
             ``True`` forces strict validation, ``False`` disables it, and
             ``None`` follows engine-level validation mode.
-        return_eids: Request EID entitlement metadata on the returned ArrowTable.
+        return_eids: Request EID metadata. Native Arrow results expose
+            ``.eid_data``; pandas stores it in ``attrs["xbbg_eid_data"]``;
+            PyArrow preserves ``xbbg.eid_data`` in schema metadata.
+            Polars and DuckDB have no stable metadata channel.
         **kwargs: Additional overrides and infrastructure options.
             adjust: Adjustment type ('all', 'dvd', 'split', '-', None).
 
@@ -1940,6 +1951,7 @@ async def abds(
     *,
     backend: Backend | str | None = None,
     validate_fields: bool | None = None,
+    return_eids: bool = False,
     **kwargs,
 ):
     """Async Bloomberg bulk data (BDS).
@@ -1951,6 +1963,10 @@ async def abds(
         validate_fields: Optional per-request override for field validation.
             ``True`` forces strict validation, ``False`` disables it, and
             ``None`` follows engine-level validation mode.
+        return_eids: Request EID metadata. Native Arrow results expose
+            ``.eid_data``; pandas stores it in ``attrs["xbbg_eid_data"]``;
+            PyArrow preserves ``xbbg.eid_data`` in schema metadata.
+            Polars and DuckDB have no stable metadata channel.
         **kwargs: Bloomberg overrides and infrastructure options.
 
     Returns:
@@ -1979,6 +1995,7 @@ async def abdib(
     backend: Backend | str | None = None,
     request_tz: str | None = None,
     output_tz: str | None = None,
+    return_eids: bool = False,
     **kwargs,
 ):
     """Async Bloomberg intraday bar data (BDIB).
@@ -1997,6 +2014,10 @@ async def abdib(
             ``exchange`` (uses this ticker), ``NY``/``LN``/``TK``/``HK``, another ticker string,
             or an IANA zone. Conversion to UTC is done in the Rust engine.
         output_tz: Relabel the ``time`` column to this zone (same instants; Rust engine).
+        return_eids: Request EID metadata. Native Arrow results expose
+            ``.eid_data``; pandas stores it in ``attrs["xbbg_eid_data"]``;
+            PyArrow preserves ``xbbg.eid_data`` in schema metadata.
+            Polars and DuckDB have no stable metadata channel.
         **kwargs: Additional Bloomberg options (e.g., intervalHasSeconds,
             gapFillInitialBar, or 0.x request-element aliases such as ``Points=1``).
             Pass true Bloomberg field overrides via ``overrides={...}``.
@@ -2032,6 +2053,7 @@ async def abdtick(
     backend: Backend | str | None = None,
     request_tz: str | None = None,
     output_tz: str | None = None,
+    return_eids: bool = False,
     **kwargs,
 ):
     """Async Bloomberg tick data (BDTICK).
@@ -2045,6 +2067,10 @@ async def abdtick(
         backend: DataFrame backend to return. If None, uses global default.
         request_tz: How naive datetimes are interpreted before Bloomberg (see ``abdib``).
         output_tz: Relabel ``time`` column (same instants; Rust engine).
+        return_eids: Request EID metadata. Native Arrow results expose
+            ``.eid_data``; pandas stores it in ``attrs["xbbg_eid_data"]``;
+            PyArrow preserves ``xbbg.eid_data`` in schema metadata.
+            Polars and DuckDB have no stable metadata channel.
         **kwargs: Additional Bloomberg options. Schema-recognized request elements
             and 0.x request-element aliases such as ``Points=1`` may be passed as
             individual keyword arguments. Pass true Bloomberg field overrides via
@@ -4285,17 +4311,18 @@ async def _build_abds_plan(args: dict[str, Any]) -> _EndpointPlan:
         kwargs["overrides"] = override_pairs
     elements, overrides = await _aroute_kwargs(Service.REFDATA, Operation.REFERENCE_DATA, kwargs)
 
-    return _EndpointPlan(
-        request_kwargs={
-            "securities": ticker_list,
-            "fields": [args["flds"]],
-            "overrides": overrides if overrides else None,
-            "security_overrides": security_overrides,
-            "elements": elements if elements else None,
-            "validate_fields": args.get("validate_fields"),
-        },
-        backend=args.get("backend"),
-    )
+    req: dict[str, Any] = {
+        "securities": ticker_list,
+        "fields": [args["flds"]],
+        "overrides": overrides if overrides else None,
+        "security_overrides": security_overrides,
+        "elements": elements if elements else None,
+        "validate_fields": args.get("validate_fields"),
+    }
+    if args.get("return_eids"):
+        req["return_eids"] = True
+
+    return _EndpointPlan(request_kwargs=req, backend=args.get("backend"))
 
 
 async def _build_abdib_plan(args: dict[str, Any]) -> _EndpointPlan:
@@ -4338,6 +4365,8 @@ async def _build_abdib_plan(args: dict[str, Any]) -> _EndpointPlan:
         "elements": elements if elements else None,
         "overrides": overrides if overrides else None,
     }
+    if args.get("return_eids"):
+        req["return_eids"] = True
     if args.get("request_tz") is not None:
         req["request_tz"] = args["request_tz"]
     if args.get("output_tz") is not None:
@@ -4373,6 +4402,8 @@ async def _build_abdtick_plan(args: dict[str, Any]) -> _EndpointPlan:
         "elements": elements if elements else None,
         "overrides": overrides if overrides else None,
     }
+    if args.get("return_eids"):
+        req["return_eids"] = True
     if args.get("request_tz") is not None:
         req["request_tz"] = args["request_tz"]
     if args.get("output_tz") is not None:

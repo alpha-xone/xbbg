@@ -860,6 +860,7 @@ impl ArrowTable {
     }
 }
 
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl ArrowTable {
     #[classmethod]
@@ -962,8 +963,17 @@ impl ArrowTable {
     }
 
     #[getter]
-    fn eid_data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        parse_metadata_json(py, self.data.schema.metadata(), METADATA_KEY_EID_DATA)
+    fn eid_data(&self) -> PyResult<Option<HashMap<String, Vec<i32>>>> {
+        self.data
+            .schema
+            .metadata()
+            .get(METADATA_KEY_EID_DATA)
+            .map(|raw| {
+                serde_json::from_str(raw).map_err(|err| {
+                    PyValueError::new_err(format!("invalid JSON in {METADATA_KEY_EID_DATA}: {err}"))
+                })
+            })
+            .transpose()
     }
 
     #[getter]
@@ -988,18 +998,24 @@ impl ArrowTable {
     fn __arrow_c_stream__<'py>(
         &self,
         py: Python<'py>,
-        requested_schema: Option<Bound<'py, PyCapsule>>,
-    ) -> PyResult<Bound<'py, PyCapsule>> {
+        requested_schema: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let requested_schema = requested_schema
+            .as_ref()
+            .map(|value| value.cast::<PyCapsule>().cloned())
+            .transpose()?;
         Self::to_stream_pycapsule(
             py,
             self.data.batches.clone(),
             self.data.schema.clone(),
             requested_schema,
         )
+        .map(Bound::into_any)
     }
 
-    fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyCapsule>> {
+    fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         to_schema_pycapsule(py, self.data.schema.as_ref())
+            .map(Bound::into_any)
             .map_err(|e| PyRuntimeError::new_err(format!("Arrow schema export failed: {e}")))
     }
 
@@ -1418,14 +1434,8 @@ mod tests {
             let table = ArrowTable::try_new(vec![batch]).expect("table");
 
             assert!(table.metadata().contains_key(METADATA_KEY_EID_DATA));
-            let eid_data = table.eid_data(py).expect("eid data");
-            let eid_dict = eid_data.bind(py);
-            let eids: Vec<i32> = eid_dict
-                .get_item("IBM US Equity")
-                .expect("ticker eids")
-                .extract()
-                .expect("eids");
-            assert_eq!(eids, vec![101, 202]);
+            let eid_data = table.eid_data().expect("valid eid data").expect("eid data");
+            assert_eq!(eid_data["IBM US Equity"], vec![101, 202]);
 
             let security_errors = table.security_errors(py).expect("security errors");
             assert!(security_errors

@@ -15,7 +15,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use tokio::sync::mpsc;
 
-use super::value_utils::top_level_response_error;
+use super::value_utils::{top_level_response_error, ResponseMetadata};
 use xbbg_core::{BlpError, Message};
 
 /// Streaming state for an intraday bar request (bdib).
@@ -86,11 +86,18 @@ impl IntradayBarStreamState {
 
         // Get barData
         let bar_data = root.get_by_str("barData")?;
+        let mut response_meta = ResponseMetadata::default();
+        let has_eids = if let Some(eids) = bar_data.get_by_str("eidData") {
+            response_meta.record_eid_data(&self.ticker, &eids);
+            true
+        } else {
+            false
+        };
 
         // Get barTickData array
-        let bar_tick_data = bar_data.get_by_str("barTickData")?;
-        let n = bar_tick_data.len();
-        if n == 0 {
+        let bar_tick_data = bar_data.get_by_str("barTickData");
+        let n = bar_tick_data.as_ref().map_or(0, |data| data.len());
+        if n == 0 && !has_eids {
             return None;
         }
 
@@ -107,6 +114,9 @@ impl IntradayBarStreamState {
         let mut value_builder = Float64Builder::with_capacity(n);
 
         for i in 0..n {
+            let bar_tick_data = bar_tick_data
+                .as_ref()
+                .expect("nonzero length requires barTickData");
             let Some(bar) = bar_tick_data.get_element(i) else {
                 continue;
             };
@@ -178,7 +188,8 @@ impl IntradayBarStreamState {
             Arc::new(value_builder.finish()),
         ];
 
-        RecordBatch::try_new(schema.clone(), columns).ok()
+        let batch = RecordBatch::try_new(schema.clone(), columns).ok()?;
+        Some(response_meta.attach(batch))
     }
 }
 

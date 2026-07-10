@@ -4,13 +4,16 @@ import type { BloombergToolsOptions, NormalizedBloombergToolsOptions } from "./o
 import { normalizeBloombergToolsOptions } from "./options";
 
 export type XbbgCoreModule = typeof xbbg;
-export type XbbgEngineLike = Pick<
+export interface EntitlementReport {
+  readonly entitled: boolean;
+  readonly failedEids: readonly number[];
+}
+
+type CoreEngineMethods = Pick<
   Awaited<ReturnType<XbbgCoreModule["connect"]>>,
   | "bdp"
   | "bdh"
   | "bds"
-  | "bdib"
-  | "bdtick"
   | "bql"
   | "bsrch"
   | "bqr"
@@ -27,7 +30,27 @@ export type XbbgEngineLike = Pick<
   | "mktbar"
   | "depth"
 >;
-export type XbbgCoreLike = Pick<XbbgCoreModule, "connect" | "ext">;
+
+export type XbbgEngineLike = {
+  readonly [Method in keyof CoreEngineMethods]: OmitThisParameter<CoreEngineMethods[Method]>;
+} & {
+  readonly bdib: (
+    ticker: string,
+    options: xbbg.BdibOptions & { readonly returnEids?: boolean },
+  ) => Promise<unknown>;
+  readonly bdtick: (
+    ticker: string,
+    options: xbbg.BdtickOptions & { readonly returnEids?: boolean },
+  ) => Promise<unknown>;
+  readonly checkEntitlements: (
+    service: string,
+    eids: readonly number[],
+  ) => Promise<EntitlementReport>;
+};
+export interface XbbgCoreLike {
+  readonly ext: XbbgCoreModule["ext"];
+  readonly connect: (config?: xbbg.EngineConfig) => Promise<XbbgEngineLike>;
+}
 
 export interface CoreResolver {
   readonly options: NormalizedBloombergToolsOptions;
@@ -36,7 +59,8 @@ export interface CoreResolver {
 }
 
 async function importCore(): Promise<XbbgCoreLike> {
-  return await import("@xbbg/core");
+  // @xbbg/core is loaded lazily so constructing tools never loads the native addon.
+  return (await import("@xbbg/core")) as unknown as XbbgCoreLike;
 }
 
 export function createCoreResolver(options: BloombergToolsOptions = {}): CoreResolver {

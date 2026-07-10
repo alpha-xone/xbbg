@@ -18,7 +18,7 @@ Example::
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -85,8 +85,10 @@ class RequestParams:
         format: Output format (LONG, LONG_TYPED, LONG_WITH_METADATA).
         include_security_errors: When True for ReferenceData requests, include
             ``__SECURITY_ERROR__`` rows for securities that failed.
-        return_eids: When True for ReferenceData and HistoricalData requests,
-            ask Bloomberg to return EID entitlement metadata alongside the data.
+        return_eids: When True for ReferenceDataRequest (including BDS bulk
+            data), HistoricalDataRequest, IntradayBarRequest, and
+            IntradayTickRequest, ask Bloomberg to return EID entitlement
+            metadata alongside the data.
         validate_fields: Optional per-request override for field validation.
             ``True`` forces strict validation, ``False`` disables it, and
             ``None`` (default) follows engine configuration.
@@ -116,11 +118,13 @@ class RequestParams:
     extractor: ExtractorHint | None = None
     format: Format | None = None
     include_security_errors: bool = False
+    _is_raw_request: bool = field(init=False, repr=False)
     return_eids: bool = False
     validate_fields: bool | None = None
 
     def __post_init__(self) -> None:
         """Convert enums to strings and set defaults."""
+        self._is_raw_request = self.operation is Operation.RAW_REQUEST
         if isinstance(self.service, Service):
             self.service = self.service.value
         if isinstance(self.operation, Operation):
@@ -138,14 +142,25 @@ class RequestParams:
         """
         if not self.service:
             raise BlpValidationError("service is required")
-
-        if self.operation == Operation.RAW_REQUEST.value:
-            if not self.request_operation:
-                raise BlpValidationError("request_operation is required for RawRequest")
-            return
-
-        if not self.operation:
+        if self._is_raw_request and not self.request_operation:
+            raise BlpValidationError("request_operation is required for RawRequest")
+        if not self.operation and not self._is_raw_request:
             raise BlpValidationError("operation is required")
+
+        effective_operation = self.request_operation if self._is_raw_request else self.operation
+        if self.return_eids and effective_operation not in {
+            Operation.REFERENCE_DATA.value,
+            Operation.HISTORICAL_DATA.value,
+            Operation.INTRADAY_BAR.value,
+            Operation.INTRADAY_TICK.value,
+        }:
+            raise BlpValidationError(
+                "return_eids is only supported for ReferenceDataRequest, "
+                "HistoricalDataRequest, IntradayBarRequest, and IntradayTickRequest"
+            )
+
+        if self._is_raw_request:
+            return
 
         op = self.operation
 

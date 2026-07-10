@@ -20,6 +20,12 @@ interface LimitState {
 }
 
 const MAX_RESULT_DEPTH = 32;
+/** Maximum aggregate EIDs retained and accepted by entitlement checks. */
+export const MAX_ENTITLEMENT_EIDS = 10_000;
+export const MAX_BLOOMBERG_EID = 2_147_483_647;
+const MAX_EID_SECURITIES = 1_000;
+const MAX_EID_SECURITY_NAME_BYTES = 65_536;
+const UTF8_ENCODER = new TextEncoder();
 
 function isPlainObject(value: object): value is Record<string, unknown> {
   const prototype: unknown = Object.getPrototypeOf(value);
@@ -32,6 +38,134 @@ function truncateString(value: string, maxStringChars: number, state: LimitState
   }
   state.truncated = true;
   return `${value.slice(0, maxStringChars)}…[truncated ${value.length - maxStringChars} chars]`;
+}
+
+function arrayMetadata(value: readonly unknown[]): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!/^(?:0|[1-9]\d*)$/u.test(key)) {
+      metadata[key] = entry;
+    }
+  }
+  return metadata;
+}
+
+interface EidDataTruncation {
+  readonly totalSecurityCount: number;
+  readonly retainedSecurityCount: number;
+  readonly omittedSecurityCount: number;
+  readonly invalidSecurityCount: number;
+  readonly totalEidCount: number;
+  readonly retainedEidCount: number;
+  /** Counts align by index with Object.keys(eidData), avoiding duplicate security-name bytes. */
+  readonly securityCounts: readonly { originalCount: number; retainedCount: number }[];
+}
+
+interface LimitedEidData {
+  readonly data: unknown;
+  readonly truncation?: EidDataTruncation;
+}
+
+function limitEidData(
+  value: unknown,
+  maxStringChars: number,
+  state: LimitState,
+  depth: number,
+  seen: WeakSet<object>,
+): LimitedEidData {
+  if (typeof value !== "object" || value === null || !isPlainObject(value)) {
+    state.truncated = true;
+    return {
+      data: {},
+      truncation: {
+        invalidSecurityCount: 1,
+        omittedSecurityCount: 0,
+        retainedEidCount: 0,
+        retainedSecurityCount: 0,
+        securityCounts: [],
+        totalEidCount: 0,
+        totalSecurityCount: 1,
+      },
+    };
+  }
+  const data: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  const securityCounts: { originalCount: number; retainedCount: number }[] = [];
+  const entries = Object.entries(value);
+  let retainedEidCount = 0;
+  let retainedSecurityCount = 0;
+  let retainedSecurityNameBytes = 0;
+  let totalEidCount = 0;
+  let invalidSecurityCount = 0;
+  for (const [security, eids] of entries) {
+    if (!Array.isArray(eids)) {
+      state.truncated = true;
+      invalidSecurityCount += 1;
+      continue;
+    }
+    let validEids = true;
+    for (let index = 0; index < eids.length; index += 1) {
+      const eid: unknown = eids[index];
+      if (
+        !Object.hasOwn(eids, index) ||
+        typeof eid !== "number" ||
+        !Number.isInteger(eid) ||
+        eid <= 0 ||
+        eid > MAX_BLOOMBERG_EID
+      ) {
+        validEids = false;
+        break;
+      }
+    }
+    if (!validEids) {
+      state.truncated = true;
+      invalidSecurityCount += 1;
+      continue;
+    }
+    const originalCount = eids.length;
+    totalEidCount += originalCount;
+    const securityNameBytes = UTF8_ENCODER.encode(security).byteLength;
+    const canRetainSecurity =
+      retainedSecurityCount < MAX_EID_SECURITIES &&
+      retainedSecurityNameBytes + securityNameBytes <= MAX_EID_SECURITY_NAME_BYTES;
+    if (!canRetainSecurity) {
+      state.truncated = true;
+      continue;
+    }
+    retainedSecurityCount += 1;
+    retainedSecurityNameBytes += securityNameBytes;
+    const remainingEidCapacity = Math.max(0, MAX_ENTITLEMENT_EIDS - retainedEidCount);
+    const retained = eids.slice(0, remainingEidCapacity);
+    retainedEidCount += retained.length;
+    data[security] = limitValue(retained, MAX_ENTITLEMENT_EIDS, maxStringChars, state, depth, seen);
+    securityCounts.push({
+      originalCount,
+      retainedCount: retained.length,
+    });
+    if (retained.length !== originalCount) {
+      state.truncated = true;
+    }
+  }
+  const omittedSecurityCount = entries.length - retainedSecurityCount - invalidSecurityCount;
+  const wasTruncated =
+    retainedSecurityCount !== entries.length ||
+    retainedEidCount !== totalEidCount ||
+    invalidSecurityCount > 0;
+  return {
+    data,
+    ...(wasTruncated
+      ? {
+          truncation: {
+            invalidSecurityCount,
+            omittedSecurityCount,
+            retainedEidCount,
+            retainedSecurityCount,
+            securityCounts,
+            totalEidCount,
+            totalSecurityCount: entries.length,
+          },
+        }
+      : {}),
+  };
 }
 
 function limitValue(
@@ -62,7 +196,26 @@ function limitValue(
     if (capped.length !== value.length) {
       state.truncated = true;
     }
-    return capped.map((item) => limitValue(item, maxRows, maxStringChars, state, depth + 1, seen));
+    const rows = capped.map((item) =>
+      limitValue(item, maxRows, maxStringChars, state, depth + 1, seen),
+    );
+    const metadata = arrayMetadata(value);
+    if (Object.keys(metadata).length === 0) {
+      return rows;
+    }
+    const output: Record<string, unknown> = { rows };
+    for (const [key, entry] of Object.entries(metadata)) {
+      if (key === "eidData") {
+        const limited = limitEidData(entry, maxStringChars, state, depth + 1, seen);
+        output.eidData = limited.data;
+        if (limited.truncation !== undefined) {
+          output.eidDataTruncation = limited.truncation;
+        }
+        continue;
+      }
+      output[key] = limitValue(entry, maxRows, maxStringChars, state, depth + 1, seen);
+    }
+    return output;
   }
   if (typeof value === "object" && value !== null) {
     if (seen.has(value)) {

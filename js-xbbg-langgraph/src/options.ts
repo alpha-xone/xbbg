@@ -8,6 +8,7 @@ export const BLOOMBERG_TOOL_NAMES = [
   "xbbg_bds",
   "xbbg_bdib",
   "xbbg_bdtick",
+  "xbbg_check_entitlements",
   "xbbg_bql",
   "xbbg_bsrch",
   "xbbg_bqr",

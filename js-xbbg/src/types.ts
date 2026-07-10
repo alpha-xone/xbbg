@@ -233,6 +233,7 @@ export interface BdibOptions {
   interval?: number;
   kwargs?: OverridesMap;
   backend?: BackendKind;
+  returnEids?: boolean;
 }
 
 export interface BdtickOptions {
@@ -250,6 +251,7 @@ export interface BdtickOptions {
   includeBloombergStandardConditionCodes?: boolean;
   kwargs?: OverridesMap;
   backend?: BackendKind;
+  returnEids?: boolean;
 }
 
 export interface CdxOptions extends BdpOptions {

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use rmcp::ErrorData;
@@ -62,6 +62,8 @@ pub(crate) struct BdpArgs {
     include_security_errors: bool,
     #[serde(default)]
     validate_fields: Option<bool>,
+    #[serde(default)]
+    return_eids: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -80,6 +82,8 @@ pub(crate) struct BdhArgs {
     format: Option<HistoricalFormat>,
     #[serde(default)]
     validate_fields: Option<bool>,
+    #[serde(default)]
+    return_eids: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -92,6 +96,8 @@ pub(crate) struct BdsArgs {
     options: Option<BTreeMap<String, String>>,
     #[serde(default)]
     validate_fields: Option<bool>,
+    #[serde(default)]
+    return_eids: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -108,6 +114,8 @@ pub(crate) struct BdibArgs {
     output_tz: Option<String>,
     #[serde(default)]
     options: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    return_eids: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -177,9 +185,9 @@ pub(crate) struct RequestArgs {
     field_types: Option<BTreeMap<String, String>>,
     #[serde(default)]
     include_security_errors: Option<bool>,
-    /// Request per-security entitlement IDs (`returnEids`); they surface in
-    /// the batch metadata (`xbbg.eid_data`). ReferenceData/HistoricalData
-    /// operations only.
+    /// Request entitlement IDs (`returnEids`) in response metadata (`xbbg.eid_data`).
+    /// Supported by ReferenceDataRequest (including BDS/bulk), HistoricalDataRequest,
+    /// IntradayBarRequest, and IntradayTickRequest.
     #[serde(default)]
     return_eids: Option<bool>,
     #[serde(default)]
@@ -190,6 +198,18 @@ pub(crate) struct RequestArgs {
     field_ids: Option<Vec<String>>,
     #[serde(default)]
     format: Option<HistoricalFormat>,
+}
+
+/// Maximum number of EIDs accepted by one entitlement check.
+pub(crate) const MAX_ENTITLEMENT_EIDS: usize = 10_000;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct CheckEntitlementsArgs {
+    /// One to 10,000 positive Bloomberg entitlement IDs. Duplicates are removed.
+    eids: Vec<i32>,
+    /// Bloomberg service used for the check. Defaults to `//blp/refdata`.
+    #[serde(default)]
+    service: Option<String>,
 }
 
 fn build_request_params(input: RequestParamsInput) -> Result<RequestParams, ErrorData> {
@@ -208,6 +228,7 @@ pub(crate) fn bdp_request_params(args: BdpArgs) -> Result<RequestParams, ErrorDa
         field_types: map_to_hash_map(args.field_types),
         include_security_errors: Some(args.include_security_errors),
         validate_fields: args.validate_fields,
+        return_eids: Some(args.return_eids),
         format: args.format.map(|format| format.as_str().to_string()),
         ..Default::default()
     })
@@ -225,6 +246,7 @@ pub(crate) fn bdh_request_params(args: BdhArgs) -> Result<RequestParams, ErrorDa
         options: map_to_pairs(args.options),
         field_types: map_to_hash_map(args.field_types),
         validate_fields: args.validate_fields,
+        return_eids: Some(args.return_eids),
         format: args.format.map(|format| format.as_str().to_string()),
         ..Default::default()
     })
@@ -240,6 +262,7 @@ pub(crate) fn bds_request_params(args: BdsArgs) -> Result<RequestParams, ErrorDa
         overrides: map_to_pairs(args.overrides),
         options: map_to_pairs(args.options),
         validate_fields: args.validate_fields,
+        return_eids: Some(args.return_eids),
         ..Default::default()
     })
 }
@@ -266,6 +289,7 @@ pub(crate) fn bdib_request_params(args: BdibArgs) -> Result<RequestParams, Error
         request_tz: trim_optional(args.request_tz),
         output_tz: trim_optional(args.output_tz),
         options: map_to_pairs(args.options),
+        return_eids: Some(args.return_eids),
         ..Default::default()
     })
 }
@@ -387,6 +411,34 @@ pub(crate) fn generic_request_params(args: RequestArgs) -> Result<RequestParams,
         field_ids,
         format,
     })
+}
+
+pub(crate) fn check_entitlements_params(
+    args: CheckEntitlementsArgs,
+) -> Result<(String, Vec<i32>), ErrorData> {
+    if args.eids.is_empty() || args.eids.len() > MAX_ENTITLEMENT_EIDS {
+        return Err(ErrorData::invalid_params(
+            format!("eids must contain between 1 and {MAX_ENTITLEMENT_EIDS} entitlement IDs"),
+            None,
+        ));
+    }
+    if args.eids.iter().any(|eid| *eid <= 0) {
+        return Err(ErrorData::invalid_params(
+            "eids must contain only positive entitlement IDs",
+            None,
+        ));
+    }
+    let mut seen = HashSet::with_capacity(args.eids.len());
+    let eids = args
+        .eids
+        .into_iter()
+        .filter(|eid| seen.insert(*eid))
+        .collect();
+    let service = match args.service {
+        Some(service) => normalize_required_string("service", service)?,
+        None => "//blp/refdata".to_string(),
+    };
+    Ok((service, eids))
 }
 
 fn normalize_required_string(field: &str, value: String) -> Result<String, ErrorData> {
@@ -517,11 +569,12 @@ mod tests {
             tickers: vec!["IBM US Equity".to_string()],
             fields: vec!["PX_LAST".to_string()],
             overrides: Some(params(&[("EQY_FUND_CRNCY", "USD")])),
-            options: Some(params(&[("returnEids", "true")])),
+            options: None,
             field_types: Some(params(&[("PX_LAST", "Float64")])),
             format: Some(ReferenceFormat::LongTyped),
             include_security_errors: true,
             validate_fields: Some(false),
+            return_eids: true,
         })
         .unwrap();
         assert_eq!(bdp.service, Service::RefData.to_string());
@@ -536,6 +589,7 @@ mod tests {
         assert_eq!(bdp.format.as_deref(), Some("long_typed"));
         assert!(bdp.include_security_errors);
         assert_eq!(bdp.validate_fields, Some(false));
+        assert!(bdp.return_eids);
 
         let bdh = bdh_request_params(BdhArgs {
             tickers: vec!["IBM US Equity".to_string()],
@@ -547,6 +601,7 @@ mod tests {
             field_types: None,
             format: Some(HistoricalFormat::Wide),
             validate_fields: Some(true),
+            return_eids: true,
         })
         .unwrap();
         assert_eq!(bdh.operation, Operation::HistoricalData.to_string());
@@ -555,6 +610,7 @@ mod tests {
         assert_eq!(bdh.end_date.as_deref(), Some("20240131"));
         assert_eq!(bdh.format.as_deref(), Some("wide"));
         assert_eq!(bdh.validate_fields, Some(true));
+        assert!(bdh.return_eids);
 
         let bds = bds_request_params(BdsArgs {
             tickers: vec!["INDU Index".to_string()],
@@ -562,6 +618,7 @@ mod tests {
             overrides: None,
             options: None,
             validate_fields: None,
+            return_eids: true,
         })
         .unwrap();
         assert_eq!(bds.extractor, ExtractorType::BulkData);
@@ -570,6 +627,7 @@ mod tests {
             bds.fields.as_deref(),
             Some(&["INDX_MEMBERS".to_string()][..])
         );
+        assert!(bds.return_eids);
 
         let bdib = bdib_request_params(BdibArgs {
             ticker: "IBM US Equity".to_string(),
@@ -580,12 +638,14 @@ mod tests {
             request_tz: Some("NY".to_string()),
             output_tz: Some("UTC".to_string()),
             options: Some(params(&[("gapFillInitialBar", "true")])),
+            return_eids: true,
         })
         .unwrap();
         assert_eq!(bdib.extractor, ExtractorType::IntradayBar);
         assert_eq!(bdib.event_type.as_deref(), Some("TRADE"));
         assert_eq!(bdib.interval, Some(5));
         assert_eq!(bdib.request_tz.as_deref(), Some("NY"));
+        assert!(bdib.return_eids);
 
         let bql = bql_request_params(BqlArgs {
             expression: "get(px_last) for(['IBM US Equity'])".to_string(),
@@ -669,6 +729,47 @@ mod tests {
         with_eids.return_eids = Some(true);
         let with_eids = generic_request_params(with_eids).unwrap();
         assert!(with_eids.return_eids, "return_eids should map through");
+
+        let mut tick_with_eids = empty_request_args("//blp/refdata", Some("IntradayTickRequest"));
+        tick_with_eids.security = Some("IBM US Equity".to_string());
+        tick_with_eids.event_types = Some(vec!["TRADE".to_string()]);
+        tick_with_eids.return_eids = Some(true);
+        let tick_with_eids = generic_request_params(tick_with_eids).unwrap();
+        assert_eq!(
+            tick_with_eids.operation,
+            Operation::IntradayTick.to_string()
+        );
+        assert!(tick_with_eids.return_eids);
+    }
+
+    #[test]
+    fn entitlement_arguments_are_normalized_and_bounded() {
+        let (service, eids) = check_entitlements_params(CheckEntitlementsArgs {
+            eids: vec![101, 202, 101],
+            service: None,
+        })
+        .unwrap();
+        assert_eq!(service, "//blp/refdata");
+        assert_eq!(eids, [101, 202]);
+
+        let at_limit = (1..=MAX_ENTITLEMENT_EIDS as i32).collect();
+        assert!(check_entitlements_params(CheckEntitlementsArgs {
+            eids: at_limit,
+            service: None,
+        })
+        .is_ok());
+        for rejected in [
+            Vec::new(),
+            vec![0],
+            vec![-1],
+            (1..=(MAX_ENTITLEMENT_EIDS as i32 + 1)).collect(),
+        ] {
+            assert!(check_entitlements_params(CheckEntitlementsArgs {
+                eids: rejected,
+                service: None,
+            })
+            .is_err());
+        }
     }
 
     #[test]

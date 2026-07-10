@@ -7,6 +7,7 @@ import {
   BDS_DESCRIPTION,
   BDIB_DESCRIPTION,
   BDTICK_DESCRIPTION,
+  CHECK_ENTITLEMENTS_DESCRIPTION,
   BFLDS_DESCRIPTION,
   BQL_DESCRIPTION,
   BSRCH_DESCRIPTION,
@@ -28,6 +29,7 @@ import type { BloombergToolsOptions, BloombergToolName } from "./options";
 import { isToolDisabled } from "./options";
 import {
   createToolResult,
+  MAX_ENTITLEMENT_EIDS,
   throwWithToolContext,
   type ToolContentAndArtifact,
 } from "./result-limits";
@@ -37,6 +39,7 @@ import {
   createBdibSchema,
   createBdtickSchema,
   createBdpSchema,
+  createCheckEntitlementsSchema,
   createBdsSchema,
   createBfldsSchema,
   createBqlSchema,
@@ -58,6 +61,7 @@ import {
   type BdtickInput,
   type BdpInput,
   type BdsInput,
+  type CheckEntitlementsInput,
   type BfldsInput,
   type BqlInput,
   type BsrchInput,
@@ -321,6 +325,7 @@ function bdpWithResolver(resolver: CoreResolver): BloombergTool {
           kwargs: input.kwargs,
           overrides: input.overrides as never,
           validateFields: validationSetting(resolver, input.validateFields),
+          returnEids: input.returnEids,
         };
         const result = await engine.bdp(input.securities, input.fields, options);
         return resultString(resolver, name, result);
@@ -350,6 +355,7 @@ function bdhWithResolver(resolver: CoreResolver): BloombergTool {
           kwargs: input.kwargs,
           overrides: input.overrides as never,
           start: input.start,
+          returnEids: input.returnEids,
           validateFields: validationSetting(resolver, input.validateFields),
         };
         const result = await engine.bdh(input.securities, input.fields, options);
@@ -377,6 +383,7 @@ function bdsWithResolver(resolver: CoreResolver): BloombergTool {
           backend: "json" as const,
           kwargs: input.kwargs,
           overrides: input.overrides as never,
+          returnEids: input.returnEids,
           validateFields: validationSetting(resolver, input.validateFields),
         };
         const result = await engine.bds(input.securities, [input.field], options);
@@ -408,6 +415,7 @@ function bdibWithResolver(resolver: CoreResolver): BloombergTool {
           kwargs: input.kwargs,
           outputTz: input.outputTz,
           requestTz: input.requestTz,
+          returnEids: input.returnEids,
           start: input.start,
         });
         return resultString(resolver, name, result);
@@ -444,6 +452,7 @@ function bdtickWithResolver(resolver: CoreResolver): BloombergTool {
           kwargs: input.kwargs,
           outputTz: input.outputTz,
           requestTz: input.requestTz,
+          returnEids: input.returnEids,
           start: input.start,
         });
         return resultString(resolver, name, result);
@@ -456,6 +465,32 @@ function bdtickWithResolver(resolver: CoreResolver): BloombergTool {
       name,
       responseFormat: "content_and_artifact",
       schema: createBdtickSchema(resolver.options),
+    },
+  );
+}
+
+function checkEntitlementsWithResolver(resolver: CoreResolver): BloombergTool {
+  const name = "xbbg_check_entitlements" satisfies BloombergToolName;
+  return createBloombergStructuredTool(
+    async (input: CheckEntitlementsInput): Promise<ToolContentAndArtifact> => {
+      try {
+        const engine = await resolver.getEngine();
+        const result = await engine.checkEntitlements(input.service ?? "//blp/refdata", input.eids);
+        return createToolResult(
+          name,
+          result,
+          MAX_ENTITLEMENT_EIDS,
+          resolver.options.maxStringChars,
+        );
+      } catch (error) {
+        throwWithToolContext(name, error);
+      }
+    },
+    {
+      description: CHECK_ENTITLEMENTS_DESCRIPTION,
+      name,
+      responseFormat: "content_and_artifact",
+      schema: createCheckEntitlementsSchema(resolver.options),
     },
   );
 }
@@ -862,6 +897,10 @@ export function createBdtickTool(options: BloombergToolsOptions = {}): Bloomberg
   return bdtickWithResolver(createCoreResolver(options));
 }
 
+export function createCheckEntitlementsTool(options: BloombergToolsOptions = {}): BloombergTool {
+  return checkEntitlementsWithResolver(createCoreResolver(options));
+}
+
 export function createBqlTool(options: BloombergToolsOptions = {}): BloombergTool {
   return bqlWithResolver(createCoreResolver(options));
 }
@@ -933,6 +972,7 @@ const CORE_TOOL_DEFINITIONS: readonly CoreToolDefinition[] = Object.freeze([
   { create: bdsWithResolver, name: "xbbg_bds" },
   { create: bdibWithResolver, name: "xbbg_bdib" },
   { create: bdtickWithResolver, name: "xbbg_bdtick" },
+  { create: checkEntitlementsWithResolver, name: "xbbg_check_entitlements" },
   { create: bqlWithResolver, name: "xbbg_bql" },
   { create: bsrchWithResolver, name: "xbbg_bsrch" },
   { create: bqrWithResolver, name: "xbbg_bqr" },

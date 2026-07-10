@@ -1,6 +1,7 @@
 import * as z from "zod/v3";
 
 import type { NormalizedBloombergToolsOptions } from "./options";
+import { MAX_BLOOMBERG_EID, MAX_ENTITLEMENT_EIDS } from "./result-limits";
 type ZodOutput<T> = z.ZodType<T, z.ZodTypeDef, unknown>;
 
 export type PrimitiveValue = string | number | boolean;
@@ -21,6 +22,7 @@ export type HistoricalFormat = (typeof HISTORICAL_FORMATS)[number];
 export interface ReferenceCallOptions {
   readonly overrides?: OverrideMap;
   readonly kwargs?: PrimitiveMap;
+  readonly returnEids?: boolean;
   readonly validateFields?: boolean;
 }
 
@@ -45,6 +47,7 @@ export interface BdhInput {
   readonly kwargs?: PrimitiveMap;
   readonly format?: HistoricalFormat;
   readonly validateFields?: boolean;
+  readonly returnEids?: boolean;
 }
 
 export interface BdibInput {
@@ -56,6 +59,7 @@ export interface BdibInput {
   readonly requestTz?: string;
   readonly outputTz?: string;
   readonly kwargs?: PrimitiveMap;
+  readonly returnEids?: boolean;
 }
 
 export interface BdtickInput {
@@ -73,6 +77,12 @@ export interface BdtickInput {
   readonly requestTz?: string;
   readonly outputTz?: string;
   readonly kwargs?: PrimitiveMap;
+  readonly returnEids?: boolean;
+}
+
+export interface CheckEntitlementsInput {
+  readonly eids: readonly number[];
+  readonly service?: string;
 }
 
 export interface BqlInput {
@@ -529,6 +539,10 @@ export function createBdpSchema(options: NormalizedBloombergToolsOptions): ZodOu
     overrides: overridesMap(tool, "overrides").describe(
       "Bloomberg field overrides. Use primitive values for global overrides and nested primitive maps keyed by exact security for per-security overrides.",
     ),
+    returnEids: z
+      .boolean()
+      .optional()
+      .describe("Request Bloomberg entitlement IDs and retain them in result metadata."),
     securities: stringArray(
       tool,
       "securities",
@@ -573,6 +587,10 @@ export function createBdhSchema(options: NormalizedBloombergToolsOptions): ZodOu
         "Securities exactly as the user supplied them: '<TICKER> <MARKET_SECTOR>' for Bloomberg tickers, '/isin/<ISIN>' for raw ISINs, '/cusip/<CUSIP>' for raw CUSIPs. Never invent, guess, or convert identifiers into tickers.",
       ),
       start: dateField(tool, "start").describe("Required start date. Use YYYY-MM-DD or YYYYMMDD."),
+      returnEids: z
+        .boolean()
+        .optional()
+        .describe("Request Bloomberg entitlement IDs and retain them in result metadata."),
       validateFields: z
         .boolean()
         .optional()
@@ -601,6 +619,10 @@ export function createBdsSchema(options: NormalizedBloombergToolsOptions): ZodOu
     overrides: overridesMap(tool, "overrides").describe(
       "Bloomberg overrides. Use primitive values for global overrides and nested primitive maps keyed by exact security for per-security overrides.",
     ),
+    returnEids: z
+      .boolean()
+      .optional()
+      .describe("Request Bloomberg entitlement IDs and retain them in result metadata."),
     securities: stringArray(
       tool,
       "securities",
@@ -637,6 +659,10 @@ export function createBdibSchema(options: NormalizedBloombergToolsOptions): ZodO
     requestTz: nonEmptyString(tool, "requestTz", options.maxStringChars, "<TIMEZONE>")
       .optional()
       .describe("Timezone for naive start/end datetimes."),
+    returnEids: z
+      .boolean()
+      .optional()
+      .describe("Request Bloomberg entitlement IDs and retain them in result metadata."),
     start: dateTimeField(tool, "start").describe(
       "Required intraday start datetime. Use ISO 8601 with timezone when possible.",
     ),
@@ -685,6 +711,10 @@ export function createBdtickSchema(
     requestTz: nonEmptyString(tool, "requestTz", options.maxStringChars, "<TIMEZONE>")
       .optional()
       .describe("Timezone for naive start/end datetimes."),
+    returnEids: z
+      .boolean()
+      .optional()
+      .describe("Request Bloomberg entitlement IDs and retain them in result metadata."),
     start: dateTimeField(tool, "start").describe(
       "Required intraday tick start datetime. Use ISO 8601 with timezone when possible.",
     ),
@@ -696,6 +726,32 @@ export function createBdtickSchema(
     ).describe(
       "One security exactly as the user supplied it: '<TICKER> <MARKET_SECTOR>', '/isin/<ISIN>', or '/cusip/<CUSIP>'. Never invent, guess, or convert identifiers into tickers.",
     ),
+  });
+}
+
+export function createCheckEntitlementsSchema(
+  options: NormalizedBloombergToolsOptions,
+): ZodOutput<CheckEntitlementsInput> {
+  const tool = "xbbg_check_entitlements";
+  return z.object({
+    eids: z
+      .array(
+        z
+          .number()
+          .int(`${tool}: eids must contain integers only.`)
+          .positive(`${tool}: eids must contain positive integers only.`)
+          .max(MAX_BLOOMBERG_EID, `${tool}: eids must be signed 32-bit integers.`),
+      )
+      .nonempty(`${tool}: eids must contain at least one entitlement ID.`)
+      .max(
+        MAX_ENTITLEMENT_EIDS,
+        `${tool}: eids must contain at most ${String(MAX_ENTITLEMENT_EIDS)} values.`,
+      )
+      .describe("Nonempty list of positive signed 32-bit Bloomberg entitlement IDs."),
+    service: nonEmptyString(tool, "service", options.maxStringChars, "//blp/refdata")
+      .optional()
+      .default("//blp/refdata")
+      .describe("Bloomberg service to check. Defaults to //blp/refdata."),
   });
 }
 

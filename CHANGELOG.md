@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **Complete Bloomberg entitlement-ID routes across bindings**: Python and `@xbbg/core` now request EIDs for intraday bars and ticks as well as BDP/BDS/BDH; LangGraph exposes `returnEids` on BDP/BDS/BDH/BDIB/BDTICK plus `xbbg_check_entitlements`, and MCP exposes `return_eids` on its dedicated BDP/BDS/BDH/BDIB tools and generic IntradayTick route plus `check_entitlements`, with bounded results preserving entitlement metadata.
 - **Official MCP Registry publish workflow**: Added a manual GitHub Actions workflow that publishes release `server.json` metadata through `mcp-publisher` with GitHub Actions OIDC, so the xbbg-org namespace can publish without relying on a maintainer's local public organization membership.
 - **Batched subscription delivery in `@xbbg/core`**: one native crossing now drains many ticks (`nextUpdates`) and Arrow subscriptions return multi-row zero-copy batches (`nextArrowBatch`); tick field layouts cross the boundary once per layout version and `Tick` caches decoded `BigInt`/`Date` values.
 - **`SubscriptionArrowBatcher`** in the Rust engine: cached schema + reusable Arrow builders convert streaming updates into multi-row RecordBatches instead of one-row batches per tick.
