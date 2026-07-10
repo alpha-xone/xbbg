@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - **`blpapi-sys` caches generated bindings** next to the vendored SDK keyed by target and build-script hash, and tracks headers/env precisely, removing bindgen from warm clean builds and spurious `CONDA_PREFIX` rebuilds on non-Windows hosts.
 - **Metadata caches (exchange info, field types) publish snapshots per batch** with bounded capacity instead of cloning the whole map per inserted key.
 
+### Fixed
+
+- **Marimo notebook compatibility**: Synchronous one-shot Python APIs such as `blp.bdp()` now use the notebook bridge inside marimo's async execution context instead of raising the generic async-context error.
+
 ## [1.4.3] - 2026-07-04
 
 ### Added

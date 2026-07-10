@@ -23,6 +23,7 @@ import functools
 import inspect
 import logging
 import re
+import sys
 import threading
 import time
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
@@ -2099,7 +2100,13 @@ def _strip_signature_annotations(func: Callable[..., Any]) -> str:
 
 
 def _is_notebook_context() -> bool:
-    """Return True when running in an IPykernel-backed notebook shell."""
+    """Return True when running in a supported notebook runtime."""
+    marimo = sys.modules.get("marimo")
+    if marimo is not None:
+        running_in_notebook = getattr(marimo, "running_in_notebook", None)
+        if callable(running_in_notebook) and running_in_notebook():
+            return True
+
     try:
         from IPython import get_ipython
     except Exception:

@@ -9,7 +9,9 @@ import asyncio
 import contextvars
 import inspect
 from pathlib import Path
+import sys
 import threading
+from types import ModuleType
 from unittest import TestCase
 
 import pytest
@@ -35,6 +37,40 @@ class TestNotebookSyncBridge:
 
         with pytest.raises(RuntimeError, match="await abdp"):
             asyncio.run(call_wrapper())
+
+    def test_marimo_context_uses_notebook_bridge(self, monkeypatch):
+        """Marimo callers should use the notebook bridge without requiring IPykernel."""
+        from xbbg import blp
+
+        marimo = ModuleType("marimo")
+        marimo.running_in_notebook = lambda: True
+        monkeypatch.setitem(sys.modules, "marimo", marimo)
+        monkeypatch.setitem(sys.modules, "IPython", None)
+        monkeypatch.setattr(
+            blp,
+            "_run_in_notebook_sync_bridge",
+            lambda async_func, args, kwargs: async_func.__name__,
+        )
+
+        async def call_bdp():
+            return blp.bdp("AAPL US Equity", "PX_LAST")
+
+        _CASE.assertEqual(asyncio.run(call_bdp()), "abdp")
+
+    def test_imported_marimo_outside_notebook_still_raises(self, monkeypatch):
+        """Importing marimo alone should not make a generic event loop a notebook."""
+        from xbbg import blp
+
+        marimo = ModuleType("marimo")
+        marimo.running_in_notebook = lambda: False
+        monkeypatch.setitem(sys.modules, "marimo", marimo)
+        monkeypatch.setitem(sys.modules, "IPython", None)
+
+        async def call_bdp():
+            return blp.bdp("AAPL US Equity", "PX_LAST")
+
+        with pytest.raises(RuntimeError, match="await abdp"):
+            asyncio.run(call_bdp())
 
     def test_notebook_context_uses_background_loop_and_preserves_contextvars(self, monkeypatch):
         """Notebook callers should block on a background loop without losing context."""
