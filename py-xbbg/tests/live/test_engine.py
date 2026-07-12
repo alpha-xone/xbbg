@@ -27,6 +27,103 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 
+def _observed_fixed_holiday(year: int, month: int, day: int) -> date:
+    holiday = date(year, month, day)
+    if holiday.weekday() == 5:
+        return holiday - timedelta(days=1)
+    if holiday.weekday() == 6:
+        return holiday + timedelta(days=1)
+    return holiday
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    day = date(year, month, 1)
+    while day.weekday() != weekday:
+        day += timedelta(days=1)
+    return day + timedelta(days=7 * (n - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    day = date(year, month + 1, 1) - timedelta(days=1)
+    while day.weekday() != weekday:
+        day -= timedelta(days=1)
+    return day
+
+
+def _easter_date(year: int) -> date:
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    weekday_offset = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * weekday_offset) // 451
+    month = (h + weekday_offset - 7 * m + 114) // 31
+    day = ((h + weekday_offset - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
+
+
+def _is_us_equity_market_holiday(day: date) -> bool:
+    year = day.year
+    holidays = {
+        _observed_fixed_holiday(year, 1, 1),
+        _nth_weekday(year, 1, 0, 3),
+        _nth_weekday(year, 2, 0, 3),
+        _easter_date(year) - timedelta(days=2),
+        _last_weekday(year, 5, 0),
+        _observed_fixed_holiday(year, 6, 19),
+        _observed_fixed_holiday(year, 7, 4),
+        _nth_weekday(year, 9, 0, 1),
+        _nth_weekday(year, 11, 3, 4),
+        _observed_fixed_holiday(year, 12, 25),
+    }
+    return day in holidays
+
+
+def _recent_trading_day() -> date:
+    for days_back in range(1, 15):
+        candidate = date.today() - timedelta(days=days_back)
+        if candidate.weekday() < 5 and not _is_us_equity_market_holiday(candidate):
+            return candidate
+    raise RuntimeError("No recent US equity trading day found in the last 14 calendar days")
+
+
+def _skip_if_screen_unavailable(exc: Exception, context: str) -> None:
+    message = str(exc)
+    unavailable_markers = (
+        "Cannot find screen",
+        "e_SCREEN_NOT_FOUND",
+        "SCREEN_NOT_FOUND",
+        "Failed to build query",
+        "empty criteriaArray",
+        "NOT_ENTITLED",
+    )
+    if any(marker in message for marker in unavailable_markers):
+        pytest.skip(f"{context} screen not available in this Bloomberg environment: {exc}")
+    raise exc
+
+
+def _format_price(value) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    return f"{numeric:8.2f}"
+
+
+def _format_volume_millions(value) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    return f"{numeric / 1e6:.1f}M"
+
+
 def get_engine():
     """Create and return a Bloomberg engine."""
     from xbbg._core import PyEngine
@@ -112,8 +209,8 @@ async def test_bdh(engine):
         if f != "PX_LAST":
             continue
         volume = volumes_by_date.get(d)
-        vol_str = f"{volume / 1e6:.1f}M" if volume else "N/A"
-        logger.debug(f"  {d}  | {p:8.2f} | {vol_str}")
+        vol_str = _format_volume_millions(volume) if volume is not None else "N/A"
+        logger.debug(f"  {d}  | {_format_price(p)} | {vol_str}")
 
     logger.debug("")
     return True
@@ -194,9 +291,9 @@ async def test_bdib(engine):
 
     # Get bars from yesterday (market hours in UTC)
     # US market: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC
-    yesterday = date.today() - timedelta(days=1)
-    start_dt = f"{yesterday.strftime('%Y-%m-%d')}T14:30:00"
-    end_dt = f"{yesterday.strftime('%Y-%m-%d')}T15:30:00"
+    trading_day = _recent_trading_day()
+    start_dt = f"{trading_day.strftime('%Y-%m-%d')}T14:30:00"
+    end_dt = f"{trading_day.strftime('%Y-%m-%d')}T15:30:00"
 
     params = {
         "service": "//blp/refdata",
@@ -234,9 +331,9 @@ async def test_bdtick(engine):
 
     # Get ticks from yesterday (market hours in UTC)
     # US market opens at 9:30 AM ET = 14:30 UTC
-    yesterday = date.today() - timedelta(days=1)
-    start_dt = f"{yesterday.strftime('%Y-%m-%d')}T14:30:00"
-    end_dt = f"{yesterday.strftime('%Y-%m-%d')}T14:31:00"  # Just 1 minute
+    trading_day = _recent_trading_day()
+    start_dt = f"{trading_day.strftime('%Y-%m-%d')}T14:30:00"
+    end_dt = f"{trading_day.strftime('%Y-%m-%d')}T14:31:00"  # Just 1 minute
 
     params = {
         "service": "//blp/refdata",
@@ -408,7 +505,10 @@ async def test_bsrch(engine):
         "elements": [("Domain", "FI:SOVR")],
     }
 
-    result = await asyncio.wait_for(engine.request(params), timeout=60.0)
+    try:
+        result = await asyncio.wait_for(engine.request(params), timeout=60.0)
+    except Exception as exc:
+        _skip_if_screen_unavailable(exc, "FI:SOVR")
 
     logger.info(f"  Schema: {result.schema}")
     logger.info(f"  Rows: {result.num_rows}")
@@ -543,7 +643,10 @@ async def test_beqs(engine):
         ],
     }
 
-    result = await asyncio.wait_for(engine.request(params), timeout=60.0)
+    try:
+        result = await asyncio.wait_for(engine.request(params), timeout=60.0)
+    except Exception as exc:
+        _skip_if_screen_unavailable(exc, "TOP_DECL_DVD")
 
     logger.info(f"  Schema: {result.schema}")
     logger.info(f"  Rows: {result.num_rows}")
@@ -823,6 +926,9 @@ async def run_tests(test_names: list[str]):
             else:
                 failed += 1
                 logger.error(f"FAILED: {name}")
+        except pytest.skip.Exception as e:
+            skipped += 1
+            logger.warning(f"SKIPPED: {name} - {e}")
         except asyncio.TimeoutError:
             failed += 1
             logger.warning(f"TIMEOUT: {name}")

@@ -154,6 +154,19 @@ _HISTORICAL_ALIAS_BATCHES = [
 ]
 
 
+def _require_usable_backend(backend: str, required_module: str | None) -> None:
+    if required_module is None:
+        return
+    pytest.importorskip(required_module)
+    if backend.startswith("polars"):
+        from xbbg.backend import check_backend
+
+        try:
+            check_backend(backend)
+        except ImportError as exc:
+            pytest.skip(f"Optional backend {backend!r} is not usable in this environment: {exc}")
+
+
 @lru_cache(maxsize=1)
 def _recent_intraday_window() -> tuple[str, str]:
     """Return a short UTC market-open window with observed ES1 bar data."""
@@ -364,8 +377,7 @@ def test_bdh_live_applies_excel_presentation_aliases_locally() -> None:
 )
 def test_bdh_live_presentation_aliases_shape_representative_backends(backend: str, required_module: str | None) -> None:
     """A capped live smoke matrix proves presentation shaping survives backend conversion."""
-    if required_module is not None:
-        pytest.importorskip(required_module)
+    _require_usable_backend(backend, required_module)
 
     start_date, end_date = _historical_window()
     frame = blp.bdh(

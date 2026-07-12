@@ -27,6 +27,14 @@ if sys.platform == "win32":
 TICKER = "XBTUSD Curncy"
 
 
+def _batch_column_names(batch) -> list[str]:
+    if hasattr(batch, "column_names"):
+        return list(batch.column_names)
+    if hasattr(batch, "schema") and hasattr(batch.schema, "names"):
+        return list(batch.schema.names)
+    return [column.name if hasattr(column, "name") else column for column in batch.columns]
+
+
 # ---------------------------------------------------------------------------
 # 1. tick_mode
 # ---------------------------------------------------------------------------
@@ -119,7 +127,7 @@ async def _test_per_sub_flush_threshold():
         # Subscription yields pandas DataFrames (or Arrow RecordBatch with raw=True)
         nrows = batch.num_rows if hasattr(batch, "num_rows") else len(batch)
         ncols = batch.num_columns if hasattr(batch, "num_columns") else len(batch.columns)
-        col_names = list(batch.columns)
+        col_names = _batch_column_names(batch)
         assert nrows >= 1, f"Batch {i}: 0 rows"
         assert ncols >= 2, f"Batch {i}: <2 columns"
         assert "topic" in col_names, f"Batch {i}: missing 'topic' column"

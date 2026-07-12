@@ -18,6 +18,7 @@
 #![cfg(feature = "live")]
 
 use arrow_array::{Array, Float64Array, RecordBatch, StringArray};
+use chrono::Datelike;
 
 use xbbg_async::engine::{
     Engine, EngineConfig, ExtractorType, RequestParams, ServerAddr, Transport,
@@ -72,6 +73,27 @@ fn create_engine() -> Engine {
     };
 
     Engine::start(config).expect("Engine should connect to Bloomberg")
+}
+
+fn recent_intraday_window_candidates(minutes: i64) -> Vec<(String, String)> {
+    let today = chrono::Local::now().date_naive();
+    let market_time_utc = chrono::NaiveTime::from_hms_opt(14, 30, 0).expect("valid market time");
+
+    (1..=10)
+        .filter_map(|days_back| {
+            let date = today - chrono::Duration::days(days_back);
+            if date.weekday().number_from_monday() > 5 {
+                return None;
+            }
+
+            let start = date.and_time(market_time_utc);
+            let end = start + chrono::Duration::minutes(minutes);
+            Some((
+                start.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                end.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            ))
+        })
+        .collect()
 }
 
 fn print_batch_summary(name: &str, batch: &RecordBatch) {
@@ -501,31 +523,47 @@ async fn test_bdtick_short_window() {
     init_tracing();
     let engine = create_engine();
 
-    // Use today's date for tick data availability
-    // IMPORTANT: Bloomberg intraday requests use UTC times
-    // US market open: 9:30 ET = 14:30 UTC
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let mut last_empty_window = None;
+    let mut last_error = None;
 
-    let params = RequestParams {
-        service: "//blp/refdata".to_string(),
-        operation: "IntradayTickRequest".to_string(),
-        extractor: ExtractorType::IntradayTick,
-        security: Some("IBM US Equity".to_string()),
-        // UTC times: 14:30-15:00 UTC = 9:30-10:00 ET (market open)
-        start_datetime: Some(format!("{}T14:30:00", today)),
-        end_datetime: Some(format!("{}T15:00:00", today)),
-        // eventTypes is REQUIRED for IntradayTickRequest
-        event_types: Some(vec!["TRADE".to_string()]),
-        ..Default::default()
-    };
+    for (start_datetime, end_datetime) in recent_intraday_window_candidates(30) {
+        let params = RequestParams {
+            service: "//blp/refdata".to_string(),
+            operation: "IntradayTickRequest".to_string(),
+            extractor: ExtractorType::IntradayTick,
+            security: Some("IBM US Equity".to_string()),
+            start_datetime: Some(start_datetime.clone()),
+            end_datetime: Some(end_datetime.clone()),
+            // eventTypes is REQUIRED for IntradayTickRequest.
+            event_types: Some(vec!["TRADE".to_string()]),
+            ..Default::default()
+        };
 
-    let batch = engine.request(params).await.expect("bdtick request");
+        match engine.request(params).await {
+            Ok(batch) if batch.num_rows() > 0 => {
+                print_batch_summary(
+                    &format!("BDTICK (30 min window, {start_datetime}..{end_datetime} UTC)"),
+                    &batch,
+                );
+                println!("  Tick count: {}", batch.num_rows());
+                std::mem::forget(engine);
+                return;
+            }
+            Ok(batch) => {
+                last_empty_window = Some(format!(
+                    "{start_datetime}..{end_datetime} returned {} rows",
+                    batch.num_rows()
+                ));
+            }
+            Err(err) => {
+                last_error = Some(format!("{start_datetime}..{end_datetime}: {err}"));
+            }
+        }
+    }
 
-    print_batch_summary("BDTICK (30 min window with eventTypes, UTC)", &batch);
-    // Should have ticks during market hours
-    println!("  Tick count: {}", batch.num_rows());
-
-    std::mem::forget(engine);
+    panic!(
+        "bdtick request did not return ticks for recent weekday windows; last_empty_window={last_empty_window:?}; last_error={last_error:?}"
+    );
 }
 
 // =============================================================================

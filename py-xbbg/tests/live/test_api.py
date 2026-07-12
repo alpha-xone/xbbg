@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import logging
 import os
 import sys
@@ -85,16 +85,77 @@ class LiveTestConfig:
 CONFIG = LiveTestConfig()
 
 
-def get_recent_trading_day() -> str:
-    """Get a recent trading day (yesterday or Friday if weekend)."""
-    today = datetime.now()
-    # Go back 1-3 days to find a likely trading day
-    for days_back in range(1, 5):
+def _observed_fixed_holiday(year: int, month: int, day: int) -> date:
+    holiday = date(year, month, day)
+    if holiday.weekday() == 5:  # Saturday observed on Friday
+        return holiday - timedelta(days=1)
+    if holiday.weekday() == 6:  # Sunday observed on Monday
+        return holiday + timedelta(days=1)
+    return holiday
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    day = date(year, month, 1)
+    while day.weekday() != weekday:
+        day += timedelta(days=1)
+    return day + timedelta(days=7 * (n - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    day = date(year, month + 1, 1) - timedelta(days=1)
+    while day.weekday() != weekday:
+        day -= timedelta(days=1)
+    return day
+
+
+def _easter_date(year: int) -> date:
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    weekday_offset = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * weekday_offset) // 451
+    month = (h + weekday_offset - 7 * m + 114) // 31
+    day = ((h + weekday_offset - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
+
+
+def _is_us_equity_market_holiday(day: date) -> bool:
+    year = day.year
+    holidays = {
+        _observed_fixed_holiday(year, 1, 1),
+        _nth_weekday(year, 1, 0, 3),  # Martin Luther King Jr. Day
+        _nth_weekday(year, 2, 0, 3),  # Washington's Birthday
+        _easter_date(year) - timedelta(days=2),  # Good Friday
+        _last_weekday(year, 5, 0),  # Memorial Day
+        _observed_fixed_holiday(year, 6, 19),
+        _observed_fixed_holiday(year, 7, 4),
+        _nth_weekday(year, 9, 0, 1),  # Labor Day
+        _nth_weekday(year, 11, 3, 4),  # Thanksgiving
+        _observed_fixed_holiday(year, 12, 25),
+    }
+    return day in holidays
+
+
+def _recent_trading_days(max_days: int = 14):
+    today = date.today()
+    for days_back in range(1, max_days + 1):
         candidate = today - timedelta(days=days_back)
-        # Skip weekends
-        if candidate.weekday() < 5:  # Monday = 0, Friday = 4
-            return candidate.strftime("%Y-%m-%d")
-    return (today - timedelta(days=1)).strftime("%Y-%m-%d")
+        if candidate.weekday() < 5 and not _is_us_equity_market_holiday(candidate):
+            yield candidate
+
+
+def get_recent_trading_day() -> str:
+    """Get a recent US equity trading day, avoiding weekends and market holidays."""
+    for candidate in _recent_trading_days():
+        return candidate.strftime("%Y-%m-%d")
+    raise RuntimeError("No recent US equity trading day found in the last 14 calendar days")
 
 
 def get_date_range(days: int = 7) -> tuple[str, str]:
@@ -164,11 +225,39 @@ def skip_if_bsrch_unavailable(exc: Exception, context: str) -> None:
     message = str(exc)
     unavailable_markers = (
         "Problem accessing the saved search",
+        "Failed to build query",
+        "empty criteriaArray",
         "NOT_ENTITLED",
     )
     if any(marker in message for marker in unavailable_markers):
         pytest.skip(f"{context} BSRCH not available in this Bloomberg environment: {exc}")
     raise exc
+
+
+def skip_if_screen_unavailable(exc: Exception, context: str) -> None:
+    """Skip saved-screen tests only for Bloomberg screen entitlement/availability errors."""
+    if isinstance(exc, AssertionError):
+        raise exc
+    message = str(exc)
+    unavailable_markers = (
+        "Cannot find screen",
+        "e_SCREEN_NOT_FOUND",
+        "SCREEN_NOT_FOUND",
+        "NOT_ENTITLED",
+    )
+    if any(marker in message for marker in unavailable_markers):
+        pytest.skip(f"{context} screen not available in this Bloomberg environment: {exc}")
+    raise exc
+
+
+def skip_if_backend_unusable(backend: str) -> None:
+    """Skip optional backend tests when the package imports but cannot convert frames."""
+    from xbbg.backend import check_backend
+
+    try:
+        check_backend(backend)
+    except ImportError as exc:
+        pytest.skip(f"Optional backend {backend!r} is not usable in this environment: {exc}")
 
 
 # =============================================================================
@@ -925,6 +1014,7 @@ class TestBackendConversion:
         pytest.importorskip("polars")
         import polars as pl
 
+        skip_if_backend_unusable("polars")
         from xbbg import bdp
 
         df = bdp(CONFIG.equity_single, CONFIG.price_field, backend="polars")
@@ -1625,7 +1715,10 @@ class TestBeqs:
         """BEQS: basic equity screening."""
         from xbbg import beqs
 
-        df = beqs("Core Capital Goods Makers")
+        try:
+            df = beqs("Core Capital Goods Makers")
+        except Exception as e:
+            skip_if_screen_unavailable(e, "Core Capital Goods Makers")
         assert len(df) >= 1
         logger.info(f"  Got {len(df)} screening results")
 
@@ -1638,7 +1731,10 @@ class TestAbeqs:
         """ABEQS: basic async screening."""
         from xbbg import abeqs
 
-        df = await abeqs("Core Capital Goods Makers")
+        try:
+            df = await abeqs("Core Capital Goods Makers")
+        except Exception as e:
+            skip_if_screen_unavailable(e, "Core Capital Goods Makers")
         assert len(df) >= 1
         logger.info(f"  Async screening: {len(df)} results")
 
