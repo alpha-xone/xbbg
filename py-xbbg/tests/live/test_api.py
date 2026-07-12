@@ -244,6 +244,7 @@ def skip_if_screen_unavailable(exc: Exception, context: str) -> None:
         "e_SCREEN_NOT_FOUND",
         "SCREEN_NOT_FOUND",
         "NOT_ENTITLED",
+        "blocked from accessing serviceCode=BEQS",
     )
     if any(marker in message for marker in unavailable_markers):
         pytest.skip(f"{context} screen not available in this Bloomberg environment: {exc}")
