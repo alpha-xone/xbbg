@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-07-12
+
 ### Added
 
 - **Complete Bloomberg entitlement-ID routes across bindings**: Python and `@xbbg/core` now request EIDs for intraday bars and ticks as well as BDP/BDS/BDH; LangGraph exposes `returnEids` on BDP/BDS/BDH/BDIB/BDTICK plus `xbbg_check_entitlements`, and MCP exposes `return_eids` on its dedicated BDP/BDS/BDH/BDIB tools and generic IntradayTick route plus `check_entitlements`, with bounded results preserving entitlement metadata.
@@ -1502,7 +1504,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ---
 
-[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.3...HEAD
+[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.4...HEAD
+[1.4.4]: https://github.com/xbbg-org/xbbg/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/xbbg-org/xbbg/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/xbbg-org/xbbg/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/xbbg-org/xbbg/compare/v1.4.0...v1.4.1
