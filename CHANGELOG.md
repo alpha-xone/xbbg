@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Shared ETF NAV / iNAV toolkit with Python and JavaScript parity**: A new `xbbg-recipes` module resolves Bloomberg's authoritative `ETF_NAV_TICKER` / `ETF_INAV_TICKER` relationships (normalized to one ` Index` suffix and validated as genuine Index securities, so non-conventional targets such as `QQQ US Equity -> QXV Index` and null/`AT1IN Index` legs survive intact), serves current NAV/iNAV snapshots and daily history with a `FUND_NET_ASSET_VAL` fallback for ETFs without a daily NAV Index, and powers Python `xbbg.ext` (`etf_nav_relationships`, `etf_nav_snapshot`, `etf_nav_history`, `subscribe_etf_inav` plus async variants) and `@xbbg/core` (`etfNavRelationships`, `etfNavSnapshot`, `etfNavHistory`, `subscribeEtfInav`) with identical schemas and atomic iNAV subscription preflight.
+
+### Changed
+
+- **Canonical CDX series identities across Rust, Python, and JavaScript**: `xbbg-recipes`, `cdx_ticker` / `active_cdx`, and `Engine.cdxTicker()` / `Engine.activeCdx()` now require Bloomberg `VERSION` metadata and return explicit `Vn` identifiers (including `V1`) by default, resolve prior-series versions independently, and round-trip explicit-version tickers correctly. Pass `versionless=True` or `{ versionless: true }` only when a legacy Bloomberg alias is required.
+
 ## [1.4.4] - 2026-07-12
 
 ### Added
 
-- **Shared ETF NAV / iNAV toolkit with Python and JavaScript parity**: A new `xbbg-recipes` module resolves Bloomberg's authoritative `ETF_NAV_TICKER` / `ETF_INAV_TICKER` relationships (normalized to one ` Index` suffix and validated as genuine Index securities, so non-conventional targets such as `QQQ US Equity -> QXV Index` and null/`AT1IN Index` legs survive intact), serves current NAV/iNAV snapshots and daily history with a `FUND_NET_ASSET_VAL` fallback for ETFs without a daily NAV Index, and powers Python `xbbg.ext` (`etf_nav_relationships`, `etf_nav_snapshot`, `etf_nav_history`, `subscribe_etf_inav` plus async variants) and `@xbbg/core` (`etfNavRelationships`, `etfNavSnapshot`, `etfNavHistory`, `subscribeEtfInav`) with identical schemas and atomic iNAV subscription preflight.
 - **Complete Bloomberg entitlement-ID routes across bindings**: Python and `@xbbg/core` now request EIDs for intraday bars and ticks as well as BDP/BDS/BDH; LangGraph exposes `returnEids` on BDP/BDS/BDH/BDIB/BDTICK plus `xbbg_check_entitlements`, and MCP exposes `return_eids` on its dedicated BDP/BDS/BDH/BDIB tools and generic IntradayTick route plus `check_entitlements`, with bounded results preserving entitlement metadata.
 - **Official MCP Registry publish workflow**: Added a manual GitHub Actions workflow that publishes release `server.json` metadata through `mcp-publisher` with GitHub Actions OIDC, so the xbbg-org namespace can publish without relying on a maintainer's local public organization membership.
 - **Batched subscription delivery in `@xbbg/core`**: one native crossing now drains many ticks (`nextUpdates`) and Arrow subscriptions return multi-row zero-copy batches (`nextArrowBatch`); tick field layouts cross the boundary once per layout version and `Tick` caches decoded `BigInt`/`Date` values.
@@ -21,7 +28,6 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Changed
 
-- **Canonical CDX series identities across Rust, Python, and JavaScript**: `xbbg-recipes`, `cdx_ticker` / `active_cdx`, and `Engine.cdxTicker()` / `Engine.activeCdx()` now require Bloomberg `VERSION` metadata and return explicit `Vn` identifiers (including `V1`) by default, resolve prior-series versions independently, and round-trip explicit-version tickers correctly. Pass `versionless=True` or `{ versionless: true }` only when a legacy Bloomberg alias is required.
 - **Subscription sessions moved to Bloomberg SDK asynchronous callback mode**: the 1 ms `nextEvent` busy-poll loop, its command channel, and per-loop topic-status scans are gone; events are dispatched by SDK callbacks and deactivation warnings run on a 1 s timer. Idle subscription workers no longer consume CPU.
 - **Faster response decoding**: typed long-format reference/historical output uses fixed-schema builders (no per-cell string-keyed map lookups), BDS bulk decoding walks each row once via interned name keys instead of O(rows × subfields) lookups, intraday bars use fixed builders, streaming chunks pre-reserve capacity, and BQL infers column types in a single pass.
 - **Cheaper ticks**: DATALOSS detection is folded into the normal extraction pass, message types are read via borrowed strings instead of refcounted `Name` duplicates, small updates avoid heap allocation (`SmallVec`), and repeated string values (exchange/condition codes) are interned per field.
