@@ -4,6 +4,8 @@ Run with:
   npm run test:live
 */
 
+import type { Table } from 'apache-arrow';
+
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 
@@ -95,6 +97,20 @@ function columnsOf(table: any): string[] {
 
 function tableSummary(table: any): string {
   return `rows=${table.numRows}, cols=${table.numCols}, fields=[${columnsOf(table).join(', ')}]`;
+}
+
+function cellValue(table: Table, column: string, row: number): unknown {
+  return table.getChild(column)?.get(row);
+}
+
+function stringCell(table: Table, column: string, row: number): string | null {
+  const value: unknown = cellValue(table, column, row);
+  return typeof value === 'string' ? value : null;
+}
+
+function numberCell(table: Table, column: string, row: number): number | null {
+  const value: unknown = cellValue(table, column, row);
+  return typeof value === 'number' ? value : null;
 }
 
 async function nextWithTimeout(sub: any, ms: number): Promise<any> {
@@ -1158,6 +1174,177 @@ describe('js-xbbg live Bloomberg API', () => {
         const info = engine!.getFieldInfo(CONFIG.price_field);
         assert.ok(info === null || typeof info === 'object');
         console.log(`  getFieldInfo type=${info === null ? 'null' : typeof info}`);
+      }));
+  });
+
+  describe('eTF NAV recipes', () => {
+    const QQQ = 'QQQ US Equity';
+    const AT1 = 'AT1 LN Equity';
+    const QQQ_NAV = 'QQQNV Index';
+    const QQQ_INAV = 'QXV Index';
+    const AT1_INAV = 'AT1IN Index';
+
+    const RELATIONSHIP_COLUMNS = [
+      'input_order',
+      'etf_ticker',
+      'nav_ticker',
+      'nav_market_sector_des',
+      'nav_name',
+      'nav_validation_error',
+      'inav_ticker',
+      'inav_market_sector_des',
+      'inav_name',
+      'inav_validation_error',
+    ];
+    const SNAPSHOT_COLUMNS = [
+      'input_order',
+      'etf_ticker',
+      'nav_ticker',
+      'nav_value',
+      'nav_source_ticker',
+      'nav_source_field',
+      'inav_ticker',
+      'inav_value',
+    ];
+    const HISTORY_COLUMNS = [
+      'input_order',
+      'etf_ticker',
+      'date',
+      'nav_ticker',
+      'nav_value',
+      'nav_source_ticker',
+      'nav_source_field',
+      'inav_ticker',
+      'inav_value',
+    ];
+
+    it('resolves ETF NAV relationships for QQQ and AT1 exactly', async (t) =>
+      runCase(t, 'ETF NAV relationships', async () => {
+        // Default recipe backend returns an apache-arrow Table.
+        const table = (await engine!.etfNavRelationships([QQQ, AT1])) as Table;
+        assert.deepEqual(columnsOf(table), RELATIONSHIP_COLUMNS);
+        assert.equal(table.numRows, 2);
+
+        assert.equal(stringCell(table, 'etf_ticker', 0), QQQ);
+        assert.equal(stringCell(table, 'nav_ticker', 0), QQQ_NAV);
+        assert.equal(stringCell(table, 'inav_ticker', 0), QQQ_INAV);
+        assert.equal(stringCell(table, 'nav_market_sector_des', 0)?.trim().toLowerCase(), 'index');
+        assert.equal(stringCell(table, 'inav_market_sector_des', 0)?.trim().toLowerCase(), 'index');
+        assert.ok((stringCell(table, 'nav_name', 0) ?? '').trim().length > 0);
+        assert.ok((stringCell(table, 'inav_name', 0) ?? '').trim().length > 0);
+        assert.equal(cellValue(table, 'nav_validation_error', 0), null);
+        assert.equal(cellValue(table, 'inav_validation_error', 0), null);
+
+        assert.equal(stringCell(table, 'etf_ticker', 1), AT1);
+        assert.equal(cellValue(table, 'nav_ticker', 1), null);
+        assert.equal(cellValue(table, 'nav_market_sector_des', 1), null);
+        assert.equal(cellValue(table, 'nav_name', 1), null);
+        assert.equal(cellValue(table, 'nav_validation_error', 1), null);
+        assert.equal(stringCell(table, 'inav_ticker', 1), AT1_INAV);
+        assert.equal(stringCell(table, 'inav_market_sector_des', 1)?.trim().toLowerCase(), 'index');
+        assert.ok((stringCell(table, 'inav_name', 1) ?? '').trim().length > 0);
+        assert.equal(cellValue(table, 'inav_validation_error', 1), null);
+        console.log(`  relationships -> ${tableSummary(table)}`);
+      }));
+
+    it('prices ETF NAV snapshots from PX_LAST and FUND_NET_ASSET_VAL sources', async (t) =>
+      runCase(t, 'ETF NAV snapshot', async () => {
+        const table = (await engine!.etfNavSnapshot([QQQ, AT1])) as Table;
+        assert.deepEqual(columnsOf(table), SNAPSHOT_COLUMNS);
+        assert.equal(table.numRows, 2);
+
+        assert.equal(stringCell(table, 'nav_ticker', 0), QQQ_NAV);
+        assert.equal(stringCell(table, 'nav_source_ticker', 0), QQQ_NAV);
+        assert.equal(stringCell(table, 'nav_source_field', 0), 'PX_LAST');
+        assert.equal(stringCell(table, 'inav_ticker', 0), QQQ_INAV);
+        assert.ok((numberCell(table, 'nav_value', 0) ?? 0) > 0);
+        assert.ok((numberCell(table, 'inav_value', 0) ?? 0) > 0);
+
+        assert.equal(cellValue(table, 'nav_ticker', 1), null);
+        assert.equal(stringCell(table, 'nav_source_ticker', 1), AT1);
+        assert.equal(stringCell(table, 'nav_source_field', 1), 'FUND_NET_ASSET_VAL');
+        assert.equal(stringCell(table, 'inav_ticker', 1), AT1_INAV);
+        assert.ok((numberCell(table, 'nav_value', 1) ?? 0) > 0);
+        assert.ok((numberCell(table, 'inav_value', 1) ?? 0) > 0);
+        console.log(`  snapshot -> ${tableSummary(table)}`);
+      }));
+
+    it('unions daily ETF NAV and iNAV history observations', async (t) =>
+      runCase(t, 'ETF NAV history', async () => {
+        const range = getDateRange(14);
+        const table = (await engine!.etfNavHistory([QQQ, AT1], range.start, range.end)) as Table;
+        assert.deepEqual(columnsOf(table), HISTORY_COLUMNS);
+        assert.ok(table.numRows > 0, 'expected at least one daily observation');
+
+        let qqqRows = 0;
+        let qqqNavPoints = 0;
+        let at1Rows = 0;
+        let at1NavPoints = 0;
+        let previousQqqDate = Number.NEGATIVE_INFINITY;
+        for (let row = 0; row < table.numRows; row += 1) {
+          const etf = stringCell(table, 'etf_ticker', row);
+          const dateMillis = toMillis(cellValue(table, 'date', row));
+          assert.ok(Number.isFinite(dateMillis), 'expected a real observation date');
+          if (etf === QQQ) {
+            qqqRows += 1;
+            assert.equal(stringCell(table, 'nav_ticker', row), QQQ_NAV);
+            assert.equal(stringCell(table, 'nav_source_ticker', row), QQQ_NAV);
+            assert.equal(stringCell(table, 'nav_source_field', row), 'PX_LAST');
+            assert.equal(stringCell(table, 'inav_ticker', row), QQQ_INAV);
+            assert.ok(dateMillis > previousQqqDate, 'QQQ dates must be strictly increasing');
+            previousQqqDate = dateMillis;
+            if (numberCell(table, 'nav_value', row) !== null) {
+              qqqNavPoints += 1;
+            }
+          } else {
+            assert.equal(etf, AT1);
+            at1Rows += 1;
+            assert.equal(cellValue(table, 'nav_ticker', row), null);
+            assert.equal(stringCell(table, 'nav_source_ticker', row), AT1);
+            assert.equal(stringCell(table, 'nav_source_field', row), 'FUND_NET_ASSET_VAL');
+            assert.equal(stringCell(table, 'inav_ticker', row), AT1_INAV);
+            if (numberCell(table, 'nav_value', row) !== null) {
+              at1NavPoints += 1;
+            }
+          }
+        }
+        assert.ok(qqqRows > 0, 'expected QQQ history rows');
+        assert.ok(at1Rows > 0, 'expected AT1 history rows');
+        assert.ok(qqqNavPoints > 0, 'expected QQQ PX_LAST NAV points');
+        assert.ok(at1NavPoints > 0, 'expected AT1 FUND_NET_ASSET_VAL points');
+        console.log(
+          `  history -> rows=${table.numRows}, qqq=${qqqRows}/${qqqNavPoints}, at1=${at1Rows}/${at1NavPoints}`,
+        );
+      }));
+
+    it('opens the ETF NAV iNAV subscription on QXV Index and unsubscribes', async (t) =>
+      runCase(t, 'ETF NAV iNAV subscription', async () => {
+        const subscription = await engine!.subscribeEtfInav(QQQ);
+        try {
+          assert.deepEqual(subscription.tickers, [QQQ_INAV]);
+
+          const deadline = Date.now() + 60_000;
+          let lastPrice: number | null = null;
+          while (lastPrice === null) {
+            const remaining = deadline - Date.now();
+            assert.ok(remaining > 0, 'no QXV Index LAST_PRICE update within 60s');
+            const result = await withTimeout(subscription.next(), remaining, 'iNAV tick');
+            if (result.done) {
+              assert.fail('subscription ended before a LAST_PRICE update');
+            }
+            const tick = result.value;
+            if (tick.topic === QQQ_INAV) {
+              const value: unknown = tick.get('LAST_PRICE');
+              if (typeof value === 'number' && Number.isFinite(value)) {
+                lastPrice = value;
+              }
+            }
+          }
+          assert.ok(lastPrice > 0, 'expected a positive QXV Index LAST_PRICE');
+          console.log(`  iNAV subscription -> topic=${QQQ_INAV}, LAST_PRICE=${lastPrice}`);
+        } finally {
+          await subscription.unsubscribe();
+        }
       }));
   });
 });

@@ -9,6 +9,7 @@
 
 pub mod currency;
 pub mod error;
+pub mod etf;
 pub mod fixed_income;
 pub mod futures;
 pub mod historical;

@@ -12,7 +12,7 @@ use napi_derive::napi;
 
 use xbbg_ext::constants::{DVD_COLS, DVD_TYPES, ETF_COLS, FUTURES_MONTHS, MONTH_CODES};
 use xbbg_ext::markets::{self, sessions};
-use xbbg_ext::resolvers::cdx::{cdx_series_from_ticker, gen_to_specific, previous_series_ticker};
+use xbbg_ext::resolvers::cdx::{gen_to_specific, parse_cdx_ticker, previous_series_ticker};
 use xbbg_ext::resolvers::futures::{
     contract_index, filter_candidates_by_cycle, filter_valid_contracts,
     generate_futures_candidates, validate_generic_ticker, RollFrequency,
@@ -142,6 +142,7 @@ pub struct FuturesCandidateOutput {
 pub struct CdxTickerInfoOutput {
     pub index: String,
     pub series: String,
+    pub version: Option<u32>,
     pub tenor: String,
     pub asset: String,
     pub is_generic: bool,
@@ -385,10 +386,11 @@ pub fn ext_filter_valid_contracts(
 /// Parse a CDX ticker.
 #[napi]
 pub fn ext_parse_cdx_ticker(ticker: String) -> napi::Result<CdxTickerInfoOutput> {
-    let info = cdx_series_from_ticker(&ticker).map_err(ext_err)?;
+    let info = parse_cdx_ticker(&ticker).map_err(ext_err)?;
     Ok(CdxTickerInfoOutput {
         index: info.index,
         series: info.series,
+        version: info.version.map(|version| version.get()),
         tenor: info.tenor,
         asset: info.asset,
         is_generic: info.is_generic,

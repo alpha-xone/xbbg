@@ -369,9 +369,12 @@ export interface FuturesCurveOptions {
   backend?: BackendKind;
 }
 
-export interface ActiveCdxOptions {
+export interface CdxResolveOptions extends RecipeBackendOptions {
+  versionless?: boolean;
+}
+
+export interface ActiveCdxOptions extends CdxResolveOptions {
   lookbackDays?: number;
-  backend?: BackendKind;
 }
 
 export interface DividendOptions {
@@ -452,6 +455,7 @@ export interface FuturesCandidate {
 export interface CdxTickerInfo {
   index: string;
   series: string;
+  version?: number;
   tenor: string;
   asset: string;
   isGeneric: boolean;

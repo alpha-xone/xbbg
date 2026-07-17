@@ -205,11 +205,16 @@ export interface NativeEngine {
     fields: readonly string[] | null,
     maxContracts: number | undefined,
   ): Promise<NativeArrowZeroCopyBatch>;
-  recipeCdxTicker(genTicker: string, dt: string): Promise<NativeArrowZeroCopyBatch>;
+  recipeCdxTicker(
+    genTicker: string,
+    dt: string,
+    versionless?: boolean,
+  ): Promise<NativeArrowZeroCopyBatch>;
   recipeActiveCdx(
     genTicker: string,
     dt: string,
     lookbackDays: number | undefined,
+    versionless?: boolean,
   ): Promise<NativeArrowZeroCopyBatch>;
   recipeDividend(
     tickers: readonly string[],
@@ -253,6 +258,13 @@ export interface NativeEngine {
   ): Promise<NativeArrowZeroCopyBatch>;
   recipeResolveIsins(isins: readonly string[]): Promise<NativeArrowZeroCopyBatch>;
   recipeIssuerIsins(bondIsins: readonly string[]): Promise<NativeArrowZeroCopyBatch>;
+  recipeEtfNavRelationships(tickers: readonly string[]): Promise<NativeArrowZeroCopyBatch>;
+  recipeEtfNavSnapshot(tickers: readonly string[]): Promise<NativeArrowZeroCopyBatch>;
+  recipeEtfNavHistory(
+    tickers: readonly string[],
+    startDate: string,
+    endDate: string,
+  ): Promise<NativeArrowZeroCopyBatch>;
   recipeCurrencyConversion(
     ticker: string,
     targetCcy: string,

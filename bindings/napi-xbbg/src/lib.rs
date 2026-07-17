@@ -1538,11 +1538,17 @@ impl JsEngine {
         &self,
         gen_ticker: String,
         dt: String,
+        versionless: Option<bool>,
     ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
-        let batch = xbbg_recipes::futures::recipe_cdx_ticker(&engine, gen_ticker, dt)
-            .await
-            .map_err(recipe_error_to_napi)?;
+        let batch = xbbg_recipes::futures::recipe_cdx_ticker_with_options(
+            &engine,
+            gen_ticker,
+            dt,
+            versionless.unwrap_or(false),
+        )
+        .await
+        .map_err(recipe_error_to_napi)?;
         to_native_record_batch(batch)
     }
 
@@ -1552,12 +1558,18 @@ impl JsEngine {
         gen_ticker: String,
         dt: String,
         lookback_days: Option<i32>,
+        versionless: Option<bool>,
     ) -> napi::Result<NativeArrowBatch> {
         let engine = self.engine.clone();
-        let batch =
-            xbbg_recipes::futures::recipe_active_cdx(&engine, gen_ticker, dt, lookback_days)
-                .await
-                .map_err(recipe_error_to_napi)?;
+        let batch = xbbg_recipes::futures::recipe_active_cdx_with_options(
+            &engine,
+            gen_ticker,
+            dt,
+            lookback_days,
+            versionless.unwrap_or(false),
+        )
+        .await
+        .map_err(recipe_error_to_napi)?;
         to_native_record_batch(batch)
     }
 
@@ -1696,6 +1708,45 @@ impl JsEngine {
         let batch = xbbg_recipes::identifiers::recipe_issuer_isins(&engine, bond_isins)
             .await
             .map_err(recipe_error_to_napi)?;
+        to_native_record_batch(batch)
+    }
+
+    #[napi]
+    pub async fn recipe_etf_nav_relationships(
+        &self,
+        tickers: Vec<String>,
+    ) -> napi::Result<NativeArrowBatch> {
+        let engine = self.engine.clone();
+        let batch = xbbg_recipes::etf::recipe_etf_nav_relationships(&engine, tickers)
+            .await
+            .map_err(recipe_error_to_napi)?;
+        to_native_record_batch(batch)
+    }
+
+    #[napi]
+    pub async fn recipe_etf_nav_snapshot(
+        &self,
+        tickers: Vec<String>,
+    ) -> napi::Result<NativeArrowBatch> {
+        let engine = self.engine.clone();
+        let batch = xbbg_recipes::etf::recipe_etf_nav_snapshot(&engine, tickers)
+            .await
+            .map_err(recipe_error_to_napi)?;
+        to_native_record_batch(batch)
+    }
+
+    #[napi]
+    pub async fn recipe_etf_nav_history(
+        &self,
+        tickers: Vec<String>,
+        start_date: String,
+        end_date: String,
+    ) -> napi::Result<NativeArrowBatch> {
+        let engine = self.engine.clone();
+        let batch =
+            xbbg_recipes::etf::recipe_etf_nav_history(&engine, tickers, start_date, end_date)
+                .await
+                .map_err(recipe_error_to_napi)?;
         to_native_record_batch(batch)
     }
 

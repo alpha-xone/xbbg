@@ -57,6 +57,22 @@ pub fn as_string_col<'a>(batch: &'a RecordBatch, column: &str) -> Result<&'a Str
         .ok_or_else(|| RecipeError::Other(format!("'{column}' column must be Utf8")))
 }
 
+/// Clean a Bloomberg text value, mapping blank and sentinel values
+/// (`nan`, `n/a`, `#n/a`, `null`, case-insensitive) to `None`.
+pub(crate) fn clean_bloomberg_text(value: &str) -> Option<String> {
+    let text = value.trim();
+    if text.is_empty()
+        || text.eq_ignore_ascii_case("nan")
+        || text.eq_ignore_ascii_case("n/a")
+        || text.eq_ignore_ascii_case("#n/a")
+        || text.eq_ignore_ascii_case("null")
+    {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
 /// Return a lowercase alphanumeric key for matching Bloomberg sub-field labels.
 pub fn canonical_name(name: &str) -> String {
     name.chars()

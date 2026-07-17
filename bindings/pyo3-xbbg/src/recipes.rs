@@ -1,6 +1,6 @@
 //! PyO3 bindings for xbbg-recipes high-level Bloomberg workflows.
 //!
-//! Exposes all 12 recipe functions to Python via `#[pyfunction]` wrappers.
+//! Exposes all recipe functions to Python via `#[pyfunction]` wrappers.
 
 use pyo3::prelude::*;
 #[cfg(feature = "stub-gen")]
@@ -256,14 +256,16 @@ recipe_wrapper!(
     ///     engine: Bloomberg engine instance
     ///     gen_ticker: Generic CDX ticker (e.g., "CDX IG CDSI GEN 5Y Corp")
     ///     dt: Reference date (YYYYMMDD format)
+    ///     versionless: Return the versionless ticker form (default: false)
     #[cfg_attr(feature = "stub-gen", gen_stub_pyfunction)]
 #[pyfunction]
-    #[pyo3(signature = (engine, gen_ticker, dt))]
+    #[pyo3(signature = (engine, gen_ticker, dt, versionless=false))]
     |eng|
     fn recipe_cdx_ticker(
         gen_ticker: String,
         dt: String,
-    ) => xbbg_recipes::futures::recipe_cdx_ticker(&eng, gen_ticker, dt)
+        versionless: bool,
+    ) => xbbg_recipes::futures::recipe_cdx_ticker_with_options(&eng, gen_ticker, dt, versionless)
 );
 
 recipe_wrapper!(
@@ -274,15 +276,23 @@ recipe_wrapper!(
     ///     gen_ticker: Generic CDX ticker (e.g., "CDX IG CDSI GEN 5Y Corp")
     ///     dt: Reference date (YYYYMMDD format)
     ///     lookback_days: Lookback window for activity comparison (default: 10)
+    ///     versionless: Return the versionless ticker form (default: false)
     #[cfg_attr(feature = "stub-gen", gen_stub_pyfunction)]
 #[pyfunction]
-    #[pyo3(signature = (engine, gen_ticker, dt, lookback_days=None))]
+    #[pyo3(signature = (engine, gen_ticker, dt, lookback_days=None, versionless=false))]
     |eng|
     fn recipe_active_cdx(
         gen_ticker: String,
         dt: String,
         lookback_days: Option<i32>,
-    ) => xbbg_recipes::futures::recipe_active_cdx(&eng, gen_ticker, dt, lookback_days)
+        versionless: bool,
+    ) => xbbg_recipes::futures::recipe_active_cdx_with_options(
+        &eng,
+        gen_ticker,
+        dt,
+        lookback_days,
+        versionless,
+    )
 );
 
 // =============================================================================
@@ -457,6 +467,49 @@ recipe_wrapper!(
     ) => xbbg_recipes::identifiers::recipe_issuer_isins(&eng, bond_isins)
 );
 
+recipe_wrapper!(
+    /// Resolve ETF NAV / iNAV relationship targets via `ETF_NAV_TICKER` /
+    /// `ETF_INAV_TICKER`.
+    #[cfg_attr(feature = "stub-gen", gen_stub_pyfunction)]
+#[pyfunction]
+    #[pyo3(signature = (engine, etfs))]
+    |eng|
+    fn recipe_etf_nav_relationships(
+        etfs: Vec<String>,
+    ) => xbbg_recipes::etf::recipe_etf_nav_relationships(&eng, etfs)
+);
+
+recipe_wrapper!(
+    /// Fetch current ETF NAV / iNAV levels with `FUND_NET_ASSET_VAL`
+    /// fallback for missing daily NAV relationships.
+    #[cfg_attr(feature = "stub-gen", gen_stub_pyfunction)]
+#[pyfunction]
+    #[pyo3(signature = (engine, etfs))]
+    |eng|
+    fn recipe_etf_nav_snapshot(
+        etfs: Vec<String>,
+    ) => xbbg_recipes::etf::recipe_etf_nav_snapshot(&eng, etfs)
+);
+
+recipe_wrapper!(
+    /// Fetch daily ETF NAV / iNAV history between two dates.
+    ///
+    /// Args:
+    ///     engine: Bloomberg engine instance
+    ///     etfs: ETF securities to query
+    ///     start_date: Start date (YYYYMMDD format)
+    ///     end_date: End date (YYYYMMDD format)
+    #[cfg_attr(feature = "stub-gen", gen_stub_pyfunction)]
+#[pyfunction]
+    #[pyo3(signature = (engine, etfs, start_date, end_date))]
+    |eng|
+    fn recipe_etf_nav_history(
+        etfs: Vec<String>,
+        start_date: String,
+        end_date: String,
+    ) => xbbg_recipes::etf::recipe_etf_nav_history(&eng, etfs, start_date, end_date)
+);
+
 // =============================================================================
 // Currency Recipes
 // =============================================================================
@@ -509,6 +562,9 @@ pub fn register_recipes_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
         recipe_index_members,
         recipe_resolve_isins,
         recipe_issuer_isins,
+        recipe_etf_nav_relationships,
+        recipe_etf_nav_snapshot,
+        recipe_etf_nav_history,
         recipe_currency_conversion,
     )
 }

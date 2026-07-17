@@ -47,6 +47,7 @@ __all__ = [
     "ext_list_exchange_overrides",
     "ext_normalize_tickers",
     "ext_parse_cdx_ticker",
+    "ext_parse_cdx_version",
     "ext_parse_date",
     "ext_parse_ticker",
     "ext_pivot_to_wide",
@@ -67,6 +68,9 @@ __all__ = [
     "recipe_dividend",
     "recipe_dividend_yield",
     "recipe_etf_holdings",
+    "recipe_etf_nav_history",
+    "recipe_etf_nav_relationships",
+    "recipe_etf_nav_snapshot",
     "recipe_fut_ticker",
     "recipe_futures_curve",
     "recipe_index_members",
@@ -1153,6 +1157,11 @@ def ext_parse_cdx_ticker(ticker: builtins.str) -> tuple[builtins.str, builtins.s
     Returns: (index, series, tenor, asset, is_generic, series_num)
     """
 
+def ext_parse_cdx_version(ticker: builtins.str) -> typing.Optional[builtins.int]:
+    r"""
+    Parse the explicit version from a CDX ticker.
+    """
+
 def ext_parse_date(date_str: builtins.str) -> tuple[builtins.int, builtins.int, builtins.int]:
     r"""
     Parse a date string into components (year, month, day).
@@ -1215,7 +1224,7 @@ def get_log_level() -> builtins.str:
     Get the current Rust log level as a string.
     """
 
-def recipe_active_cdx(engine: PyEngine, gen_ticker: builtins.str, dt: builtins.str, lookback_days: typing.Optional[builtins.int] = None) -> typing.Any:
+def recipe_active_cdx(engine: PyEngine, gen_ticker: builtins.str, dt: builtins.str, lookback_days: typing.Optional[builtins.int] = None, versionless: builtins.bool = False) -> typing.Any:
     r"""
     Resolve the most active CDX series around a reference date.
     
@@ -1224,6 +1233,7 @@ def recipe_active_cdx(engine: PyEngine, gen_ticker: builtins.str, dt: builtins.s
         gen_ticker: Generic CDX ticker (e.g., "CDX IG CDSI GEN 5Y Corp")
         dt: Reference date (YYYYMMDD format)
         lookback_days: Lookback window for activity comparison (default: 10)
+        versionless: Return the versionless ticker form (default: false)
     """
 
 def recipe_active_futures(engine: PyEngine, gen_ticker: builtins.str, dt: builtins.str, freq: typing.Optional[builtins.str] = None) -> typing.Any:
@@ -1250,7 +1260,7 @@ def recipe_bqr(engine: PyEngine, ticker: builtins.str, start_datetime: builtins.
         include_broker_codes: Include broker/dealer codes (default: true)
     """
 
-def recipe_cdx_ticker(engine: PyEngine, gen_ticker: builtins.str, dt: builtins.str) -> typing.Any:
+def recipe_cdx_ticker(engine: PyEngine, gen_ticker: builtins.str, dt: builtins.str, versionless: builtins.bool = False) -> typing.Any:
     r"""
     Resolve a generic CDX ticker to the active specific series.
     
@@ -1258,6 +1268,7 @@ def recipe_cdx_ticker(engine: PyEngine, gen_ticker: builtins.str, dt: builtins.s
         engine: Bloomberg engine instance
         gen_ticker: Generic CDX ticker (e.g., "CDX IG CDSI GEN 5Y Corp")
         dt: Reference date (YYYYMMDD format)
+        versionless: Return the versionless ticker form (default: false)
     """
 
 def recipe_corporate_bonds(engine: PyEngine, ticker: builtins.str, ccy: typing.Optional[builtins.str] = None, fields: typing.Optional[typing.Sequence[builtins.str]] = None, active_only: builtins.bool = True) -> typing.Any:
@@ -1317,6 +1328,29 @@ def recipe_etf_holdings(engine: PyEngine, etf_ticker: builtins.str, fields: typi
         engine: Bloomberg engine instance
         etf_ticker: ETF ticker (e.g., "SPY US Equity")
         fields: Additional fields beyond defaults (id_isin, weights, id().position)
+    """
+
+def recipe_etf_nav_history(engine: PyEngine, etfs: typing.Sequence[builtins.str], start_date: builtins.str, end_date: builtins.str) -> typing.Any:
+    r"""
+    Fetch daily ETF NAV / iNAV history between two dates.
+
+    Args:
+        engine: Bloomberg engine instance
+        etfs: ETF securities to query
+        start_date: Start date (YYYYMMDD format)
+        end_date: End date (YYYYMMDD format)
+    """
+
+def recipe_etf_nav_relationships(engine: PyEngine, etfs: typing.Sequence[builtins.str]) -> typing.Any:
+    r"""
+    Resolve ETF NAV / iNAV relationship targets via `ETF_NAV_TICKER` /
+    `ETF_INAV_TICKER`.
+    """
+
+def recipe_etf_nav_snapshot(engine: PyEngine, etfs: typing.Sequence[builtins.str]) -> typing.Any:
+    r"""
+    Fetch current ETF NAV / iNAV levels with `FUND_NET_ASSET_VAL`
+    fallback for missing daily NAV relationships.
     """
 
 def recipe_fut_ticker(engine: PyEngine, gen_ticker: builtins.str, dt: builtins.str, freq: typing.Optional[builtins.str] = None) -> typing.Any:

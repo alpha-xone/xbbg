@@ -11,7 +11,9 @@ use pyo3::types::PyDict;
 use pyo3_stub_gen::derive::*;
 
 use xbbg_ext::constants::{DVD_TYPES, FUTURES_MONTHS, MONTH_CODES};
-use xbbg_ext::resolvers::cdx::{cdx_series_from_ticker, gen_to_specific, previous_series_ticker};
+use xbbg_ext::resolvers::cdx::{
+    cdx_series_from_ticker, gen_to_specific, parse_cdx_ticker, previous_series_ticker,
+};
 use xbbg_ext::resolvers::futures::{
     contract_index, filter_candidates_by_cycle, filter_valid_contracts,
     generate_futures_candidates, validate_generic_ticker, RollFrequency,
@@ -212,6 +214,14 @@ fn ext_parse_cdx_ticker(
         info.is_generic,
         info.series_num,
     ))
+}
+
+/// Parse the explicit version from a CDX ticker.
+#[cfg_attr(feature = "stub-gen", gen_stub_pyfunction)]
+#[pyfunction]
+fn ext_parse_cdx_version(ticker: &str) -> PyResult<Option<u32>> {
+    let info = parse_cdx_ticker(ticker).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(info.version.map(|version| version.get()))
 }
 
 /// Get the previous series ticker for a CDX index.
@@ -553,6 +563,7 @@ pub fn register_ext_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
         ext_validate_generic_ticker,
         ext_contract_index,
         ext_parse_cdx_ticker,
+        ext_parse_cdx_version,
         ext_previous_cdx_series,
         ext_cdx_gen_to_specific,
         ext_build_fx_pair,

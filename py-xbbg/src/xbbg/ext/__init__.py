@@ -11,6 +11,7 @@ Extension Categories:
     - currency: convert_ccy()
     - indices: index_members()
     - identifiers: resolve_isins(), issuer_isins()
+    - etf: etf_nav_relationships(), etf_nav_snapshot(), etf_nav_history(), subscribe_etf_inav()
     - fixed_income: yas(), preferreds(), corporate_bonds(), bqr()
     - bonds: bond_info(), bond_risk(), bond_spreads(), bond_cashflows(), bond_key_rates(), bond_curve()
     - options: option_info(), option_greeks(), option_pricing(), option_chain(), option_chain_bql(), option_screen()
@@ -23,6 +24,7 @@ Async versions (primary implementations):
     - currency: aconvert_ccy()
     - indices: aindex_members()
     - identifiers: aresolve_isins(), aissuer_isins()
+    - etf: aetf_nav_relationships(), aetf_nav_snapshot(), aetf_nav_history(), asubscribe_etf_inav()
     - fixed_income: ayas(), apreferreds(), acorporate_bonds(), abqr()
     - bonds: abond_info(), abond_risk(), abond_spreads(), abond_cashflows(), abond_key_rates(), abond_curve()
     - options: aoption_info(), aoption_greeks(), aoption_pricing(), aoption_chain(), aoption_chain_bql(), aoption_screen()
@@ -160,6 +162,16 @@ from xbbg.ext.cdx import (
     cdx_risk,
 )
 from xbbg.ext.currency import aconvert_ccy, convert_ccy
+from xbbg.ext.etf import (
+    aetf_nav_history,
+    aetf_nav_relationships,
+    aetf_nav_snapshot,
+    asubscribe_etf_inav,
+    etf_nav_history,
+    etf_nav_relationships,
+    etf_nav_snapshot,
+    subscribe_etf_inav,
+)
 from xbbg.ext.identifiers import aissuer_isins, aresolve_isins, issuer_isins, resolve_isins
 from xbbg.ext.indices import aindex_members, index_members
 
@@ -298,6 +310,16 @@ __all__ = [
     "aresolve_isins",
     "issuer_isins",
     "aissuer_isins",
+    # ETF NAV extensions (sync)
+    "etf_nav_relationships",
+    "etf_nav_snapshot",
+    "etf_nav_history",
+    "subscribe_etf_inav",
+    # ETF NAV extensions (async)
+    "aetf_nav_relationships",
+    "aetf_nav_snapshot",
+    "aetf_nav_history",
+    "asubscribe_etf_inav",
     # Fixed income extensions (sync)
     "yas",
     "YieldType",

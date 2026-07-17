@@ -50,6 +50,7 @@ import type {
   BsrchOptions,
   BtaOptions,
   CdxOptions,
+  CdxResolveOptions,
   CdxTickerInfo,
   CorporateBondsOptions,
   DateLike,
@@ -337,6 +338,117 @@ const MKTDATA_SERVICE = '//blp/mktdata';
 
 function toArrowTableFromNative(batch: NativeArrowZeroCopyBatch): Table & ResultMetadata {
   return attachResultMetadata(tableFromNativeArrowBatch(batch), batch.metadata);
+}
+
+const ETF_NAV_RELATIONSHIP_NOT_ONE_TO_ONE =
+  'ETF NAV relationship result is not one-to-one with requested ETFs';
+
+function firstSeenDuplicates(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) {
+      if (!duplicates.includes(value)) {
+        duplicates.push(value);
+      }
+    } else {
+      seen.add(value);
+    }
+  }
+  return duplicates;
+}
+
+/**
+ * Validate an ETF NAV relationship table and return one iNAV ticker per ETF.
+ *
+ * Enforces one row per `input_order` with exact ordered `etf_ticker`
+ * identity, no iNAV validation errors, no missing iNAV relationships, and an
+ * unambiguous iNAV reverse mapping — all before any subscription is opened.
+ */
+function validatedInavTickers(etfList: readonly string[], table: Table): string[] {
+  const malformed = (): BlpValidationError =>
+    new BlpValidationError(ETF_NAV_RELATIONSHIP_NOT_ONE_TO_ONE, { element: 'tickers' });
+
+  const inputOrder = table.getChild('input_order');
+  const etfTicker = table.getChild('etf_ticker');
+  const inavTicker = table.getChild('inav_ticker');
+  const inavValidationError = table.getChild('inav_validation_error');
+  if (
+    inputOrder === null ||
+    etfTicker === null ||
+    inavTicker === null ||
+    inavValidationError === null
+  ) {
+    throw malformed();
+  }
+  if (table.numRows !== etfList.length) {
+    throw malformed();
+  }
+
+  const rowByOrder = new Map<number, number>();
+  for (let rowIndex = 0; rowIndex < table.numRows; rowIndex += 1) {
+    const order: unknown = inputOrder.get(rowIndex);
+    if (typeof order !== 'number' || rowByOrder.has(order)) {
+      throw malformed();
+    }
+    rowByOrder.set(order, rowIndex);
+  }
+
+  const rows: { etf: string; rowIndex: number }[] = [];
+  for (const [index, etf] of etfList.entries()) {
+    const rowIndex = rowByOrder.get(index);
+    if (rowIndex === undefined || etfTicker.get(rowIndex) !== etf) {
+      throw malformed();
+    }
+    rows.push({ etf, rowIndex });
+  }
+
+  for (const { etf, rowIndex } of rows) {
+    const validationError: unknown = inavValidationError.get(rowIndex);
+    if (typeof validationError === 'string' && validationError.trim().length > 0) {
+      throw new BlpValidationError(`Invalid iNAV relationship for ETF ${etf}: ${validationError}`, {
+        element: 'tickers',
+      });
+    }
+  }
+
+  const pairs = rows.map(({ etf, rowIndex }) => {
+    const raw: unknown = inavTicker.get(rowIndex);
+    const trimmed = typeof raw === 'string' ? raw.trim() : '';
+    return { etf, inav: trimmed.length > 0 ? trimmed : null };
+  });
+
+  const missing = pairs.filter(({ inav }) => inav === null).map(({ etf }) => etf);
+  if (missing.length > 0) {
+    throw new BlpValidationError(
+      `Missing valid iNAV relationship for ETFs: ${missing.join(', ')}`,
+      { element: 'tickers' },
+    );
+  }
+
+  const resolved = pairs.flatMap(({ etf, inav }) => (inav === null ? [] : [{ etf, inav }]));
+  const owners = new Map<string, string[]>();
+  for (const { etf, inav } of resolved) {
+    const list = owners.get(inav);
+    if (list === undefined) {
+      owners.set(inav, [etf]);
+    } else {
+      list.push(etf);
+    }
+  }
+  for (const { inav } of resolved) {
+    const etfs = owners.get(inav);
+    if (etfs !== undefined && etfs.length > 1) {
+      throw new BlpValidationError(
+        `Ambiguous iNAV reverse mapping for ${inav}: ${etfs.join(', ')}`,
+        {
+          element: 'tickers',
+        },
+      );
+    }
+  }
+
+  return resolved.map(({ inav }) => inav);
 }
 
 const METADATA_KEY_EID_DATA = 'xbbg.eid_data';
@@ -2156,13 +2268,14 @@ export class Engine {
   public async cdxTicker(
     genTicker: string,
     dt: DateLike,
-    options: RecipeBackendOptions = {},
+    options: CdxResolveOptions = {},
   ): Promise<unknown> {
     const backend = normalizeBackend(options.backend);
     try {
       const buffer = await this.inner.recipeCdxTicker(
         toRequestString(genTicker),
         formatDate(dt) ?? '',
+        options.versionless ?? false,
       );
       return nativeArrowToBackend(buffer, backend);
     } catch (error) {
@@ -2181,6 +2294,7 @@ export class Engine {
         toRequestString(genTicker),
         formatDate(dt) ?? '',
         options.lookbackDays ?? undefined,
+        options.versionless ?? false,
       );
       return nativeArrowToBackend(buffer, backend);
     } catch (error) {
@@ -2326,6 +2440,91 @@ export class Engine {
     } catch (error) {
       throw wrapError(error);
     }
+  }
+
+  public async etfNavRelationships(
+    tickers: string | readonly string[],
+    options: RecipeBackendOptions = {},
+  ): Promise<unknown> {
+    const backend = normalizeBackend(options.backend);
+    try {
+      const buffer = await this.inner.recipeEtfNavRelationships(
+        toStringArray(tickers).map((ticker) => ticker.trim()),
+      );
+      return nativeArrowToBackend(buffer, backend);
+    } catch (error) {
+      throw wrapError(error);
+    }
+  }
+
+  public async etfNavSnapshot(
+    tickers: string | readonly string[],
+    options: RecipeBackendOptions = {},
+  ): Promise<unknown> {
+    const backend = normalizeBackend(options.backend);
+    try {
+      const buffer = await this.inner.recipeEtfNavSnapshot(
+        toStringArray(tickers).map((ticker) => ticker.trim()),
+      );
+      return nativeArrowToBackend(buffer, backend);
+    } catch (error) {
+      throw wrapError(error);
+    }
+  }
+
+  public async etfNavHistory(
+    tickers: string | readonly string[],
+    startDate: DateLike,
+    endDate: DateLike,
+    options: RecipeBackendOptions = {},
+  ): Promise<unknown> {
+    const backend = normalizeBackend(options.backend);
+    try {
+      const buffer = await this.inner.recipeEtfNavHistory(
+        toStringArray(tickers).map((ticker) => ticker.trim()),
+        formatDate(startDate) ?? '',
+        formatDate(endDate) ?? '',
+      );
+      return nativeArrowToBackend(buffer, backend);
+    } catch (error) {
+      throw wrapError(error);
+    }
+  }
+
+  /**
+   * Subscribe to real-time iNAV updates for ETFs after atomic preflight.
+   *
+   * Resolves every source ETF's validated iNAV Index target first and only
+   * then opens one stream over the resolved iNAV tickers. Stream topics are
+   * the normalized iNAV tickers, so dynamic `add`/`remove` on the returned
+   * subscription expect already-resolved iNAV tickers, not source ETFs.
+   */
+  public async subscribeEtfInav(
+    tickers: string | readonly string[],
+    options: StreamOptions = {},
+  ): Promise<Subscription> {
+    const etfList = toStringArray(tickers).map((ticker) => ticker.trim());
+    if (etfList.length === 0) {
+      throw new BlpValidationError('etfs must not be empty', { element: 'tickers' });
+    }
+    const duplicates = firstSeenDuplicates(etfList);
+    if (duplicates.length > 0) {
+      throw new BlpValidationError(
+        `Duplicate ETF inputs are not allowed: ${duplicates.join(', ')}`,
+        { element: 'tickers' },
+      );
+    }
+
+    let relationships: Table;
+    try {
+      relationships = toArrowTableFromNative(await this.inner.recipeEtfNavRelationships(etfList));
+    } catch (error) {
+      throw wrapError(error);
+    }
+    const inavTickers = validatedInavTickers(etfList, relationships);
+
+    const { fields = ['LAST_PRICE'], ...streamOptions } = options;
+    return await this.subscribe(inavTickers, fields, streamOptions);
   }
 
   public async currencyConversion(
@@ -2645,6 +2844,7 @@ export type {
   BsrchOptions,
   BtaOptions,
   CdxOptions,
+  CdxResolveOptions,
   CdxTickerInfo,
   CorporateBondsOptions,
   DateLike,

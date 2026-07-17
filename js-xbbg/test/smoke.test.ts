@@ -12,7 +12,7 @@ import type {
   SeatType,
   StreamOptions,
 } from '../src/index';
-import type { NativeArrowZeroCopyBatch } from '../src/napi';
+import type { NativeArrowColumn, NativeArrowZeroCopyBatch } from '../src/napi';
 import type { RequestInput } from '../src/types';
 
 const SESSION_HOST = process.env.XBBG_HOST ?? 'localhost';
@@ -62,6 +62,17 @@ function metadataBatch(metadata: Record<string, string>): NativeArrowZeroCopyBat
     metadata,
     numRows: 0,
   };
+}
+
+async function expectValidationError(promise: Promise<unknown>, message: string): Promise<void> {
+  const error = await promise.then(
+    () => null,
+    (raised: unknown) => raised,
+  );
+  expect(error).toBeInstanceOf(api.BlpValidationError);
+  const validation = error as InstanceType<typeof api.BlpValidationError>;
+  expect(validation.message).toBe(message);
+  expect(validation.element).toBe('tickers');
 }
 
 function captureRequests(): api.Engine & { readonly calls: RequestInput[] } {
@@ -1089,6 +1100,18 @@ describe('recipe wrapper forwarding', () => {
         calls.issuerIsins = args;
         throw new Error('stop');
       },
+      recipeEtfNavRelationships: async (...args: unknown[]) => {
+        calls.etfNavRelationships = args;
+        throw new Error('stop');
+      },
+      recipeEtfNavSnapshot: async (...args: unknown[]) => {
+        calls.etfNavSnapshot = args;
+        throw new Error('stop');
+      },
+      recipeEtfNavHistory: async (...args: unknown[]) => {
+        calls.etfNavHistory = args;
+        throw new Error('stop');
+      },
     };
 
     await expect(
@@ -1120,6 +1143,13 @@ describe('recipe wrapper forwarding', () => {
     ).rejects.toThrow('stop');
     await expect(engine.resolveIsins(['US0378331005', 'BAD'])).rejects.toThrow('stop');
     await expect(engine.issuerIsins('US037833FB15')).rejects.toThrow('stop');
+    await expect(engine.etfNavRelationships([' QQQ US Equity ', 'AT1 LN Equity'])).rejects.toThrow(
+      'stop',
+    );
+    await expect(engine.etfNavSnapshot('QQQ US Equity')).rejects.toThrow('stop');
+    await expect(
+      engine.etfNavHistory([' QQQ US Equity ', 'AT1 LN Equity'], '2026-06-01', '2026-07-01'),
+    ).rejects.toThrow('stop');
 
     expect(calls.futuresCurve).toStrictEqual([
       'ES1 Index',
@@ -1149,6 +1179,363 @@ describe('recipe wrapper forwarding', () => {
     expect(calls.indexMembers).toStrictEqual(['SPX Index', 'INDX_MWEIGHT', '20240102']);
     expect(calls.resolveIsins).toStrictEqual([['US0378331005', 'BAD']]);
     expect(calls.issuerIsins).toStrictEqual([['US037833FB15']]);
+    expect(calls.etfNavRelationships).toStrictEqual([['QQQ US Equity', 'AT1 LN Equity']]);
+    expect(calls.etfNavSnapshot).toStrictEqual([['QQQ US Equity']]);
+    expect(calls.etfNavHistory).toStrictEqual([
+      ['QQQ US Equity', 'AT1 LN Equity'],
+      '20260601',
+      '20260701',
+    ]);
+  });
+});
+
+describe('subscribeEtfInav preflight', () => {
+  const QQQ = 'QQQ US Equity';
+  const AT1 = 'AT1 LN Equity';
+  const QQQ_NAV = 'QQQNV Index';
+  const QQQ_INAV = 'QXV Index';
+  const AT1_INAV = 'AT1IN Index';
+
+  function int32Column(name: string, values: readonly number[]): NativeArrowColumn {
+    return {
+      name,
+      type: 'int32',
+      nullable: false,
+      length: values.length,
+      nullCount: 0,
+      data: typedBuffer(new Int32Array(values)),
+    };
+  }
+
+  // Arrow validity bits; each row's bit is set once, so addition equals OR.
+  const VALIDITY_BITS = [1, 2, 4, 8, 16, 32, 64, 128] as const;
+
+  function utf8Column(name: string, values: readonly (string | null)[]): NativeArrowColumn {
+    const offsets = new Int32Array(values.length + 1);
+    const bitmap = new Uint8Array(Math.max(1, Math.ceil(values.length / 8)));
+    let text = '';
+    let nullCount = 0;
+    for (const [index, value] of values.entries()) {
+      if (value === null) {
+        nullCount += 1;
+      } else {
+        text += value;
+        const byteIndex = Math.floor(index / 8);
+        bitmap[byteIndex] = (bitmap[byteIndex] ?? 0) + (VALIDITY_BITS[index % 8] ?? 0);
+      }
+      offsets[index + 1] = Buffer.byteLength(text);
+    }
+    return {
+      name,
+      type: 'utf8',
+      nullable: true,
+      length: values.length,
+      nullCount,
+      ...(nullCount > 0 ? { nullBitmap: Buffer.from(bitmap) } : {}),
+      offsets: typedBuffer(offsets),
+      data: Buffer.from(text),
+    };
+  }
+
+  interface RelationshipFixtureRow {
+    inputOrder: number;
+    etfTicker: string;
+    navTicker?: string | null;
+    inavTicker: string | null;
+    inavValidationError?: string | null;
+  }
+
+  function relationshipBatch(rows: readonly RelationshipFixtureRow[]): NativeArrowZeroCopyBatch {
+    const navTickers = rows.map((row) => row.navTicker ?? null);
+    const inavTickers = rows.map((row) => row.inavTicker);
+    return {
+      columns: [
+        int32Column(
+          'input_order',
+          rows.map((row) => row.inputOrder),
+        ),
+        utf8Column(
+          'etf_ticker',
+          rows.map((row) => row.etfTicker),
+        ),
+        utf8Column('nav_ticker', navTickers),
+        utf8Column(
+          'nav_market_sector_des',
+          navTickers.map((ticker) => (ticker === null ? null : 'Index')),
+        ),
+        utf8Column(
+          'nav_name',
+          navTickers.map((ticker) => (ticker === null ? null : `${ticker} name`)),
+        ),
+        utf8Column(
+          'nav_validation_error',
+          rows.map(() => null),
+        ),
+        utf8Column('inav_ticker', inavTickers),
+        utf8Column(
+          'inav_market_sector_des',
+          inavTickers.map((ticker) => (ticker === null ? null : 'Index')),
+        ),
+        utf8Column(
+          'inav_name',
+          inavTickers.map((ticker) => (ticker === null ? null : `${ticker} name`)),
+        ),
+        utf8Column(
+          'inav_validation_error',
+          rows.map((row) => row.inavValidationError ?? null),
+        ),
+      ],
+      kind: 'zeroCopy',
+      metadata: {},
+      numRows: rows.length,
+    };
+  }
+
+  function qqqAt1Batch(): NativeArrowZeroCopyBatch {
+    return relationshipBatch([
+      { inputOrder: 0, etfTicker: QQQ, navTicker: QQQ_NAV, inavTicker: QQQ_INAV },
+      { inputOrder: 1, etfTicker: AT1, inavTicker: AT1_INAV },
+    ]);
+  }
+
+  interface SubscribeCall {
+    tickers: readonly string[];
+    fields: readonly string[];
+    options: Record<string, unknown>;
+  }
+
+  function preflightHarness(batchFactory: () => NativeArrowZeroCopyBatch): {
+    engine: api.Engine;
+    recipeCalls: unknown[][];
+    subscribeCalls: SubscribeCall[];
+    subscription: object;
+  } {
+    const engine = Object.create(api.Engine.prototype) as api.Engine;
+    const recipeCalls: unknown[][] = [];
+    const subscribeCalls: SubscribeCall[] = [];
+    const subscription = {};
+    Reflect.set(engine, 'inner', {
+      recipeEtfNavRelationships: async (...args: unknown[]) => {
+        recipeCalls.push(args);
+        return batchFactory();
+      },
+    });
+    Reflect.set(
+      engine,
+      'subscribe',
+      async (
+        tickers: readonly string[],
+        fields: readonly string[],
+        options: Record<string, unknown>,
+      ) => {
+        subscribeCalls.push({ tickers, fields, options });
+        return subscription;
+      },
+    );
+    return { engine, recipeCalls, subscribeCalls, subscription };
+  }
+
+  it('delegates validated iNAV topics with default LAST_PRICE', async () => {
+    const { engine, recipeCalls, subscribeCalls, subscription } = preflightHarness(qqqAt1Batch);
+
+    const result = await engine.subscribeEtfInav([` ${QQQ} `, AT1]);
+
+    expect(result).toBe(subscription);
+    expect(recipeCalls).toStrictEqual([[[QQQ, AT1]]]);
+    expect(subscribeCalls).toStrictEqual([
+      { tickers: [QQQ_INAV, AT1_INAV], fields: ['LAST_PRICE'], options: {} },
+    ]);
+  });
+
+  it('honors a custom fields override and forwards remaining stream options', async () => {
+    const { engine, subscribeCalls } = preflightHarness(() =>
+      relationshipBatch([
+        { inputOrder: 0, etfTicker: QQQ, navTicker: QQQ_NAV, inavTicker: QQQ_INAV },
+      ]),
+    );
+
+    await engine.subscribeEtfInav(QQQ, {
+      fields: ['BID', 'ASK'],
+      conflate: true,
+      flushThreshold: 5,
+      overflowPolicy: 'block',
+      streamCapacity: 128,
+      allFields: true,
+      options: ['interval=2'],
+    });
+
+    expect(subscribeCalls).toStrictEqual([
+      {
+        tickers: [QQQ_INAV],
+        fields: ['BID', 'ASK'],
+        options: {
+          conflate: true,
+          flushThreshold: 5,
+          overflowPolicy: 'block',
+          streamCapacity: 128,
+          allFields: true,
+          options: ['interval=2'],
+        },
+      },
+    ]);
+  });
+
+  it('rejects empty input before native resolution', async () => {
+    const { engine, recipeCalls, subscribeCalls } = preflightHarness(qqqAt1Batch);
+
+    await expectValidationError(engine.subscribeEtfInav([]), 'etfs must not be empty');
+
+    expect(recipeCalls).toStrictEqual([]);
+    expect(subscribeCalls).toStrictEqual([]);
+  });
+
+  it('rejects duplicate trimmed inputs before native resolution', async () => {
+    const { engine, recipeCalls, subscribeCalls } = preflightHarness(qqqAt1Batch);
+
+    await expectValidationError(
+      engine.subscribeEtfInav([QQQ, AT1, ` ${QQQ} `, AT1]),
+      `Duplicate ETF inputs are not allowed: ${QQQ}, ${AT1}`,
+    );
+
+    expect(recipeCalls).toStrictEqual([]);
+    expect(subscribeCalls).toStrictEqual([]);
+  });
+
+  it('rejects an invalid iNAV relationship before opening a stream', async () => {
+    const { engine, recipeCalls, subscribeCalls } = preflightHarness(() =>
+      relationshipBatch([
+        { inputOrder: 0, etfTicker: QQQ, navTicker: QQQ_NAV, inavTicker: QQQ_INAV },
+        {
+          inputOrder: 1,
+          etfTicker: AT1,
+          inavTicker: AT1_INAV,
+          inavValidationError: 'NAME is missing',
+        },
+      ]),
+    );
+
+    await expectValidationError(
+      engine.subscribeEtfInav([QQQ, AT1]),
+      `Invalid iNAV relationship for ETF ${AT1}: NAME is missing`,
+    );
+
+    expect(recipeCalls).toHaveLength(1);
+    expect(subscribeCalls).toStrictEqual([]);
+  });
+
+  it('collects every missing iNAV relationship in request order', async () => {
+    const { engine, subscribeCalls } = preflightHarness(() =>
+      relationshipBatch([
+        { inputOrder: 0, etfTicker: QQQ, navTicker: QQQ_NAV, inavTicker: null },
+        { inputOrder: 1, etfTicker: AT1, inavTicker: '   ' },
+        { inputOrder: 2, etfTicker: 'SPY US Equity', inavTicker: 'SPYIV Index' },
+      ]),
+    );
+
+    await expectValidationError(
+      engine.subscribeEtfInav([QQQ, AT1, 'SPY US Equity']),
+      `Missing valid iNAV relationship for ETFs: ${QQQ}, ${AT1}`,
+    );
+
+    expect(subscribeCalls).toStrictEqual([]);
+  });
+
+  it('rejects an ambiguous iNAV reverse mapping', async () => {
+    const { engine, subscribeCalls } = preflightHarness(() =>
+      relationshipBatch([
+        { inputOrder: 0, etfTicker: QQQ, navTicker: QQQ_NAV, inavTicker: QQQ_INAV },
+        { inputOrder: 1, etfTicker: 'QQQM US Equity', inavTicker: QQQ_INAV },
+      ]),
+    );
+
+    await expectValidationError(
+      engine.subscribeEtfInav([QQQ, 'QQQM US Equity']),
+      `Ambiguous iNAV reverse mapping for ${QQQ_INAV}: ${QQQ}, QQQM US Equity`,
+    );
+
+    expect(subscribeCalls).toStrictEqual([]);
+  });
+
+  it('rejects malformed relationship results atomically', async () => {
+    const malformedBatches: (() => NativeArrowZeroCopyBatch)[] = [
+      // Too few rows.
+      () => relationshipBatch([{ inputOrder: 0, etfTicker: QQQ, inavTicker: QQQ_INAV }]),
+      // Duplicate input_order.
+      () =>
+        relationshipBatch([
+          { inputOrder: 0, etfTicker: QQQ, inavTicker: QQQ_INAV },
+          { inputOrder: 0, etfTicker: AT1, inavTicker: AT1_INAV },
+        ]),
+      // Mismatched etf_ticker identity.
+      () =>
+        relationshipBatch([
+          { inputOrder: 0, etfTicker: QQQ, inavTicker: QQQ_INAV },
+          { inputOrder: 1, etfTicker: 'WRONG US Equity', inavTicker: AT1_INAV },
+        ]),
+      // Missing required vector.
+      () => ({
+        columns: [
+          int32Column('input_order', [0, 1]),
+          utf8Column('etf_ticker', [QQQ, AT1]),
+          utf8Column('inav_ticker', [QQQ_INAV, AT1_INAV]),
+        ],
+        kind: 'zeroCopy',
+        metadata: {},
+        numRows: 2,
+      }),
+    ];
+
+    for (const batchFactory of malformedBatches) {
+      const { engine, subscribeCalls } = preflightHarness(batchFactory);
+      await expectValidationError(
+        engine.subscribeEtfInav([QQQ, AT1]),
+        'ETF NAV relationship result is not one-to-one with requested ETFs',
+      );
+      expect(subscribeCalls).toStrictEqual([]);
+    }
+  });
+});
+
+describe('cdx recipe options', () => {
+  it('forwards canonical defaults and versionless presentation', async () => {
+    const cdxCalls: unknown[][] = [];
+    const activeCalls: unknown[][] = [];
+    const inner = {
+      recipeCdxTicker: async (...args: unknown[]) => {
+        cdxCalls.push(args);
+        return metadataBatch({});
+      },
+      recipeActiveCdx: async (...args: unknown[]) => {
+        activeCalls.push(args);
+        return metadataBatch({});
+      },
+    };
+    const engine = Object.create(api.Engine.prototype) as api.Engine;
+    Object.defineProperty(engine, 'inner', { value: inner });
+    const generic = 'CDX HY CDSI GEN 5Y Corp';
+
+    await engine.cdxTicker(generic, '20260717', { backend: api.Backend.JSON });
+    await engine.cdxTicker(generic, '20260717', {
+      backend: api.Backend.JSON,
+      versionless: true,
+    });
+    await engine.activeCdx(generic, '20260717', {
+      backend: api.Backend.JSON,
+      lookbackDays: 7,
+    });
+    await engine.activeCdx(generic, '20260717', {
+      backend: api.Backend.JSON,
+      versionless: true,
+    });
+
+    expect(cdxCalls).toStrictEqual([
+      [generic, '20260717', false],
+      [generic, '20260717', true],
+    ]);
+    expect(activeCalls).toStrictEqual([
+      [generic, '20260717', 7, false],
+      [generic, '20260717', undefined, true],
+    ]);
   });
 });
 
@@ -1198,6 +1585,10 @@ describe('engine instantiation', () => {
         'indexMembers',
         'resolveIsins',
         'issuerIsins',
+        'etfNavRelationships',
+        'etfNavSnapshot',
+        'etfNavHistory',
+        'subscribeEtfInav',
         'currencyConversion',
         'subscribe',
         'subscribeWithOptions',

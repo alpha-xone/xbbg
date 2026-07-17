@@ -18,7 +18,9 @@ use arrow_schema::{DataType, Field, Schema};
 use chrono::{Datelike, Duration, NaiveDate};
 use xbbg_async::engine::{Engine, ExtractorType, RequestParams};
 use xbbg_async::services::{Operation, Service};
-use xbbg_ext::resolvers::cdx::{cdx_series_from_ticker, gen_to_specific, previous_series_ticker};
+use xbbg_ext::resolvers::cdx::{
+    build_resolved_cdx_ticker_with_options, gen_to_specific, parse_cdx_ticker, ResolvedCdxInfo,
+};
 use xbbg_ext::resolvers::futures::{
     contract_index, generate_futures_candidates, validate_generic_ticker, RollFrequency,
 };
@@ -297,125 +299,71 @@ pub async fn recipe_futures_curve(
     build_futures_curve_batch(&rows, &extra_fields)
 }
 
-/// Resolve a generic CDX ticker (`GEN`) to the active specific series (`Sxx`).
+/// Resolve a generic CDX ticker (`GEN`) to a canonical specific series.
 ///
-/// Workflow:
-/// 1. Parse `dt` and validate CDX generic ticker structure.
-/// 2. Query Bloomberg `ROLLING_SERIES` and `CDS_FIRST_ACCRUAL_START_DATE`.
-/// 3. Convert generic ticker to specific via `gen_to_specific`.
-/// 4. If `dt` is before accrual start, roll back one series when possible.
-/// 5. Return resolved specific ticker as a single-row `RecordBatch`.
-///
-/// # Arguments
-///
-/// * `engine` - Bloomberg engine reference
-/// * `gen_ticker` - Generic CDX ticker (e.g. `CDX IG CDSI GEN 5Y Corp`)
-/// * `dt` - Reference date (`YYYYMMDD`)
+/// The result always includes an explicit `Vn`, including V1.
 pub async fn recipe_cdx_ticker(
     engine: &Engine,
     gen_ticker: String,
     dt: String,
 ) -> Result<RecordBatch> {
-    let dt_parsed = parse_date(&dt)?;
-
-    let cdx_info = cdx_series_from_ticker(&gen_ticker)?;
-    if !cdx_info.is_generic {
-        return Err(RecipeError::InvalidArgument(format!(
-            "'{gen_ticker}' must be a generic CDX ticker containing GEN"
-        )));
-    }
-
-    let params = RequestParams {
-        service: Service::RefData.to_string(),
-        operation: Operation::ReferenceData.to_string(),
-        securities: Some(vec![gen_ticker.clone()]),
-        fields: Some(vec![
-            "ROLLING_SERIES".to_string(),
-            "CDS_FIRST_ACCRUAL_START_DATE".to_string(),
-        ]),
-        ..Default::default()
-    };
-
-    let batch = engine.request(params).await?;
-    let series_raw = extract_refdata_string_for_ticker(&batch, &gen_ticker, "ROLLING_SERIES")?
-        .ok_or_else(|| {
-            RecipeError::Other(format!(
-                "missing ROLLING_SERIES for '{gen_ticker}' in Bloomberg response"
-            ))
-        })?;
-
-    let series = parse_series_number(&series_raw).ok_or_else(|| {
-        RecipeError::Other(format!(
-            "unable to parse ROLLING_SERIES='{series_raw}' for '{gen_ticker}'"
-        ))
-    })?;
-
-    let accrual_dt =
-        extract_refdata_date_for_ticker(&batch, &gen_ticker, "CDS_FIRST_ACCRUAL_START_DATE")?;
-
-    let resolved_series = if accrual_dt.is_some_and(|start| dt_parsed < start) && series > 1 {
-        series - 1
-    } else {
-        series
-    };
-
-    let resolved_ticker = gen_to_specific(&gen_ticker, resolved_series)?;
-    build_single_ticker_batch(resolved_ticker)
+    recipe_cdx_ticker_with_options(engine, gen_ticker, dt, false).await
 }
 
-/// Resolve the most active CDX series around a reference date.
+/// Resolve a generic CDX ticker with presentation options.
 ///
-/// Workflow:
-/// 1. Resolve current series via [`recipe_cdx_ticker`].
-/// 2. Generate previous series ticker via `previous_series_ticker`.
-/// 3. If `dt` is before current accrual start, return previous series.
-/// 4. Query historical `PX_LAST` for both series over a lookback window.
-/// 5. Select the series with the most recent non-null price and return it.
+/// `versionless` affects only the returned ticker; resolution still requires
+/// Bloomberg `VERSION` metadata.
+pub async fn recipe_cdx_ticker_with_options(
+    engine: &Engine,
+    gen_ticker: String,
+    dt: String,
+    versionless: bool,
+) -> Result<RecordBatch> {
+    let resolved = resolve_current_cdx(engine, &gen_ticker, parse_date(&dt)?).await?;
+    build_single_ticker_batch(build_resolved_cdx_ticker_with_options(
+        &resolved,
+        versionless,
+    ))
+}
+
+/// Resolve the most active canonical CDX series around a reference date.
 ///
-/// # Arguments
-///
-/// * `engine` - Bloomberg engine reference
-/// * `gen_ticker` - Generic CDX ticker (e.g. `CDX IG CDSI GEN 5Y Corp`)
-/// * `dt` - Reference date (`YYYYMMDD`)
-/// * `lookback_days` - Optional lookback window for activity comparison (default `10`)
+/// Current and previous candidates are resolved and queried with their own
+/// explicit versions.
 pub async fn recipe_active_cdx(
     engine: &Engine,
     gen_ticker: String,
     dt: String,
     lookback_days: Option<i32>,
 ) -> Result<RecordBatch> {
+    recipe_active_cdx_with_options(engine, gen_ticker, dt, lookback_days, false).await
+}
+
+/// Resolve the most active CDX series with presentation options.
+///
+/// `versionless` affects only the selected output ticker.
+pub async fn recipe_active_cdx_with_options(
+    engine: &Engine,
+    gen_ticker: String,
+    dt: String,
+    lookback_days: Option<i32>,
+    versionless: bool,
+) -> Result<RecordBatch> {
     let dt_parsed = parse_date(&dt)?;
-    let lookback_days = lookback_days.unwrap_or(10).max(1) as i64;
+    let start_date = cdx_lookback_start(dt_parsed, lookback_days)?;
+    let current = resolve_current_cdx(engine, &gen_ticker, dt_parsed).await?;
 
-    let current_ticker = {
-        let batch = recipe_cdx_ticker(engine, gen_ticker, dt.clone()).await?;
-        extract_single_ticker(&batch)?
+    let Some(previous_alias) = current.previous_alias() else {
+        return build_single_ticker_batch(build_resolved_cdx_ticker_with_options(
+            &current,
+            versionless,
+        ));
     };
+    let previous = resolve_specific_cdx(engine, &previous_alias).await?;
+    let current_ticker = build_resolved_cdx_ticker_with_options(&current, false);
+    let previous_ticker = build_resolved_cdx_ticker_with_options(&previous, false);
 
-    let Some(previous_ticker) = previous_series_ticker(&current_ticker)? else {
-        return build_single_ticker_batch(current_ticker);
-    };
-
-    let metadata_params = RequestParams {
-        service: Service::RefData.to_string(),
-        operation: Operation::ReferenceData.to_string(),
-        securities: Some(vec![current_ticker.clone()]),
-        fields: Some(vec!["CDS_FIRST_ACCRUAL_START_DATE".to_string()]),
-        ..Default::default()
-    };
-
-    let metadata_batch = engine.request(metadata_params).await?;
-    if let Some(start_dt) = extract_refdata_date_for_ticker(
-        &metadata_batch,
-        &current_ticker,
-        "CDS_FIRST_ACCRUAL_START_DATE",
-    )? {
-        if dt_parsed < start_dt {
-            return build_single_ticker_batch(previous_ticker);
-        }
-    }
-
-    let start_date = dt_parsed - Duration::days(lookback_days);
     let price_params = RequestParams {
         service: Service::RefData.to_string(),
         operation: Operation::HistoricalData.to_string(),
@@ -433,14 +381,102 @@ pub async fn recipe_active_cdx(
         .map(|(date, _)| date);
 
     let selected = match (current_latest, previous_latest) {
-        (Some(cur), Some(prev)) if prev > cur => previous_ticker,
-        (Some(_), Some(_)) => current_ticker,
-        (Some(_), None) => current_ticker,
-        (None, Some(_)) => previous_ticker,
-        (None, None) => current_ticker,
+        (Some(cur), Some(prev)) if prev > cur => &previous,
+        (Some(_), Some(_)) | (Some(_), None) | (None, None) => &current,
+        (None, Some(_)) => &previous,
     };
 
-    build_single_ticker_batch(selected)
+    build_single_ticker_batch(build_resolved_cdx_ticker_with_options(
+        selected,
+        versionless,
+    ))
+}
+
+fn cdx_lookback_start(dt: NaiveDate, lookback_days: Option<i32>) -> Result<NaiveDate> {
+    let lookback_days = i64::from(lookback_days.unwrap_or(10).max(1));
+    let lookback = Duration::try_days(lookback_days).ok_or_else(|| {
+        RecipeError::InvalidArgument(format!("lookback_days={lookback_days} is out of range"))
+    })?;
+    dt.checked_sub_signed(lookback).ok_or_else(|| {
+        RecipeError::InvalidArgument(format!(
+            "lookback_days={lookback_days} is out of range for {dt}"
+        ))
+    })
+}
+
+async fn resolve_current_cdx(
+    engine: &Engine,
+    gen_ticker: &str,
+    dt: NaiveDate,
+) -> Result<ResolvedCdxInfo> {
+    let parsed = parse_cdx_ticker(gen_ticker)?;
+    if !parsed.is_generic {
+        return Err(RecipeError::InvalidArgument(format!(
+            "'{gen_ticker}' must be a generic CDX ticker containing GEN"
+        )));
+    }
+
+    let params = RequestParams {
+        service: Service::RefData.to_string(),
+        operation: Operation::ReferenceData.to_string(),
+        securities: Some(vec![gen_ticker.to_string()]),
+        fields: Some(vec![
+            "ROLLING_SERIES".to_string(),
+            "VERSION".to_string(),
+            "CDS_FIRST_ACCRUAL_START_DATE".to_string(),
+        ]),
+        ..Default::default()
+    };
+
+    let batch = engine.request(params).await?;
+    let series = required_cdx_number(&batch, gen_ticker, "ROLLING_SERIES")?;
+    let accrual_dt =
+        extract_refdata_date_for_ticker(&batch, gen_ticker, "CDS_FIRST_ACCRUAL_START_DATE")?;
+
+    if accrual_dt.is_some_and(|start| dt < start) && series > 1 {
+        let previous_alias = gen_to_specific(gen_ticker, series - 1)?;
+        resolve_specific_cdx(engine, &previous_alias).await
+    } else {
+        let version = required_cdx_number(&batch, gen_ticker, "VERSION")?;
+        ResolvedCdxInfo::resolve(parsed, series, version).map_err(Into::into)
+    }
+}
+
+async fn resolve_specific_cdx(engine: &Engine, ticker: &str) -> Result<ResolvedCdxInfo> {
+    let parsed = parse_cdx_ticker(ticker)?;
+    if parsed.is_generic {
+        return Err(RecipeError::InvalidArgument(format!(
+            "'{ticker}' must be a specific CDX ticker"
+        )));
+    }
+    let series = parsed
+        .series_num
+        .ok_or_else(|| RecipeError::Other(format!("missing parsed CDX series for '{ticker}'")))?;
+    let version = resolve_cdx_version(engine, ticker).await?;
+    ResolvedCdxInfo::resolve(parsed, series, version).map_err(Into::into)
+}
+
+async fn resolve_cdx_version(engine: &Engine, ticker: &str) -> Result<u32> {
+    let params = RequestParams {
+        service: Service::RefData.to_string(),
+        operation: Operation::ReferenceData.to_string(),
+        securities: Some(vec![ticker.to_string()]),
+        fields: Some(vec!["VERSION".to_string()]),
+        ..Default::default()
+    };
+    let batch = engine.request(params).await?;
+    required_cdx_number(&batch, ticker, "VERSION")
+}
+
+fn required_cdx_number(batch: &RecordBatch, ticker: &str, field: &str) -> Result<u32> {
+    let raw = extract_refdata_string_for_ticker(batch, ticker, field)?.ok_or_else(|| {
+        RecipeError::Other(format!(
+            "missing {field} for '{ticker}' in Bloomberg response"
+        ))
+    })?;
+    parse_series_number(&raw).ok_or_else(|| {
+        RecipeError::Other(format!("unable to parse {field}='{raw}' for '{ticker}'"))
+    })
 }
 
 async fn bloomberg_current_generic_ticker(
@@ -1036,11 +1072,12 @@ fn parse_series_number(value: &str) -> Option<u32> {
     let value = value.trim();
 
     if let Ok(v) = value.parse::<u32>() {
-        return Some(v);
+        return (v > 0).then_some(v);
     }
 
     let parsed = value.parse::<f64>().ok()?;
-    if !parsed.is_finite() || parsed < 1.0 || parsed.fract() != 0.0 {
+    if !parsed.is_finite() || parsed < 1.0 || parsed > f64::from(u32::MAX) || parsed.fract() != 0.0
+    {
         return None;
     }
 
@@ -1289,6 +1326,40 @@ mod tests {
         assert_eq!(parse_series_number("45.0"), Some(45));
         assert_eq!(parse_series_number("45.5"), None);
         assert_eq!(parse_series_number("abc"), None);
+        assert_eq!(parse_series_number("4294967296.0"), None);
+    }
+
+    #[test]
+    fn test_cdx_lookback_start_rejects_out_of_range() {
+        let dt = NaiveDate::from_ymd_opt(2026, 7, 17).unwrap();
+        assert_eq!(
+            cdx_lookback_start(dt, None).unwrap(),
+            dt - Duration::days(10)
+        );
+        assert!(cdx_lookback_start(dt, Some(i32::MAX)).is_err());
+    }
+
+    #[test]
+    fn test_required_cdx_number_requires_present_positive_metadata() {
+        let ticker = "CDX HY CDSI GEN 5Y Corp";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("ticker", DataType::Utf8, false),
+            Field::new("field", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec![ticker])),
+                Arc::new(StringArray::from(vec!["VERSION"])),
+                Arc::new(StringArray::from(vec!["2"])),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(required_cdx_number(&batch, ticker, "VERSION").unwrap(), 2);
+        assert!(required_cdx_number(&batch, ticker, "ROLLING_SERIES").is_err());
+        assert_eq!(parse_series_number("0"), None);
     }
 
     #[test]

@@ -235,6 +235,7 @@ const corpBonds = await engine.corporateBonds('AAPL', { ccy: 'USD' });
 const front = await engine.futTicker('ES1 Index', '20240301');
 const active = await engine.activeFutures('CL1 Comdty', '20240301', { freq: 'M' });
 const curve = await engine.futuresCurve('ES1 Index', { maxContracts: 6 });
+// CDX results include the resolved Vn by default; use versionless: true only for a legacy alias.
 const cdx = await engine.cdxTicker('CDX IG CDSI GEN 5Y Corp', '20240301');
 const activeCdx = await engine.activeCdx('CDX IG CDSI GEN 5Y Corp', '20240301', {
   lookbackDays: 10,
@@ -257,6 +258,29 @@ const surface = await engine.volSurface('SPX Index', '20240102', '20240105', {
 });
 const resolved = await engine.resolveIsins(['US0378331005', 'INVALIDISIN000']);
 const issuers = await engine.issuerIsins(['US037833FB15', 'INVALIDISIN000']);
+
+// ETF NAV / iNAV toolkit — resolves Bloomberg's authoritative
+// ETF_NAV_TICKER / ETF_INAV_TICKER relationships (no suffix guessing):
+// QQQ US Equity -> QQQNV Index / QXV Index; AT1 LN Equity -> null / AT1IN Index
+const navRel = await engine.etfNavRelationships(['QQQ US Equity', 'AT1 LN Equity']);
+
+// Daily history: mapped Index targets price with PX_LAST; AT1's missing
+// daily NAV falls back to the fund's FUND_NET_ASSET_VAL — see the
+// nav_source_ticker / nav_source_field columns on every row
+const navHist = await engine.etfNavHistory(
+  ['QQQ US Equity', 'AT1 LN Equity'],
+  '20260601',
+  '20260701',
+);
+
+// Real-time iNAV: validates every mapping first, then subscribes to the
+// resolved iNAV topics (here QXV Index) with LAST_PRICE by default
+const inavSub = await engine.subscribeEtfInav('QQQ US Equity');
+for await (const tick of inavSub) {
+  console.log(tick.topic, tick.get('LAST_PRICE'));
+  break;
+}
+await inavSub.unsubscribe();
 
 // Currency-converted prices
 const px = await engine.currencyConversion('700 HK Equity', 'USD', '20240101', '20240131');

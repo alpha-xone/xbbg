@@ -10,7 +10,7 @@ use xbbg_async::engine::{Engine, RequestParams};
 use xbbg_async::services::{Operation, Service};
 
 use crate::error::{RecipeError, Result};
-use crate::utils::{array_value_as_string, as_string_col};
+use crate::utils::{array_value_as_string, as_string_col, clean_bloomberg_text};
 
 const EQUITY_RESOLVE_FIELDS: &[&str] = &["PARSEKYABLE_DES", "EQY_PRIM_SECURITY_COMP_EXCH"];
 const BOND_ISSUER_FIELDS: &[&str] = &[
@@ -231,20 +231,6 @@ pub(crate) fn build_issuer_rows_without_isin(
             }
         })
         .collect()
-}
-
-fn clean_bloomberg_text(value: &str) -> Option<String> {
-    let text = value.trim();
-    if text.is_empty()
-        || text.eq_ignore_ascii_case("nan")
-        || text.eq_ignore_ascii_case("n/a")
-        || text.eq_ignore_ascii_case("#n/a")
-        || text.eq_ignore_ascii_case("null")
-    {
-        None
-    } else {
-        Some(text.to_string())
-    }
 }
 
 fn first_clean_field(fields: Option<&HashMap<String, String>>, names: &[&str]) -> Option<String> {

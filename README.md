@@ -179,6 +179,34 @@ surface = blp.vol_surface("SPX Index", start_date="2024-01-02", end_date="2024-0
 resolved = blp.resolve_isins(["US0378331005", "INVALIDISIN000"])
 ```
 
+ETF NAV / iNAV workflows live in `xbbg.ext` and resolve Bloomberg's authoritative
+`ETF_NAV_TICKER` / `ETF_INAV_TICKER` relationships instead of guessing ticker suffixes:
+
+```python
+from xbbg import ext
+
+# Relationship discovery: QQQ US Equity -> QQQNV Index / QXV Index,
+# AT1 LN Equity -> null daily NAV / AT1IN Index (independently nullable)
+rel = ext.etf_nav_relationships(["QQQ US Equity", "AT1 LN Equity"])
+
+# Daily NAV/iNAV history: mapped Index targets price with PX_LAST; AT1's
+# missing daily NAV falls back to the fund's FUND_NET_ASSET_VAL — see the
+# nav_source_ticker / nav_source_field columns on every row
+hist = ext.etf_nav_history(
+    ["QQQ US Equity", "AT1 LN Equity"],
+    start_date="2026-06-01",
+    end_date="2026-07-01",
+)
+
+# Real-time iNAV: validates every mapping first, then subscribes to the
+# resolved iNAV topics (here QXV Index) with LAST_PRICE by default
+sub = await ext.asubscribe_etf_inav("QQQ US Equity")
+async for table in sub:
+    print(table.to_pylist())
+    break
+await sub.unsubscribe()
+```
+
 For longer walkthroughs and example output shapes, use the [examples notebook](py-xbbg/examples/xbbg_jupyter_examples.ipynb) or [xbbg.org](https://xbbg.org/).
 
 ## JavaScript and Node
