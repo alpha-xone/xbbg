@@ -33,6 +33,98 @@ type RegisteredSubscriptions = (
     Vec<Arc<SubscriptionMetrics>>,
 );
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LifecycleLogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SubscriptionSessionEvent {
+    ConnectionDown,
+    Terminated,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SessionEventLogContext {
+    event: SubscriptionSessionEvent,
+    level: LifecycleLogLevel,
+    shutdown_requested: bool,
+}
+
+impl SubscriptionSessionEvent {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::ConnectionDown => "SessionConnectionDown",
+            Self::Terminated => "SessionTerminated",
+        }
+    }
+
+    const fn log_context(self, shutdown_requested: bool) -> SessionEventLogContext {
+        let level = if shutdown_requested {
+            LifecycleLogLevel::Info
+        } else {
+            match self {
+                Self::ConnectionDown => LifecycleLogLevel::Warn,
+                Self::Terminated => LifecycleLogLevel::Error,
+            }
+        };
+        SessionEventLogContext {
+            event: self,
+            level,
+            shutdown_requested,
+        }
+    }
+}
+
+impl SessionEventLogContext {
+    const fn classification(self) -> &'static str {
+        match (self.shutdown_requested, self.event) {
+            (true, _) => "shutdown_in_progress",
+            (false, SubscriptionSessionEvent::ConnectionDown) => "connection_down_without_shutdown",
+            (false, SubscriptionSessionEvent::Terminated) => "termination_without_shutdown",
+        }
+    }
+}
+
+fn log_subscription_session_event(
+    context: SessionEventLogContext,
+    worker_id: usize,
+    active_subs: usize,
+    reason: Option<&str>,
+) {
+    match context.level {
+        LifecycleLogLevel::Info => xbbg_log::info!(
+            worker_id,
+            active_subs,
+            event = %context.event.name(),
+            classification = %context.classification(),
+            shutdown_requested = context.shutdown_requested,
+            reason = %reason.unwrap_or(""),
+            "Bloomberg subscription session status"
+        ),
+        LifecycleLogLevel::Warn => xbbg_log::warn!(
+            worker_id,
+            active_subs,
+            event = %context.event.name(),
+            classification = %context.classification(),
+            shutdown_requested = context.shutdown_requested,
+            reason = %reason.unwrap_or(""),
+            "Bloomberg subscription session status"
+        ),
+        LifecycleLogLevel::Error => xbbg_log::error!(
+            worker_id,
+            active_subs,
+            event = %context.event.name(),
+            classification = %context.classification(),
+            shutdown_requested = context.shutdown_requested,
+            reason = %reason.unwrap_or(""),
+            "Bloomberg subscription session status"
+        ),
+    }
+}
+
 struct SubscriptionRegistrationRequest {
     topics: Vec<String>,
     fields: Vec<String>,
@@ -72,6 +164,7 @@ struct SubscriptionWorkerShared {
     startup: Mutex<StartupLatch>,
     startup_cv: Condvar,
     next_service_open_id: AtomicI64,
+    shutdown: AtomicBool,
 }
 
 impl SubscriptionWorkerShared {
@@ -83,6 +176,7 @@ impl SubscriptionWorkerShared {
             startup: Mutex::new(StartupLatch::default()),
             startup_cv: Condvar::new(),
             next_service_open_id: AtomicI64::new(0),
+            shutdown: AtomicBool::new(false),
         }
     }
 
@@ -116,6 +210,14 @@ impl SubscriptionWorkerShared {
                 .next_service_open_id
                 .fetch_add(1, Ordering::Relaxed)
                 .wrapping_add(1)
+    }
+
+    fn shutdown_requested(&self) -> bool {
+        self.shutdown.load(Ordering::Acquire)
+    }
+
+    fn mark_shutdown_requested(&self) -> bool {
+        !self.shutdown.swap(true, Ordering::AcqRel)
     }
 
     fn dispatch_event(self: &Arc<Self>, ev: xbbg_core::Event) {
@@ -738,16 +840,19 @@ impl SubscriptionWorkerState {
             }
             "SessionConnectionDown" => {
                 // Bloomberg SDK contract: SessionConnectionDown is informational.
-                // The SDK's auto_restart_on_disconnection machinery handles reconnection
-                // and will auto-recover active subscriptions (see BLPAPI ChangeLog v3.11.6).
+                // The SDK's auto_restart_on_disconnection machinery attempts reconnection
+                // and can recover active subscriptions after a successful reconnect
+                // (see BLPAPI ChangeLog v3.11.6).
                 // We just record state for diagnostics; do NOT drain subscriptions and
                 // do NOT resubscribe on the subsequent Up.
                 let reason = extract_reason_description(msg);
-                xbbg_log::warn!(
-                    worker_id = self.id,
-                    active_subs = self.subs.len(),
-                    reason = %reason.as_deref().unwrap_or(""),
-                    "SessionConnectionDown — informational; SDK will auto-reconnect"
+                let context = SubscriptionSessionEvent::ConnectionDown
+                    .log_context(shared.shutdown_requested());
+                log_subscription_session_event(
+                    context,
+                    self.id,
+                    self.subs.len(),
+                    reason.as_deref(),
                 );
                 if let Some(status) = &self.status {
                     let detail = reason.or_else(|| {
@@ -823,15 +928,17 @@ impl SubscriptionWorkerState {
             }
             "SessionTerminated" => {
                 let reason = extract_reason_description(msg);
+                let context =
+                    SubscriptionSessionEvent::Terminated.log_context(shared.shutdown_requested());
                 shared.resolve_startup(Err(session_start_error(
                     "subscription session terminated during startup",
                     reason.clone(),
                 )));
-                xbbg_log::error!(
-                    worker_id = self.id,
-                    active_subs = self.subs.len(),
-                    reason = %reason.as_deref().unwrap_or(""),
-                    "SessionTerminated — SDK gave up reconnecting; closing subscriptions"
+                log_subscription_session_event(
+                    context,
+                    self.id,
+                    self.subs.len(),
+                    reason.as_deref(),
                 );
                 // Session is dead. Send error to all consumers and remove all subs.
                 let keys: Vec<usize> = self.subs.iter().map(|(k, _)| k).collect();
@@ -868,10 +975,9 @@ impl SubscriptionWorkerState {
                 }
             }
             "SessionConnectionUp" => {
-                // Informational. The SDK has re-established the TCP connection and
-                // will automatically re-activate our subscriptions (per BLPAPI
-                // ChangeLog v3.11.6: Subscription Streams{Activated,Deactivated}
-                // events track per-subscription availability).
+                // Informational. The SDK has re-established the TCP connection.
+                // SubscriptionStreams{Activated,Deactivated} events report whether
+                // individual subscriptions become active again.
                 let reason = extract_reason_description(msg);
                 xbbg_log::info!(
                     worker_id = self.id,
@@ -1176,14 +1282,13 @@ struct SubscriptionWorkerHandleInner {
     session: Arc<AsyncSession>,
     shared: Arc<SubscriptionWorkerShared>,
     health: Arc<AtomicU8>,
-    shutdown: AtomicBool,
     monitor: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl SubscriptionWorkerHandleInner {
     fn ensure_monitor_started(self: &Arc<Self>) {
         let mut monitor = self.monitor.lock();
-        if monitor.is_some() || self.shutdown.load(Ordering::Acquire) {
+        if monitor.is_some() || self.shared.shutdown_requested() {
             return;
         }
         let shared = Arc::clone(&self.shared);
@@ -1197,9 +1302,14 @@ impl SubscriptionWorkerHandleInner {
     }
 
     fn signal_shutdown(&self) {
-        if self.shutdown.swap(true, Ordering::AcqRel) {
+        if !self.shared.mark_shutdown_requested() {
             return;
         }
+        xbbg_log::info!(
+            worker_id = self.id,
+            shutdown_requested = true,
+            "subscription worker shutdown requested"
+        );
         if let Some(handle) = self.monitor.lock().take() {
             handle.abort();
         }
@@ -1371,7 +1481,6 @@ impl SubscriptionWorkerHandle {
                 session,
                 shared,
                 health,
-                shutdown: AtomicBool::new(false),
                 monitor: Mutex::new(None),
             }),
         })
@@ -1651,5 +1760,59 @@ impl Drop for SessionClaim {
         }
         handle.signal_shutdown();
         drop(handle);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_state_is_monotonic_and_callback_visible() {
+        let health = Arc::new(AtomicU8::new(WorkerHealth::Healthy as u8));
+        let shared = SubscriptionWorkerShared::new(0, Arc::new(EngineConfig::default()), health);
+
+        assert!(!shared.shutdown_requested());
+        assert!(shared.mark_shutdown_requested());
+        assert!(shared.shutdown_requested());
+        assert!(!shared.mark_shutdown_requested());
+    }
+
+    #[test]
+    fn session_event_context_classifies_all_shutdown_states() {
+        let cases = [
+            (
+                SubscriptionSessionEvent::ConnectionDown,
+                false,
+                LifecycleLogLevel::Warn,
+                "connection_down_without_shutdown",
+            ),
+            (
+                SubscriptionSessionEvent::ConnectionDown,
+                true,
+                LifecycleLogLevel::Info,
+                "shutdown_in_progress",
+            ),
+            (
+                SubscriptionSessionEvent::Terminated,
+                false,
+                LifecycleLogLevel::Error,
+                "termination_without_shutdown",
+            ),
+            (
+                SubscriptionSessionEvent::Terminated,
+                true,
+                LifecycleLogLevel::Info,
+                "shutdown_in_progress",
+            ),
+        ];
+
+        for (event, shutdown_requested, expected_level, expected_classification) in cases {
+            let context = event.log_context(shutdown_requested);
+            assert_eq!(context.event, event);
+            assert_eq!(context.level, expected_level);
+            assert_eq!(context.shutdown_requested, shutdown_requested);
+            assert_eq!(context.classification(), expected_classification);
+        }
     }
 }
