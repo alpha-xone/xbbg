@@ -1333,7 +1333,7 @@ def recipe_etf_holdings(engine: PyEngine, etf_ticker: builtins.str, fields: typi
 def recipe_etf_nav_history(engine: PyEngine, etfs: typing.Sequence[builtins.str], start_date: builtins.str, end_date: builtins.str) -> typing.Any:
     r"""
     Fetch daily ETF NAV / iNAV history between two dates.
-
+    
     Args:
         engine: Bloomberg engine instance
         etfs: ETF securities to query
