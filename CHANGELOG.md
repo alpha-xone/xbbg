@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-07-18
+
 ### Added
 
 - **Shared ETF NAV / iNAV toolkit with Python and JavaScript parity**: A new `xbbg-recipes` module resolves Bloomberg's authoritative `ETF_NAV_TICKER` / `ETF_INAV_TICKER` relationships (normalized to one ` Index` suffix and validated as genuine Index securities, so non-conventional targets such as `QQQ US Equity -> QXV Index` and null/`AT1IN Index` legs survive intact), serves current NAV/iNAV snapshots and daily history with a `FUND_NET_ASSET_VAL` fallback for ETFs without a daily NAV Index, and powers Python `xbbg.ext` (`etf_nav_relationships`, `etf_nav_snapshot`, `etf_nav_history`, `subscribe_etf_inav` plus async variants) and `@xbbg/core` (`etfNavRelationships`, `etfNavSnapshot`, `etfNavHistory`, `subscribeEtfInav`) with identical schemas and atomic iNAV subscription preflight.
@@ -1512,7 +1514,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ---
 
-[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.4...HEAD
+[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.5...HEAD
+[1.4.5]: https://github.com/xbbg-org/xbbg/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/xbbg-org/xbbg/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/xbbg-org/xbbg/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/xbbg-org/xbbg/compare/v1.4.1...v1.4.2
