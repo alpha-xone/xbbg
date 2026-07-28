@@ -2265,6 +2265,19 @@ export class Engine {
     }
   }
 
+  /**
+   * Resolve a generic CDX ticker to the series that applies on `dt`.
+   *
+   * The series is the highest one whose Bloomberg
+   * `CDS_FIRST_ACCRUAL_START_DATE` is on or before `dt`, so the result never
+   * moves backwards as `dt` advances. Roll dates come from Bloomberg rather
+   * than the nominal semi-annual cadence, because they are business-day
+   * adjusted: CDX.NA.IG.45 starts 2025-09-22, so 2025-09-21 is still S44.
+   *
+   * The `Vn` token is the latest version Bloomberg reports for the resolved
+   * series. That is also the only version carrying the series' price history,
+   * so it is the identity to price against for any date in the series.
+   */
   public async cdxTicker(
     genTicker: string,
     dt: DateLike,
@@ -2283,6 +2296,17 @@ export class Engine {
     }
   }
 
+  /**
+   * Resolve the latest CDX series that had started *and* traded by `dt`.
+   *
+   * Matches {@link Engine.cdxTicker} except between a roll and the new
+   * series' first print, when the preceding series is still the traded one --
+   * CDX.NA.HY.46 started 2026-03-20 but first printed 2026-03-27.
+   *
+   * `lookbackDays` sets a minimum activity window; the window always reaches
+   * back to the resolved series' first accrual date, so "this series has
+   * traded" can only ever flip false to true.
+   */
   public async activeCdx(
     genTicker: string,
     dt: DateLike,

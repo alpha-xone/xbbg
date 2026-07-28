@@ -21,7 +21,7 @@ bun add @xbbg/core
 `@xbbg/core` uses optional dependencies to load a packaged native `napi_xbbg.node` addon for supported targets:
 
 - `@xbbg/core-darwin-arm64` — macOS arm64
-- `@xbbg/core-linux-x64` — Linux x64
+- `@xbbg/core-linux-x64` — Linux x64 (glibc 2.28+, the same floor as official Node.js binaries)
 - `@xbbg/core-win32-x64` — Windows x64
 
 If no packaged addon is available for your platform, build from source locally instead.
@@ -235,8 +235,11 @@ const corpBonds = await engine.corporateBonds('AAPL', { ccy: 'USD' });
 const front = await engine.futTicker('ES1 Index', '20240301');
 const active = await engine.activeFutures('CL1 Comdty', '20240301', { freq: 'M' });
 const curve = await engine.futuresCurve('ES1 Index', { maxContracts: 6 });
-// CDX results include the resolved Vn by default; use versionless: true only for a legacy alias.
+// cdxTicker resolves the series whose first accrual date is on or before the
+// date, so historical dates return the series that was on the run then; the
+// resolved Vn is included by default (versionless: true gives a legacy alias).
 const cdx = await engine.cdxTicker('CDX IG CDSI GEN 5Y Corp', '20240301');
+// activeCdx additionally waits for the new series' first print after a roll.
 const activeCdx = await engine.activeCdx('CDX IG CDSI GEN 5Y Corp', '20240301', {
   lookbackDays: 10,
 });
@@ -307,4 +310,4 @@ The JS binding forwards these fields directly to the Rust engine, so Node can co
 - Zero-copy Arrow buffers via `apache-arrow`
 - Async/await with proper backpressure
 - TypeScript-first with full type definitions
-- Cross-platform prebuilt addon packaging: macOS arm64, Linux x64, Windows x64
+- Cross-platform prebuilt addon packaging: macOS arm64, Linux x64 (glibc 2.28+), Windows x64

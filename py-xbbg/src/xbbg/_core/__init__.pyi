@@ -1226,13 +1226,17 @@ def get_log_level() -> builtins.str:
 
 def recipe_active_cdx(engine: PyEngine, gen_ticker: builtins.str, dt: builtins.str, lookback_days: typing.Optional[builtins.int] = None, versionless: builtins.bool = False) -> typing.Any:
     r"""
-    Resolve the most active CDX series around a reference date.
+    Resolve the latest CDX series that had started and traded by a date.
+    
+    Matches `recipe_cdx_ticker` except between a roll and the new series'
+    first print, when the preceding series is still the traded one.
     
     Args:
         engine: Bloomberg engine instance
         gen_ticker: Generic CDX ticker (e.g., "CDX IG CDSI GEN 5Y Corp")
         dt: Reference date (YYYYMMDD format)
-        lookback_days: Lookback window for activity comparison (default: 10)
+        lookback_days: Minimum activity window in days (default: 10). The
+            window always reaches back to the series' first accrual date.
         versionless: Return the versionless ticker form (default: false)
     """
 
@@ -1262,7 +1266,12 @@ def recipe_bqr(engine: PyEngine, ticker: builtins.str, start_datetime: builtins.
 
 def recipe_cdx_ticker(engine: PyEngine, gen_ticker: builtins.str, dt: builtins.str, versionless: builtins.bool = False) -> typing.Any:
     r"""
-    Resolve a generic CDX ticker to the active specific series.
+    Resolve a generic CDX ticker to the series that applies on a date.
+    
+    The series is the highest one whose Bloomberg
+    `CDS_FIRST_ACCRUAL_START_DATE` is on or before `dt`, so the result never
+    moves backwards as `dt` advances. `Vn` is the latest version Bloomberg
+    reports for that series; Bloomberg publishes no as-of version.
     
     Args:
         engine: Bloomberg engine instance

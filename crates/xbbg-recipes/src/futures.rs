@@ -19,7 +19,8 @@ use chrono::{Datelike, Duration, NaiveDate};
 use xbbg_async::engine::{Engine, ExtractorType, RequestParams};
 use xbbg_async::services::{Operation, Service};
 use xbbg_ext::resolvers::cdx::{
-    build_resolved_cdx_ticker_with_options, gen_to_specific, parse_cdx_ticker, ResolvedCdxInfo,
+    build_resolved_cdx_ticker_with_options, cdx_next_series_window, cdx_prior_series_window,
+    gen_to_specific, parse_cdx_ticker, ResolvedCdxInfo,
 };
 use xbbg_ext::resolvers::futures::{
     contract_index, generate_futures_candidates, validate_generic_ticker, RollFrequency,
@@ -299,7 +300,13 @@ pub async fn recipe_futures_curve(
     build_futures_curve_batch(&rows, &extra_fields)
 }
 
-/// Resolve a generic CDX ticker (`GEN`) to a canonical specific series.
+/// Bloomberg field carrying a CDS index series' first accrual date.
+///
+/// This is the authoritative start of a series: the series that applies on a
+/// date is the highest one whose accrual date is on or before it.
+const CDX_ACCRUAL_FIELD: &str = "CDS_FIRST_ACCRUAL_START_DATE";
+
+/// Resolve a generic CDX ticker (`GEN`) to the series that applies on a date.
 ///
 /// The result always includes an explicit `Vn`, including V1.
 pub async fn recipe_cdx_ticker(
@@ -320,17 +327,19 @@ pub async fn recipe_cdx_ticker_with_options(
     dt: String,
     versionless: bool,
 ) -> Result<RecordBatch> {
-    let resolved = resolve_current_cdx(engine, &gen_ticker, parse_date(&dt)?).await?;
+    let resolved = resolve_cdx_series_at(engine, &gen_ticker, parse_date(&dt)?).await?;
     build_single_ticker_batch(build_resolved_cdx_ticker_with_options(
-        &resolved,
+        &resolved.info,
         versionless,
     ))
 }
 
-/// Resolve the most active canonical CDX series around a reference date.
+/// Resolve the latest CDX series that had started *and* traded by a date.
 ///
-/// Current and previous candidates are resolved and queried with their own
-/// explicit versions.
+/// Identical to [`recipe_cdx_ticker`] except between a roll and the new
+/// series' first print, when the preceding series is still the traded one.
+/// CDX.NA.HY.46 started 2026-03-20 but first printed 2026-03-27, so those five
+/// business days resolve to S45.
 pub async fn recipe_active_cdx(
     engine: &Engine,
     gen_ticker: String,
@@ -351,19 +360,19 @@ pub async fn recipe_active_cdx_with_options(
     versionless: bool,
 ) -> Result<RecordBatch> {
     let dt_parsed = parse_date(&dt)?;
-    let start_date = cdx_lookback_start(dt_parsed, lookback_days)?;
-    let current = resolve_current_cdx(engine, &gen_ticker, dt_parsed).await?;
+    let current = resolve_cdx_series_at(engine, &gen_ticker, dt_parsed).await?;
 
-    let Some(previous_alias) = current.previous_alias() else {
+    let Some(previous_alias) = current.info.previous_alias() else {
         return build_single_ticker_batch(build_resolved_cdx_ticker_with_options(
-            &current,
+            &current.info,
             versionless,
         ));
     };
     let previous = resolve_specific_cdx(engine, &previous_alias).await?;
-    let current_ticker = build_resolved_cdx_ticker_with_options(&current, false);
+    let current_ticker = build_resolved_cdx_ticker_with_options(&current.info, false);
     let previous_ticker = build_resolved_cdx_ticker_with_options(&previous, false);
 
+    let start_date = cdx_activity_window_start(dt_parsed, lookback_days, current.accrual_start)?;
     let price_params = RequestParams {
         service: Service::RefData.to_string(),
         operation: Operation::HistoricalData.to_string(),
@@ -375,15 +384,16 @@ pub async fn recipe_active_cdx_with_options(
     };
 
     let price_batch = engine.request(price_params).await?;
-    let current_latest = latest_history_numeric_point(&price_batch, &current_ticker, "PX_LAST")?
-        .map(|(date, _)| date);
-    let previous_latest = latest_history_numeric_point(&price_batch, &previous_ticker, "PX_LAST")?
-        .map(|(date, _)| date);
-
-    let selected = match (current_latest, previous_latest) {
-        (Some(cur), Some(prev)) if prev > cur => &previous,
-        (Some(_), Some(_)) | (Some(_), None) | (None, None) => &current,
-        (None, Some(_)) => &previous,
+    let selected = if has_history_value(&price_batch, &current_ticker, "PX_LAST")? {
+        &current.info
+    } else if has_history_value(&price_batch, &previous_ticker, "PX_LAST")? {
+        &previous
+    } else {
+        return Err(RecipeError::Other(format!(
+            "neither '{current_ticker}' nor '{previous_ticker}' reported PX_LAST between {} and {}",
+            fmt_date(start_date, None),
+            fmt_date(dt_parsed, None)
+        )));
     };
 
     build_single_ticker_batch(build_resolved_cdx_ticker_with_options(
@@ -392,23 +402,52 @@ pub async fn recipe_active_cdx_with_options(
     ))
 }
 
-fn cdx_lookback_start(dt: NaiveDate, lookback_days: Option<i32>) -> Result<NaiveDate> {
+/// Start of the window used to decide whether a series has traded.
+///
+/// The window always reaches back to the series' first accrual date, so "has
+/// this series printed yet" can only ever flip false -> true as `dt` advances.
+/// A purely sliding window would let a series drop out of view after a quiet
+/// stretch and send the answer backwards.
+fn cdx_activity_window_start(
+    dt: NaiveDate,
+    lookback_days: Option<i32>,
+    accrual_start: NaiveDate,
+) -> Result<NaiveDate> {
     let lookback_days = i64::from(lookback_days.unwrap_or(10).max(1));
     let lookback = Duration::try_days(lookback_days).ok_or_else(|| {
         RecipeError::InvalidArgument(format!("lookback_days={lookback_days} is out of range"))
     })?;
-    dt.checked_sub_signed(lookback).ok_or_else(|| {
+    let windowed = dt.checked_sub_signed(lookback).ok_or_else(|| {
         RecipeError::InvalidArgument(format!(
             "lookback_days={lookback_days} is out of range for {dt}"
         ))
-    })
+    })?;
+    Ok(windowed.min(accrual_start))
 }
 
-async fn resolve_current_cdx(
+/// A CDX series resolved against a reference date, with the accrual date that
+/// makes it the applicable series.
+struct CdxSeriesAt {
+    info: ResolvedCdxInfo,
+    accrual_start: NaiveDate,
+}
+
+/// Resolve the CDX series whose accrual period contains `dt`.
+///
+/// The answer is `max { N : first_accrual(N) <= dt }`, read from Bloomberg's
+/// `CDS_FIRST_ACCRUAL_START_DATE`. `ROLLING_SERIES` on the generic ticker is
+/// point-in-time -- it reports today's series whatever `dt` is -- so it only
+/// anchors the top of the search. The semi-annual roll cadence only sizes the
+/// candidate window, which is why business-day-adjusted rolls resolve exactly:
+/// CDX.NA.IG.45 starts 2025-09-22, so 2025-09-21 still resolves to S44.
+///
+/// Monotone in `dt` by construction: accrual dates are fixed contract terms, so
+/// a later date can never resolve to an earlier series.
+async fn resolve_cdx_series_at(
     engine: &Engine,
     gen_ticker: &str,
     dt: NaiveDate,
-) -> Result<ResolvedCdxInfo> {
+) -> Result<CdxSeriesAt> {
     let parsed = parse_cdx_ticker(gen_ticker)?;
     if !parsed.is_generic {
         return Err(RecipeError::InvalidArgument(format!(
@@ -416,30 +455,107 @@ async fn resolve_current_cdx(
         )));
     }
 
+    let batch = request_cdx_metadata(engine, &[gen_ticker.to_string()]).await?;
+    let series = required_cdx_number(&batch, gen_ticker, "ROLLING_SERIES")?;
+    let accrual_start = required_cdx_date(&batch, gen_ticker, CDX_ACCRUAL_FIELD)?;
+
+    if dt >= accrual_start {
+        let version = required_cdx_number(&batch, gen_ticker, "VERSION")?;
+        return Ok(CdxSeriesAt {
+            info: ResolvedCdxInfo::resolve(parsed, series, version)?,
+            accrual_start,
+        });
+    }
+
+    let mut window = cdx_prior_series_window(series, accrual_start, dt).ok_or_else(|| {
+        RecipeError::InvalidArgument(format!(
+            "{dt} precedes S{series}, the first series of '{gen_ticker}'"
+        ))
+    })?;
+
+    loop {
+        let (lo, hi) = window;
+        if let Some(resolved) = resolve_cdx_ladder(engine, gen_ticker, lo, hi, dt).await? {
+            return Ok(resolved);
+        }
+        window = cdx_next_series_window(lo).ok_or_else(|| {
+            RecipeError::InvalidArgument(format!("no '{gen_ticker}' series had started by {dt}"))
+        })?;
+    }
+}
+
+/// Highest series in `lo..=hi` that had started by `dt`, or `None` when the
+/// whole window starts later.
+///
+/// Walks down from `hi`. Every series above the answer must report an accrual
+/// date, and those dates must strictly decrease -- a hole or an out-of-order
+/// date could hide a later-starting series and silently return an older one.
+async fn resolve_cdx_ladder(
+    engine: &Engine,
+    gen_ticker: &str,
+    lo: u32,
+    hi: u32,
+    dt: NaiveDate,
+) -> Result<Option<CdxSeriesAt>> {
+    let aliases = (lo..=hi)
+        .map(|series| Ok(gen_to_specific(gen_ticker, series)?))
+        .collect::<Result<Vec<String>>>()?;
+    let batch = request_cdx_metadata(engine, &aliases).await?;
+    pick_cdx_ladder_series(&batch, gen_ticker, &aliases, lo, dt)
+}
+
+/// Decide which rung of a fetched ladder applies on `dt`.
+///
+/// Split from the request so the ordering and completeness rules are testable
+/// without a Bloomberg session. `aliases` is ordered by ascending series,
+/// starting at `lo`.
+fn pick_cdx_ladder_series(
+    batch: &RecordBatch,
+    gen_ticker: &str,
+    aliases: &[String],
+    lo: u32,
+    dt: NaiveDate,
+) -> Result<Option<CdxSeriesAt>> {
+    let mut above: Option<(u32, NaiveDate)> = None;
+
+    for (offset, alias) in aliases.iter().enumerate().rev() {
+        let series = lo + offset as u32;
+        let accrual_start = required_cdx_date(batch, alias, CDX_ACCRUAL_FIELD)?;
+
+        if let Some((above_series, above_accrual)) = above {
+            if accrual_start >= above_accrual {
+                return Err(RecipeError::Other(format!(
+                    "'{gen_ticker}' S{series} starts {accrual_start}, not before S{above_series} at {above_accrual}"
+                )));
+            }
+        }
+        above = Some((series, accrual_start));
+
+        if accrual_start <= dt {
+            let version = required_cdx_number(batch, alias, "VERSION")?;
+            return Ok(Some(CdxSeriesAt {
+                info: ResolvedCdxInfo::resolve(parse_cdx_ticker(alias)?, series, version)?,
+                accrual_start,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn request_cdx_metadata(engine: &Engine, securities: &[String]) -> Result<RecordBatch> {
     let params = RequestParams {
         service: Service::RefData.to_string(),
         operation: Operation::ReferenceData.to_string(),
-        securities: Some(vec![gen_ticker.to_string()]),
+        securities: Some(securities.to_vec()),
         fields: Some(vec![
             "ROLLING_SERIES".to_string(),
             "VERSION".to_string(),
-            "CDS_FIRST_ACCRUAL_START_DATE".to_string(),
+            CDX_ACCRUAL_FIELD.to_string(),
         ]),
         ..Default::default()
     };
-
-    let batch = engine.request(params).await?;
-    let series = required_cdx_number(&batch, gen_ticker, "ROLLING_SERIES")?;
-    let accrual_dt =
-        extract_refdata_date_for_ticker(&batch, gen_ticker, "CDS_FIRST_ACCRUAL_START_DATE")?;
-
-    if accrual_dt.is_some_and(|start| dt < start) && series > 1 {
-        let previous_alias = gen_to_specific(gen_ticker, series - 1)?;
-        resolve_specific_cdx(engine, &previous_alias).await
-    } else {
-        let version = required_cdx_number(&batch, gen_ticker, "VERSION")?;
-        ResolvedCdxInfo::resolve(parsed, series, version).map_err(Into::into)
-    }
+    Ok(engine.request(params).await?)
 }
 
 async fn resolve_specific_cdx(engine: &Engine, ticker: &str) -> Result<ResolvedCdxInfo> {
@@ -452,20 +568,9 @@ async fn resolve_specific_cdx(engine: &Engine, ticker: &str) -> Result<ResolvedC
     let series = parsed
         .series_num
         .ok_or_else(|| RecipeError::Other(format!("missing parsed CDX series for '{ticker}'")))?;
-    let version = resolve_cdx_version(engine, ticker).await?;
+    let batch = request_cdx_metadata(engine, &[ticker.to_string()]).await?;
+    let version = required_cdx_number(&batch, ticker, "VERSION")?;
     ResolvedCdxInfo::resolve(parsed, series, version).map_err(Into::into)
-}
-
-async fn resolve_cdx_version(engine: &Engine, ticker: &str) -> Result<u32> {
-    let params = RequestParams {
-        service: Service::RefData.to_string(),
-        operation: Operation::ReferenceData.to_string(),
-        securities: Some(vec![ticker.to_string()]),
-        fields: Some(vec!["VERSION".to_string()]),
-        ..Default::default()
-    };
-    let batch = engine.request(params).await?;
-    required_cdx_number(&batch, ticker, "VERSION")
 }
 
 fn required_cdx_number(batch: &RecordBatch, ticker: &str, field: &str) -> Result<u32> {
@@ -477,6 +582,18 @@ fn required_cdx_number(batch: &RecordBatch, ticker: &str, field: &str) -> Result
     parse_series_number(&raw).ok_or_else(|| {
         RecipeError::Other(format!("unable to parse {field}='{raw}' for '{ticker}'"))
     })
+}
+
+fn required_cdx_date(batch: &RecordBatch, ticker: &str, field: &str) -> Result<NaiveDate> {
+    extract_refdata_date_for_ticker(batch, ticker, field)?.ok_or_else(|| {
+        RecipeError::Other(format!(
+            "missing {field} for '{ticker}' in Bloomberg response"
+        ))
+    })
+}
+
+fn has_history_value(batch: &RecordBatch, ticker: &str, field: &str) -> Result<bool> {
+    Ok(latest_history_numeric_point(batch, ticker, field)?.is_some())
 }
 
 async fn bloomberg_current_generic_ticker(
@@ -1320,8 +1437,104 @@ mod tests {
         assert_eq!(latest.1, "UXK6");
     }
 
+    /// Real CDX.NA.IG accrual dates, including the business-day-adjusted rolls
+    /// that a nominal 20-Mar/20-Sep cadence would get wrong.
+    const IG_LADDER: &[(u32, &str)] = &[
+        (42, "2024-03-20"),
+        (43, "2024-09-20"),
+        (44, "2025-03-20"),
+        (45, "2025-09-22"),
+    ];
+
+    fn ig_alias(series: u32) -> String {
+        format!("CDX IG CDSI S{series} 5Y Corp")
+    }
+
+    fn ladder_batch(rungs: &[(u32, &str)], skip_accrual: Option<u32>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("ticker", DataType::Utf8, false),
+            Field::new("field", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+
+        let mut tickers = Vec::new();
+        let mut fields = Vec::new();
+        let mut values = Vec::new();
+        for (series, accrual) in rungs {
+            if skip_accrual != Some(*series) {
+                tickers.push(ig_alias(*series));
+                fields.push(CDX_ACCRUAL_FIELD.to_string());
+                values.push((*accrual).to_string());
+            }
+            tickers.push(ig_alias(*series));
+            fields.push("VERSION".to_string());
+            values.push("1".to_string());
+        }
+
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(tickers)),
+                Arc::new(StringArray::from(fields)),
+                Arc::new(StringArray::from(values)),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn pick_ig_ladder(dt: &str, skip_accrual: Option<u32>) -> Result<Option<u32>> {
+        let aliases: Vec<String> = IG_LADDER.iter().map(|(n, _)| ig_alias(*n)).collect();
+        let batch = ladder_batch(IG_LADDER, skip_accrual);
+        let dt = NaiveDate::parse_from_str(dt, "%Y-%m-%d").unwrap();
+        Ok(pick_cdx_ladder_series(
+            &batch,
+            "CDX IG CDSI GEN 5Y Corp",
+            &aliases,
+            IG_LADDER[0].0,
+            dt,
+        )?
+        .map(|found| found.info.series()))
+    }
+
+    #[test]
+    fn test_pick_cdx_ladder_series_uses_actual_accrual_dates() {
+        // S45 starts 2025-09-22, so the nominal 20 September roll is still S44.
+        assert_eq!(pick_ig_ladder("2025-09-19", None).unwrap(), Some(44));
+        assert_eq!(pick_ig_ladder("2025-09-21", None).unwrap(), Some(44));
+        assert_eq!(pick_ig_ladder("2025-09-22", None).unwrap(), Some(45));
+        assert_eq!(pick_ig_ladder("2024-06-01", None).unwrap(), Some(42));
+        assert_eq!(pick_ig_ladder("2026-07-27", None).unwrap(), Some(45));
+    }
+
+    #[test]
+    fn test_pick_cdx_ladder_series_reports_window_starting_after_date() {
+        assert_eq!(pick_ig_ladder("2024-01-01", None).unwrap(), None);
+    }
+
+    #[test]
+    fn test_pick_cdx_ladder_series_rejects_hole_above_the_match() {
+        // A missing rung above the match could hide a later-starting series.
+        assert!(pick_ig_ladder("2024-06-01", Some(44)).is_err());
+        // Below the match it cannot change the answer, so it is never read.
+        assert_eq!(pick_ig_ladder("2025-09-22", Some(42)).unwrap(), Some(45));
+    }
+
+    #[test]
+    fn test_pick_cdx_ladder_series_rejects_non_decreasing_accrual_dates() {
+        // S44 claiming a later start than S45 means the walk down can no longer
+        // trust that the first qualifying rung is the highest one.
+        let scrambled: &[(u32, &str)] = &[(44, "2026-09-01"), (45, "2026-08-01")];
+        let aliases: Vec<String> = scrambled.iter().map(|(n, _)| ig_alias(*n)).collect();
+        let batch = ladder_batch(scrambled, None);
+        let dt = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        assert!(
+            pick_cdx_ladder_series(&batch, "CDX IG CDSI GEN 5Y Corp", &aliases, 44, dt).is_err()
+        );
+    }
+
     #[test]
     fn test_parse_series_number_accepts_int_and_decimal_text() {
+        // Bloomberg returns ROLLING_SERIES and VERSION as decimal text.
         assert_eq!(parse_series_number("45"), Some(45));
         assert_eq!(parse_series_number("45.0"), Some(45));
         assert_eq!(parse_series_number("45.5"), None);
@@ -1330,13 +1543,32 @@ mod tests {
     }
 
     #[test]
-    fn test_cdx_lookback_start_rejects_out_of_range() {
+    fn test_cdx_activity_window_start_reaches_back_to_accrual_start() {
         let dt = NaiveDate::from_ymd_opt(2026, 7, 17).unwrap();
+        let accrual = NaiveDate::from_ymd_opt(2026, 3, 20).unwrap();
+
+        // The window always covers the series' whole life, never just the
+        // trailing lookback, so "has it traded yet" cannot flip back to false.
         assert_eq!(
-            cdx_lookback_start(dt, None).unwrap(),
-            dt - Duration::days(10)
+            cdx_activity_window_start(dt, None, accrual).unwrap(),
+            accrual
         );
-        assert!(cdx_lookback_start(dt, Some(i32::MAX)).is_err());
+        // A lookback reaching further back than the accrual date still wins.
+        assert_eq!(
+            cdx_activity_window_start(dt, Some(365), accrual).unwrap(),
+            dt - Duration::days(365)
+        );
+        assert!(cdx_activity_window_start(dt, Some(i32::MAX), accrual).is_err());
+    }
+
+    #[test]
+    fn test_required_cdx_date_requires_present_metadata() {
+        let batch = ladder_batch(&[(45, "2025-09-22")], None);
+        assert_eq!(
+            required_cdx_date(&batch, &ig_alias(45), CDX_ACCRUAL_FIELD).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 9, 22).unwrap()
+        );
+        assert!(required_cdx_date(&batch, &ig_alias(44), CDX_ACCRUAL_FIELD).is_err());
     }
 
     #[test]

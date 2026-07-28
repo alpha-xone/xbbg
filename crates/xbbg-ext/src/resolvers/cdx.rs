@@ -1,6 +1,8 @@
 //! CDX (Credit Default Index) ticker resolution utilities.
 use std::num::NonZeroU32;
 
+use chrono::{Months, NaiveDate};
+
 use crate::error::{ExtError, Result};
 
 /// CDX ticker series information.
@@ -352,9 +354,160 @@ pub fn gen_to_specific(gen_ticker: &str, series: u32) -> Result<String> {
     Ok(build_cdx_alias(&info))
 }
 
+/// Months between consecutive CDS index series.
+///
+/// Markit rolls CDX and iTraxx semi-annually, nominally on 20 March and
+/// 20 September. The effective date is business-day adjusted (CDX.NA.IG.45
+/// starts 2025-09-22, not 2025-09-20), so this cadence may only size a search
+/// window -- never decide which series applies.
+const CDX_ROLL_MONTHS: u32 = 6;
+
+/// Maximum prior series probed per ladder batch.
+///
+/// Twelve years of semi-annual rolls. Callers that exhaust a batch without a
+/// match continue with the next block down.
+pub const CDX_LADDER_BATCH: u32 = 24;
+
+/// Estimated number of semi-annual rolls between `dt` and `accrual_start`.
+///
+/// Zero when `dt` is on or after `accrual_start`. The result is an estimate
+/// derived from the nominal roll cadence and is only ever used to size a
+/// candidate window; the series that applies to `dt` must still be decided by
+/// comparing `dt` against the accrual dates Bloomberg reports.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::NaiveDate;
+/// use xbbg_ext::resolvers::cdx::cdx_rolls_between;
+///
+/// let accrual = NaiveDate::from_ymd_opt(2026, 3, 20).unwrap();
+/// let dt = NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
+/// assert_eq!(cdx_rolls_between(dt, accrual), 1);
+/// assert_eq!(cdx_rolls_between(accrual, accrual), 0);
+/// ```
+pub fn cdx_rolls_between(dt: NaiveDate, accrual_start: NaiveDate) -> u32 {
+    let step = Months::new(CDX_ROLL_MONTHS);
+    let mut probe = accrual_start;
+    let mut rolls = 0;
+
+    while probe > dt && rolls < CDX_LADDER_BATCH {
+        let Some(earlier) = probe.checked_sub_months(step) else {
+            break;
+        };
+        probe = earlier;
+        rolls += 1;
+    }
+
+    rolls
+}
+
+/// Inclusive series window to probe first when `dt` precedes `current_series`.
+///
+/// `None` when `current_series` already covers `dt`, or when no prior series
+/// exists. The window spans one series past the cadence estimate so a
+/// business-day-adjusted roll cannot fall outside it.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::NaiveDate;
+/// use xbbg_ext::resolvers::cdx::cdx_prior_series_window;
+///
+/// let accrual = NaiveDate::from_ymd_opt(2026, 3, 20).unwrap();
+/// let dt = NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
+/// assert_eq!(cdx_prior_series_window(46, accrual, dt), Some((44, 45)));
+/// ```
+pub fn cdx_prior_series_window(
+    current_series: u32,
+    current_accrual_start: NaiveDate,
+    dt: NaiveDate,
+) -> Option<(u32, u32)> {
+    if dt >= current_accrual_start || current_series <= 1 {
+        return None;
+    }
+
+    let hi = current_series - 1;
+    let lo = hi
+        .saturating_sub(cdx_rolls_between(dt, current_accrual_start))
+        .max(1);
+    Some((lo, hi))
+}
+
+/// Inclusive series window immediately below an exhausted one.
+///
+/// `None` once series 1 has been probed.
+pub fn cdx_next_series_window(probed_lo: u32) -> Option<(u32, u32)> {
+    if probed_lo <= 1 {
+        return None;
+    }
+
+    let hi = probed_lo - 1;
+    let lo = hi.saturating_sub(CDX_LADDER_BATCH - 1).max(1);
+    Some((lo, hi))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn day(text: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn test_cdx_rolls_between_counts_semiannual_steps() {
+        // CDX.NA.IG.46 first accrues 2026-03-20.
+        let accrual = day("2026-03-20");
+        assert_eq!(cdx_rolls_between(accrual, accrual), 0);
+        assert_eq!(cdx_rolls_between(day("2026-06-01"), accrual), 0);
+        assert_eq!(cdx_rolls_between(day("2026-03-18"), accrual), 1);
+        assert_eq!(cdx_rolls_between(day("2025-06-01"), accrual), 2);
+        // S34 first accrues 2020-03-20, twelve rolls earlier.
+        assert_eq!(cdx_rolls_between(day("2020-06-01"), accrual), 12);
+    }
+
+    #[test]
+    fn test_cdx_rolls_between_is_capped_per_batch() {
+        assert_eq!(
+            cdx_rolls_between(day("1900-01-01"), day("2026-03-20")),
+            CDX_LADDER_BATCH
+        );
+    }
+
+    #[test]
+    fn test_cdx_prior_series_window_spans_the_cadence_estimate() {
+        let accrual = day("2026-03-20");
+        // The window reaches one series past the estimate, so a roll adjusted
+        // forward off the 20th cannot fall outside it.
+        assert_eq!(
+            cdx_prior_series_window(46, accrual, day("2026-03-18")),
+            Some((44, 45))
+        );
+        assert_eq!(
+            cdx_prior_series_window(46, accrual, day("2020-06-01")),
+            Some((33, 45))
+        );
+    }
+
+    #[test]
+    fn test_cdx_prior_series_window_clamps_to_first_series() {
+        let accrual = day("2026-03-20");
+        assert_eq!(
+            cdx_prior_series_window(3, accrual, day("2020-06-01")),
+            Some((1, 2))
+        );
+        // The current series already covers the date, or has no predecessor.
+        assert_eq!(cdx_prior_series_window(46, accrual, accrual), None);
+        assert_eq!(cdx_prior_series_window(1, accrual, day("2020-06-01")), None);
+    }
+
+    #[test]
+    fn test_cdx_next_series_window_walks_down_to_series_one() {
+        assert_eq!(cdx_next_series_window(33), Some((9, 32)));
+        assert_eq!(cdx_next_series_window(10), Some((1, 9)));
+        assert_eq!(cdx_next_series_window(1), None);
+    }
 
     #[test]
     fn test_parse_generic_cdx() {

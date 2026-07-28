@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import contextlib
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
 import logging
 import re
 
@@ -52,15 +51,7 @@ def _parse_date(dt: DateLike) -> datetime:
     return _normalize_to_datetime(dt)
 
 
-_FLD_ROLLING_SERIES = "ROLLING_SERIES"
-_FLD_OTR_INDICATOR = "ON_THE_RUN_CURRENT_BD_INDICATOR"
-_FLD_ACCRUAL_START = "CDS_FIRST_ACCRUAL_START_DATE"
-_FLD_VERSION = "VERSION"
-_CDX_MAX_U32 = 2**32 - 1
-
 _FUTURES_MONTH_CODES = "".join(ext_get_futures_months().values())
-
-_CDX_FIELDS = [_FLD_ROLLING_SERIES, _FLD_OTR_INDICATOR, _FLD_ACCRUAL_START, _FLD_VERSION]
 
 
 def _parse_generic_ticker(gen_ticker: str) -> tuple[str, int, str]:
@@ -181,111 +172,6 @@ async def _resolve_chain(gen_ticker: str, dt: datetime, **kwargs) -> list[tuple[
 
     contracts.sort(key=lambda item: item[1])
     return contracts
-
-
-def _extract_field_value(nw_df, field_name: str):
-    """Extract a scalar value from a SEMI_LONG frame by field name."""
-    field_upper = field_name.upper()
-
-    # LONG / SEMI_LONG format: ticker, field, value
-    if "field" in nw_df.columns and "value" in nw_df.columns:
-        rows = nw_df.filter(nw.col("field").str.to_uppercase() == field_upper).select("value")
-        if len(rows) == 0:
-            return None
-        return rows.item(0, 0)
-
-    # Wide fallback
-    if field_name in nw_df.columns and len(nw_df) > 0:
-        return nw_df[field_name][0]
-
-    lower_name = field_name.lower()
-    if lower_name in nw_df.columns and len(nw_df) > 0:
-        return nw_df[lower_name][0]
-
-    return None
-
-
-def _parse_positive_cdx_number(value: object) -> int | None:
-    """Parse Bloomberg CDX numeric metadata without truncation."""
-    try:
-        parsed = Decimal(str(value).strip())
-    except (InvalidOperation, TypeError, ValueError):
-        return None
-
-    if not parsed.is_finite() or parsed != parsed.to_integral_value() or not 1 <= parsed <= _CDX_MAX_U32:
-        return None
-    return int(parsed)
-
-
-def _parse_series_token(tok: str) -> int | None:
-    """Parse a positive ``S{n}`` token and return its series number."""
-    if not tok.startswith("S"):
-        return None
-    digits = tok[1:]
-    if not digits.isdigit():
-        return None
-    return _parse_positive_cdx_number(digits)
-
-
-def _find_series_token_index(tokens: list[str]) -> int | None:
-    """Find series token index (``S{n}``) in tokenized CDX ticker."""
-    for idx, token in enumerate(tokens):
-        if _parse_series_token(token) is not None:
-            return idx
-    return None
-
-
-def _append_version_to_ticker(ticker: str, version: int) -> str:
-    """Insert ``V{version}`` token after series token."""
-    tokens = ticker.split()
-    series_idx = _find_series_token_index(tokens)
-    if series_idx is None:
-        return ticker
-
-    if series_idx + 1 < len(tokens) and tokens[series_idx + 1].startswith("V") and tokens[series_idx + 1][1:].isdigit():
-        tokens.pop(series_idx + 1)
-
-    tokens.insert(series_idx + 1, f"V{version}")
-    return " ".join(tokens)
-
-
-def _strip_version_from_ticker(ticker: str) -> str:
-    """Remove ``V{n}`` token from resolved CDX ticker if present."""
-    tokens = ticker.split()
-    series_idx = _find_series_token_index(tokens)
-    if series_idx is None:
-        return ticker
-
-    if series_idx + 1 < len(tokens) and tokens[series_idx + 1].startswith("V") and tokens[series_idx + 1][1:].isdigit():
-        tokens.pop(series_idx + 1)
-    return " ".join(tokens)
-
-
-def _present_cdx_ticker(ticker: str, *, versionless: bool) -> str:
-    """Apply the requested presentation to an explicitly versioned CDX ticker."""
-    return _strip_version_from_ticker(ticker) if versionless else ticker
-
-
-async def _resolve_version_for_ticker(ticker: str, **kwargs) -> str:
-    """Resolve a series ticker to an explicit, positive ``V{n}`` identity."""
-    from xbbg import abdp
-
-    if _find_series_token_index(ticker.split()) is None:
-        return ""
-
-    try:
-        meta = await abdp(tickers=ticker, flds=[_FLD_VERSION], **kwargs)
-    except (ValueError, TypeError, KeyError):
-        return ""
-
-    nw_meta = nw.from_native(meta)
-    if len(nw_meta) == 0:
-        return ""
-
-    version = _parse_positive_cdx_number(_extract_field_value(nw_meta, _FLD_VERSION))
-    if version is None:
-        return ""
-    return _append_version_to_ticker(ticker, version)
 
 
 # =============================================================================
@@ -477,30 +363,50 @@ async def aactive_futures(
     return max(latest_volumes, key=lambda key: latest_volumes.get(key, 0.0))
 
 
+async def _resolve_cdx_recipe(recipe: str, *args) -> str:
+    """Run a native CDX recipe and unwrap its single-ticker result."""
+    table = await _call_native_recipe(recipe, *args, backend="native")
+    rows = table.to_pylist()
+    if len(rows) != 1:
+        raise ValueError(f"{recipe} returned {len(rows)} rows, expected exactly 1")
+    ticker = rows[0].get("ticker")
+    if not ticker:
+        raise ValueError(f"{recipe} returned a row without a ticker")
+    return str(ticker)
+
+
 async def acdx_ticker(
     gen_ticker: str,
     dt: DateLike,
     versionless: bool = False,
-    **kwargs,
 ) -> str:
-    """Async resolve generic CDX ticker to specific series.
+    """Async resolve a generic CDX ticker to the series that applies on a date.
 
-    Methodology matches the release/0.x resolver logic:
-    - Fetch ``ROLLING_SERIES``, ``VERSION``, ``ON_THE_RUN_CURRENT_BD_INDICATOR``,
-      and ``CDS_FIRST_ACCRUAL_START_DATE``.
-    - Resolve ``GEN`` to ``S{series}`` and always append a positive ``V{n}``.
-    - If the requested date is before accrual start, independently resolve the
-      prior series version.
+    The answer is the highest series whose Bloomberg
+    ``CDS_FIRST_ACCRUAL_START_DATE`` falls on or before ``dt``, so it can never
+    move backwards as ``dt`` advances. Roll dates are read from Bloomberg rather
+    than assumed from the semi-annual cadence, because they are business-day
+    adjusted: CDX.NA.IG.45 first accrues 2025-09-22, so 2025-09-21 still
+    resolves to S44.
+
+    The ``V{n}`` token is the latest version Bloomberg reports for the resolved
+    series. Bloomberg publishes no as-of version, and superseded version
+    tickers carry no price history, so an older ``V{n}`` would name a security
+    that cannot be priced.
 
     Args:
         gen_ticker: Generic CDX ticker (e.g., 'CDX IG CDSI GEN 5Y Corp').
         dt: Reference date.
-        versionless: Strip the version token from the selected final result.
-        **kwargs: Additional arguments passed to abdp.
+        versionless: Drop the ``V{n}`` token from the returned ticker.
 
     Returns:
-        Specific series ticker (e.g., ``CDX IG CDSI S45 V1 5Y Corp`` or
-        ``CDX HY CDSI S44 V2 5Y Corp``).
+        Specific series ticker (e.g., ``CDX IG CDSI S34 V1 5Y Corp``).
+
+    Raises:
+        ValueError: ``gen_ticker`` is not generic, or ``dt`` precedes the first
+            series of the index.
+        RuntimeError: Bloomberg did not report the series metadata the ladder
+            needs, or reported an inconsistent series ladder.
 
     Example::
 
@@ -509,78 +415,18 @@ async def acdx_ticker(
 
 
         async def main():
-            ticker = await acdx_ticker("CDX IG CDSI GEN 5Y Corp", "2024-01-15")
+            # 'CDX IG CDSI S34 V1 5Y Corp' -- the series on the run in mid-2020
+            return await acdx_ticker("CDX IG CDSI GEN 5Y Corp", "2020-06-01")
 
 
         asyncio.run(main())
     """
-    from xbbg import abdp
-
-    dt_parsed = _parse_date(dt)
-
-    try:
-        info = await abdp(tickers=gen_ticker, flds=_CDX_FIELDS, **kwargs)
-    except (ValueError, TypeError, KeyError):
-        logger.warning("Failed to get CDX info")
-        return ""
-
-    nw_info = nw.from_native(info)
-
-    if len(nw_info) == 0:
-        return ""
-
-    ticker_data = nw_info
-    if "ticker" in nw_info.columns:
-        ticker_data = nw_info.filter(nw.col("ticker") == gen_ticker)
-        if len(ticker_data) == 0:
-            ticker_data = nw_info
-
-    otr = _extract_field_value(ticker_data, _FLD_OTR_INDICATOR)
-    if otr is not None and str(otr).upper() not in ("Y", "TRUE"):
-        logger.warning(
-            "Generic ticker %s has ON_THE_RUN_CURRENT_BD_INDICATOR=%r (expected 'Y' or 'true')",
-            gen_ticker,
-            otr,
-        )
-
-    series = _parse_positive_cdx_number(_extract_field_value(ticker_data, _FLD_ROLLING_SERIES))
-    if series is None:
-        return ""
-
-    start_dt = None
-    start_dt_raw = _extract_field_value(ticker_data, _FLD_ACCRUAL_START)
-    if start_dt_raw is not None:
-        try:
-            start_dt = _parse_date(start_dt_raw)
-        except (ValueError, TypeError):
-            start_dt = None
-
-    tokens = gen_ticker.split()
-    if "GEN" not in tokens:
-        logger.warning("Generic ticker %s does not contain GEN token", gen_ticker)
-        return ""
-
-    gen_idx = tokens.index("GEN")
-    tokens[gen_idx] = f"S{series}"
-    current_alias = " ".join(tokens)
-
-    # If request date is before current-series accrual start, use previous series
-    if start_dt is not None and dt_parsed < start_dt and series > 1:
-        prev_tokens = current_alias.split()
-        series_idx = _find_series_token_index(prev_tokens)
-        if series_idx is None:
-            return ""
-        prev_tokens[series_idx] = f"S{series - 1}"
-        resolved = await _resolve_version_for_ticker(" ".join(prev_tokens), **kwargs)
-        if not resolved:
-            return ""
-    else:
-        version = _parse_positive_cdx_number(_extract_field_value(ticker_data, _FLD_VERSION))
-        if version is None:
-            return ""
-        resolved = _append_version_to_ticker(current_alias, version)
-
-    return _present_cdx_ticker(resolved, versionless=versionless)
+    return await _resolve_cdx_recipe(
+        "recipe_cdx_ticker",
+        gen_ticker,
+        _fmt_date(_parse_date(dt)),
+        versionless,
+    )
 
 
 async def aactive_cdx(
@@ -588,91 +434,40 @@ async def aactive_cdx(
     dt: DateLike,
     lookback_days: int = 10,
     versionless: bool = False,
-    **kwargs,
 ) -> str:
-    """Async get the most active CDX contract for a date.
+    """Async resolve the latest CDX series that had started and traded by a date.
 
-    Resolves current and prior series to explicit positive versions before any
-    metadata or history request. ``versionless`` strips the version token only
-    from the selected final result.
+    Matches :func:`acdx_ticker` except between a roll and the new series' first
+    print, when the preceding series is still the traded one -- CDX.NA.HY.46
+    started 2026-03-20 but first printed 2026-03-27, so those five business days
+    resolve to S45.
+
+    The activity window always reaches back to the resolved series' first
+    accrual date, so "this series has traded" can only ever flip false to true
+    and the result never moves backwards as ``dt`` advances.
+
+    Args:
+        gen_ticker: Generic CDX ticker (e.g., 'CDX HY CDSI GEN 5Y Corp').
+        dt: Reference date.
+        lookback_days: Minimum activity window, in days, before ``dt``.
+        versionless: Drop the ``V{n}`` token from the returned ticker.
+
+    Returns:
+        Specific series ticker (e.g., ``CDX HY CDSI S45 V3 5Y Corp``).
+
+    Raises:
+        ValueError: ``gen_ticker`` is not generic, or ``dt`` precedes the first
+            series of the index.
+        RuntimeError: Neither the resolved series nor its predecessor reported
+            ``PX_LAST`` in the window.
     """
-    from xbbg import abdh
-
-    cur = await acdx_ticker(gen_ticker=gen_ticker, dt=dt, versionless=False, **kwargs)
-    if not cur:
-        return ""
-
-    dt_parsed = _parse_date(dt)
-
-    prev = ""
-    prev_base = _strip_version_from_ticker(cur)
-    parts = prev_base.split()
-    idx = _find_series_token_index(parts)
-    if idx is not None:
-        series = _parse_series_token(parts[idx])
-        if series is not None and series > 1:
-            parts[idx] = f"S{series - 1}"
-            prev = " ".join(parts)
-
-    if not prev:
-        return _present_cdx_ticker(cur, versionless=versionless)
-
-    prev = await _resolve_version_for_ticker(prev, **kwargs)
-    if not prev:
-        return _present_cdx_ticker(cur, versionless=versionless)
-
-    # Compare activity using latest non-null PX_LAST date
-    start = dt_parsed - timedelta(days=lookback_days)
-    end = dt_parsed
-
-    try:
-        px = await abdh(tickers=[cur, prev], flds=["PX_LAST"], start_date=start, end_date=end, **kwargs)
-        nw_px = nw.from_native(px)
-
-        if len(nw_px) == 0:
-            return _present_cdx_ticker(cur, versionless=versionless)
-
-        latest_dates: dict[str, str] = {}
-
-        # LONG format: ticker/date/field/value
-        if "field" in nw_px.columns and "value" in nw_px.columns:
-            px_rows = nw_px.filter(nw.col("field").str.to_uppercase() == "PX_LAST")
-            px_rows = px_rows.filter(~nw.col("value").is_null())
-
-            if len(px_rows) == 0 or "date" not in px_rows.columns:
-                return _present_cdx_ticker(cur, versionless=versionless)
-
-            for ticker in [cur, prev]:
-                tk_rows = px_rows.filter(nw.col("ticker") == ticker).sort("date", descending=True)
-                if len(tk_rows) > 0:
-                    latest_dates[ticker] = str(tk_rows["date"][0])
-
-        # Wide format: ticker/date/PX_LAST
-        else:
-            px_col = None
-            if "PX_LAST" in nw_px.columns:
-                px_col = "PX_LAST"
-            elif "px_last" in nw_px.columns:
-                px_col = "px_last"
-
-            if px_col is None or "date" not in nw_px.columns:
-                return _present_cdx_ticker(cur, versionless=versionless)
-
-            px_rows = nw_px.filter(~nw.col(px_col).is_null())
-            for ticker in [cur, prev]:
-                tk_rows = px_rows.filter(nw.col("ticker") == ticker).sort("date", descending=True)
-                if len(tk_rows) > 0:
-                    latest_dates[ticker] = str(tk_rows["date"][0])
-
-        best_ticker = cur
-        best_date = latest_dates.get(cur, "")
-        if prev in latest_dates and latest_dates[prev] > best_date:
-            best_ticker = prev
-        return _present_cdx_ticker(best_ticker, versionless=versionless)
-
-    except (ValueError, TypeError, KeyError):
-        logger.debug("Failed to compare CDX activity")
-    return _present_cdx_ticker(cur, versionless=versionless)
+    return await _resolve_cdx_recipe(
+        "recipe_active_cdx",
+        gen_ticker,
+        _fmt_date(_parse_date(dt)),
+        lookback_days,
+        versionless,
+    )
 
 
 async def afutures_curve(
