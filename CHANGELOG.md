@@ -10,14 +10,17 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 ### Changed
 
 - **`lookback_days` on `active_cdx` is now a minimum, not the whole window**: the activity window always reaches back to the resolved series' first accrual date, so "this series has traded" can only flip false to true as the date advances.
-- **`xbbg.ext.acdx_ticker` / `aactive_cdx` no longer accept `**kwargs`**: they took Bloomberg request keywords that only reached internal metadata lookups and never affected the returned ticker.
+
+### Removed
+
+- **BREAKING -- `**kwargs` on `xbbg.ext.acdx_ticker` / `aactive_cdx`**: these forwarded Bloomberg request keywords to internal metadata lookups and never affected the returned ticker; passing them is now a `TypeError`.
 
 ### Fixed
 
 - **CDX series resolution is now as-of the requested date, and monotone**: `cdx_ticker` / `active_cdx`, `Engine.cdxTicker()` / `Engine.activeCdx()`, and the underlying `xbbg-recipes` entry points resolve the series whose Bloomberg `CDS_FIRST_ACCRUAL_START_DATE` is the latest one on or before the reference date, walking the accrual ladder in batched reference-data requests. Previously they read `ROLLING_SERIES` off the generic ticker -- a point-in-time field that reports *today's* series whatever date was asked for -- and stepped back at most one series, so every historical date collapsed onto the current series or its predecessor (`cdx_ticker('CDX IG CDSI GEN 5Y Corp', '2020-06-01')` returned S45; it now returns S34). `active_cdx` additionally chose between the two candidates by whichever had the later `PX_LAST` print, which flipped the answer back to the older series on any day the newer one had not yet printed. Series, and version within a series, are now non-decreasing as the date advances.
 - **CDX roll dates are read, not assumed**: the semi-annual cadence only sizes the candidate window; the series is decided by comparing against the accrual dates Bloomberg returns. Business-day-adjusted rolls therefore resolve exactly -- CDX.NA.IG.45 first accrues 2025-09-22, so 2025-09-21 resolves to S44.
 - **CDX version is resolved per series**: the `Vn` token is the version Bloomberg reports for the resolved series (CDX.NA.HY.32 resolves to V14, HY.40 to V4), instead of the current series' version stamped onto every answer. Version is scoped to a series and resets at each roll, so it is non-decreasing within a series but not across one.
-- **Failed CDX resolution raises**: `xbbg.ext.cdx_ticker` / `active_cdx` no longer swallow Bloomberg errors, missing metadata, or unparseable series numbers into an empty-string ticker. They now delegate to the same `xbbg-recipes` resolver as `@xbbg/core`, so the Python and JavaScript surfaces cannot drift apart, and raise `ValueError` / `RuntimeError` instead.
+- **BREAKING -- failed CDX resolution raises**: `xbbg.ext.cdx_ticker` / `active_cdx` no longer swallow Bloomberg errors, missing metadata, or unparseable series numbers into an empty-string ticker. They now delegate to the same `xbbg-recipes` resolver as `@xbbg/core`, so the Python and JavaScript surfaces cannot drift apart, and raise `ValueError` (non-generic ticker, date before the index's first series) or `RuntimeError` (missing or inconsistent Bloomberg metadata) instead. Callers that tested for `""` must catch instead.
 
 ## [1.4.5] - 2026-07-18
 
