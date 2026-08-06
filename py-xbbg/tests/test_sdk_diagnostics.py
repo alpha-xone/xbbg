@@ -18,6 +18,45 @@ def test_import_xbbg_is_warning_free():
     _CASE.assertEqual(recorded, [])
 
 
+def _write_fake_blpapi(root: Path) -> Path:
+    """Create a stand-in blpapi wheel carrying Bloomberg's invalid escape sequence."""
+    package = root / "blpapi"
+    package.mkdir()
+    # Mirrors the docstrings in Bloomberg's resolutionlist.py / topiclist.py,
+    # which Python 3.12+ reports as SyntaxWarning when first compiled.
+    package.joinpath("__init__.py").write_text(
+        '"""Stand-in for Bloomberg\'s wheel.\n'
+        "\n"
+        "InvalidArgumentException: If adding :class:`Message`\\s received\n"
+        '"""\n'
+        "\n"
+        '__version__ = "0.0.0-fake"\n',
+        encoding="utf-8",
+    )
+    return package
+
+
+def test_blpapi_discovery_import_suppresses_upstream_syntax_warning(tmp_path, monkeypatch):
+    """xbbg imports blpapi only to locate the SDK, so the wheel's own warnings must not leak.
+
+    Bloomberg ships invalid escape sequences in its Python package. Users who never
+    touch blpapi themselves would otherwise see SyntaxWarnings from `import xbbg`.
+    """
+    from xbbg import _sdk
+
+    _write_fake_blpapi(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "blpapi", raising=False)
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        module = _sdk._import_blpapi_module()
+
+    _CASE.assertIsNotNone(module)
+    _CASE.assertEqual(getattr(module, "__version__", None), "0.0.0-fake")
+    _CASE.assertEqual([entry for entry in recorded if issubclass(entry.category, SyntaxWarning)], [])
+
+
 def test_get_lib_version_failure_is_debug_observable(monkeypatch, caplog):
     import xbbg
     from xbbg import _sdk

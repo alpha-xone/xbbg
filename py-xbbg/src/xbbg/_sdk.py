@@ -103,6 +103,31 @@ def _dapi_candidate_paths() -> list[Path]:
     return candidates
 
 
+def _import_blpapi_module():
+    """Import Bloomberg's ``blpapi`` Python package, or return ``None``.
+
+    xbbg links the BLPAPI C++ SDK directly and never calls this package's API.
+    It is imported only because the pip wheel ships the shared library, which
+    makes its directory the most common SDK source for pip users -- probed
+    ahead of a Terminal DAPI install.
+
+    Bloomberg's wheel contains invalid escape sequences in the docstrings of
+    ``resolutionlist.py`` and ``topiclist.py``, which Python 3.12+ reports as
+    ``SyntaxWarning`` the first time those modules are compiled. Since the user
+    never asked for this import, the upstream noise is suppressed here instead
+    of surfacing on every ``import xbbg``.
+    """
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            import blpapi
+    except (ImportError, OSError):
+        return None
+    return blpapi
+
+
 def get_sdk_info() -> dict:
     """Detect all available Bloomberg SDK sources and versions.
 
@@ -143,9 +168,8 @@ def get_sdk_info() -> dict:
         )
 
     # Check 1: blpapi Python package (most common for pip users)
-    try:
-        import blpapi
-
+    blpapi = _import_blpapi_module()
+    if blpapi is not None:
         blpapi_file = getattr(blpapi, "__file__", None)
         sources.append(
             {
@@ -154,8 +178,6 @@ def get_sdk_info() -> dict:
                 "path": Path(blpapi_file) if blpapi_file else None,
             }
         )
-    except (ImportError, OSError):
-        pass
 
     # Check 2: DAPI (Bloomberg Terminal installation)
     first_existing_dapi_path = None
@@ -293,14 +315,11 @@ def _collect_sdk_candidate_dirs() -> list[Path]:
         add(_manual_sdk_path)
 
     # 2. blpapi Python package (most common for pip users)
-    try:
-        import blpapi
-
+    blpapi = _import_blpapi_module()
+    if blpapi is not None:
         blpapi_file = getattr(blpapi, "__file__", None)
         if blpapi_file:
             add(Path(blpapi_file).parent)
-    except (ImportError, OSError):
-        pass
 
     # 3. DAPI (Bloomberg Terminal)
     for dapi_path in _dapi_candidate_paths():
