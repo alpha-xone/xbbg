@@ -356,6 +356,10 @@ jobs:
           - os: ubuntu-latest
             label: linux-x64
             core_package_dir: js-xbbg/packages/xbbg-core-linux-x64
+            # Match the release environment: build and smoke-test the addon in the
+            # manylinux_2_28 container so glibc-floor regressions surface in CI,
+            # not on release day.
+            container: ghcr.io/${{ github.repository_owner }}/xbbg-manylinux:latest
           - os: windows-latest
             label: win32-x64
             core_package_dir: js-xbbg/packages/xbbg-core-win32-x64
@@ -364,6 +368,7 @@ jobs:
             core_package_dir: js-xbbg/packages/xbbg-core-darwin-arm64
 
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
 
@@ -418,7 +423,10 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/blpapi
-          key: blpapi-Linux-${{ env.BLPAPI_VERSION }}
+          # Key is namespaced to the manylinux container layout: caches of
+          # ~/blpapi saved on VM runners (/home/runner) do not restore into
+          # the container home (/root).
+          key: blpapi-Linux-manylinux228-${{ env.BLPAPI_VERSION }}
 
       - name: Download Bloomberg SDK (Linux)
         if: runner.os == 'Linux' && steps.cache-sdk-linux-core.outputs.cache-hit != 'true'
@@ -489,6 +497,10 @@ jobs:
 
       - name: Stage packaged core native addon
         run: npm --prefix js-xbbg run stage:native-package
+
+      - name: Enforce glibc 2.28 floor on native addon (Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/check-glibc-max.sh 2.28 "${{ matrix.core_package_dir }}/napi_xbbg.node"
 
       - name: Validate core native package export
         run: |

@@ -110,8 +110,15 @@ jobs:
       matrix:
         python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          # Linux wheels build inside the manylinux_2_28 (AlmaLinux 8) container so
+          # the extension links against glibc 2.28 and installs on any x86_64
+          # distro with glibc >= 2.28 (RHEL/Alma/Rocky 8, Debian 10+, Ubuntu 20.04+).
+          - os: ubuntu-latest
+            container: ghcr.io/${{ github.repository_owner }}/xbbg-manylinux:latest
 
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
 
@@ -208,10 +215,28 @@ jobs:
           echo "DYLD_LIBRARY_PATH=$LIB_DIR:$DYLD_LIBRARY_PATH" >> "$GITHUB_ENV"
 
       - name: Setup Python ${{ matrix.python }}
+        if: runner.os != 'Linux'
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
           allow-prereleases: true
+
+      # Inside the manylinux container, use its bundled interpreters instead of
+      # actions/setup-python (whose Ubuntu-built CPython needs glibc > 2.28).
+      - name: Select manylinux Python ${{ matrix.python }} (Linux)
+        if: runner.os == 'Linux'
+        env:
+          PYTHON_VERSION: ${{ matrix.python }}
+        run: |
+          tag="cp${PYTHON_VERSION//./}"
+          PYBIN="/opt/python/${tag}-${tag}/bin"
+          if [ ! -x "$PYBIN/python" ]; then
+            echo "Interpreter not found at $PYBIN — available interpreters:" >&2
+            ls /opt/python >&2
+            exit 1
+          fi
+          "$PYBIN/python" --version
+          echo "UV_PYTHON=$PYBIN/python" >> "$GITHUB_ENV"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
@@ -219,12 +244,11 @@ jobs:
       - name: Build wheel
         run: uv build --wheel --out-dir build-wheel/
 
-      - name: Fix Linux wheel platform tag (manylinux)
+      - name: Repair Linux wheel (manylinux_2_28)
         if: runner.os == 'Linux'
         run: |
-          uv pip install --system auditwheel patchelf
           auditwheel show build-wheel/*.whl
-          auditwheel repair build-wheel/*.whl --wheel-dir dist/ --exclude libblpapi3.so --exclude libblpapi3_64.so
+          auditwheel repair build-wheel/*.whl --plat manylinux_2_28_x86_64 --wheel-dir dist/ --exclude libblpapi3.so --exclude libblpapi3_64.so
           echo "Repaired wheel:"
           ls -la dist/*.whl
 
@@ -260,12 +284,15 @@ jobs:
         include:
           - os: ubuntu-latest
             asset_target: linux-amd64
+            # Build against glibc 2.28 so the binary runs on RHEL 8-era distros.
+            container: ghcr.io/${{ github.repository_owner }}/xbbg-manylinux:latest
           - os: macos-latest
             asset_target: darwin-arm64
           - os: windows-latest
             asset_target: windows-amd64
 
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
 
@@ -369,6 +396,10 @@ jobs:
             *) VERSION="0.0.0-dev-$(printf '%.7s' "$GITHUB_SHA")" ;;
           esac
           XBBG_MCP_VERSION="$VERSION" cargo build --release -p xbbg-mcp --locked
+
+      - name: Enforce glibc 2.28 floor (Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/check-glibc-max.sh 2.28 target/release/xbbg-mcp
 
       - name: Build xbbg-mcp (Windows)
         if: runner.os == 'Windows'

@@ -111,6 +111,7 @@ Requirements and notes:
 - If you build from source, stage the Bloomberg C++ SDK with `bash ./scripts/sdktool.sh` on macOS/Linux or `.\\scripts\\sdktool.ps1` on Windows PowerShell.
 - If you manage the SDK yourself, set `BLPAPI_ROOT` or use `xbbg.set_sdk_path(...)`.
 - On Windows Terminal installs, xbbg automatically probes DAPI runtime roots such as `C:\blp\DAPI` and `C:\Program Files (x86)\Bloomberg\Blp\DAPI` before requiring manual configuration.
+- Linux wheels are `manylinux_2_28` (x86_64): any distro with glibc ≥ 2.28 works — RHEL/Alma/Rocky 8+, Debian 10+, Ubuntu 20.04+, Amazon Linux 2023.
 - Optional dataframe conversions are installed separately: `xbbg[pyarrow]`, `xbbg[pandas]`, `xbbg[polars]`, or `xbbg[duckdb]`.
 
 Verify the install:
@@ -219,7 +220,7 @@ npm install @xbbg/core
 bun add @xbbg/core
 ```
 
-The packages target Node.js 24+ server runtimes. Packaged native addons are provided for macOS arm64, Linux x64, and Windows x64. You still need Bloomberg access plus Bloomberg SDK runtime libraries on the target system.
+The packages target Node.js 24+ server runtimes. Packaged native addons are provided for macOS arm64, Linux x64 (glibc 2.28+), and Windows x64. You still need Bloomberg access plus Bloomberg SDK runtime libraries on the target system.
 
 ```ts
 import * as xbbg from '@xbbg/core';

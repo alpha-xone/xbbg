@@ -106,7 +106,7 @@ Go to **GitHub Actions** > **Bump Version and Create Release** > **Run workflow*
 
 | Workflow | File | Purpose |
 |----------|------|---------|
-| Release | `pypi_upload.yml` | Build wheels (Linux + Windows × Python 3.10–3.14), sdist, publish to PyPI, attach to GitHub release |
+| Release | `pypi_upload.yml` | Build wheels (manylinux_2_28 Linux + Windows + macOS × Python 3.10–3.14), sdist, publish to PyPI, attach to GitHub release |
 | Release | `npm-publish.yml` | Build and publish stable `@xbbg/core` prebuilt native packages for supported platforms, then publish the `@xbbg/core` wrapper and `@xbbg/langgraph` package via npm trusted publishing |
 
 ### npm trusted publishing setup
@@ -160,7 +160,7 @@ Go to **GitHub Actions** > **JS GitHub Release** > **Run workflow**
 
 **Attached artifacts (currently supported):**
 
-- `@xbbg/core` wrapper + `darwin-arm64`, `linux-x64`, `win32-x64` platform tarballs
+- `@xbbg/core` wrapper + `darwin-arm64`, `linux-x64` (glibc 2.28+), `win32-x64` platform tarballs
 
 Docker images are not part of this release. CI images stay in GHCR and do not bundle Bloomberg SDK files.
 

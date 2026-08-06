@@ -166,6 +166,9 @@ jobs:
           - os: ubuntu-latest
             label: linux-x64
             package_dir: js-xbbg/packages/xbbg-core-linux-x64
+            # Build against glibc 2.28 (manylinux_2_28) — the same floor as the
+            # official Node.js binaries — so the addon runs on RHEL 8-era distros.
+            container: ghcr.io/${{ github.repository_owner }}/xbbg-manylinux:latest
           - os: windows-latest
             label: win32-x64
             package_dir: js-xbbg/packages/xbbg-core-win32-x64
@@ -174,6 +177,7 @@ jobs:
             package_dir: js-xbbg/packages/xbbg-core-darwin-arm64
 
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
 
@@ -278,6 +282,10 @@ jobs:
 
       - name: Stage @xbbg/core native package
         run: npm --prefix js-xbbg run stage:native-package -- --build --release --version "${{ needs.release-version.outputs.tag }}"
+
+      - name: Enforce glibc 2.28 floor on native addon (Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/check-glibc-max.sh 2.28 "${{ matrix.package_dir }}/napi_xbbg.node"
 
       - name: Upload staged native package artifact
         uses: actions/upload-artifact@v7

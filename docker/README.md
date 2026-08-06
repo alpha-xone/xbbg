@@ -4,8 +4,11 @@ This directory contains the Rust CI container image:
 
 - `docker/ci/Dockerfile`: Rust CI image with toolchain + `libclang`
 
-The manylinux wheel image lives next to the Python distribution at
-`py-xbbg/docker/manylinux/Dockerfile`.
+The manylinux image (AlmaLinux 8 / glibc 2.28) lives next to the Python
+distribution at `py-xbbg/docker/manylinux/Dockerfile`. Every Linux release
+artifact — wheels, the `@xbbg/core-linux-x64` addon, and the `xbbg-mcp`
+binary — builds inside it so the result runs on any x86_64 distro with
+glibc >= 2.28 (RHEL/Alma/Rocky 8, Debian 10+, Ubuntu 20.04+).
 
 Bloomberg SDK files are intentionally **not** baked into container images.
 CI downloads the SDK at runtime to avoid redistributing the SDK in a public image registry.
@@ -58,6 +61,6 @@ podman run --rm \
 ## Notes
 
 - CI publishes images to `ghcr.io/<owner>/xbbg-ci` and `ghcr.io/<owner>/xbbg-manylinux`.
-- The workflow in `.github/workflows/ci-rust.yml` consumes `ghcr.io/<owner>/xbbg-ci:latest` and `ghcr.io/<owner>/xbbg-manylinux:latest`.
+- `xbbg-ci:latest` is consumed by the binding-generation and Linux test jobs. `xbbg-manylinux:latest` is consumed by every Linux build leg in `ci-rust.yml`, `pypi_upload.yml`, `npm-publish.yml`, and `js_github_release.yml` to pin the glibc 2.28 floor, enforced by `scripts/check-glibc-max.sh` and `auditwheel repair --plat manylinux_2_28_x86_64`.
 - Bloomberg SDK is downloaded in CI job steps (runtime), not stored in container layers.
 - Windows jobs still run on native `windows-latest` runners and consume the generated bindings artifact.

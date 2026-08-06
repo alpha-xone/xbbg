@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Changed
 
+- **Linux artifacts now support glibc 2.28 and newer**: wheels, the `@xbbg/core-linux-x64` native addon, and the `xbbg-mcp` linux-amd64 binary build inside the manylinux_2_28 (AlmaLinux 8) container instead of on bare `ubuntu-latest`, so they run on RHEL/Alma/Rocky 8, Debian 10+, Ubuntu 20.04+, and Amazon Linux 2023. Linux wheels are tagged `manylinux_2_28_x86_64` (enforced via `auditwheel repair --plat`), and the new `scripts/check-glibc-max.sh` guard fails CI and release builds if any Linux binary references newer GLIBC symbol versions.
 - **`lookback_days` on `active_cdx` is now a minimum, not the whole window**: the activity window always reaches back to the resolved series' first accrual date, so "this series has traded" can only flip false to true as the date advances.
 
 ### Removed
