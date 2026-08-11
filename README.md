@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.xbbg-org%2Fxbbg-mcp.svg)](https://mcptoplist.com/server/io.github.xbbg-org%2Fxbbg-mcp)
+
 <!-- markdownlint-disable MD013 MD031 MD032 MD033 MD041 MD051 -->
 <div align="center">
 
