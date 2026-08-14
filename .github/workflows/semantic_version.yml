@@ -67,13 +67,13 @@ jobs:
       current_version: ${{ steps.current_version.outputs.current }}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: '3.11'
 
@@ -353,7 +353,7 @@ jobs:
 
     - name: Create GitHub Release
       if: inputs.create_release == true
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ steps.new_version.outputs.tag }}
         name: xbbg ${{ steps.new_version.outputs.new_version }}

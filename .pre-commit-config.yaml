@@ -1,7 +1,7 @@
 repos:
   # Basic hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v6.0.0
     hooks:
       - id: end-of-file-fixer
         files: ^(py-xbbg/src/|py-xbbg/tests/|src/|\\.github/|pyproject\\.toml|Cargo\\.toml|README\\.md|\\.pre-commit-config\\.yaml)

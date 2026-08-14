@@ -56,7 +56,7 @@ runs:
         echo "extractor=$extractor" >> "$GITHUB_OUTPUT"
 
     - id: cache-sdk
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: vendor/blpapi-sdk/${{ inputs.version }}
         key: blpapi-${{ inputs.os }}-${{ runner.arch }}-${{ inputs.version }}

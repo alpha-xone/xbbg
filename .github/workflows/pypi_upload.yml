@@ -67,7 +67,7 @@ jobs:
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Bloomberg SDK
         id: sdk
@@ -123,7 +123,7 @@ jobs:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # setuptools_scm needs full git history for version
 
@@ -216,7 +216,7 @@ jobs:
 
       - name: Setup Python ${{ matrix.python }}
         if: runner.os != 'Linux'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           allow-prereleases: true
@@ -239,7 +239,7 @@ jobs:
           echo "UV_PYTHON=$PYBIN/python" >> "$GITHUB_ENV"
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10
 
       - name: Build wheel
         run: uv build --wheel --out-dir build-wheel/
@@ -297,7 +297,7 @@ jobs:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -474,7 +474,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download darwin xbbg-mcp asset
         uses: actions/download-artifact@v8
@@ -550,12 +550,12 @@ jobs:
     name: Build sdist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # setuptools_scm needs full git history for version
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10
 
       - name: Build sdist
         run: uv build --sdist --out-dir dist/
@@ -679,6 +679,6 @@ jobs:
           merge-multiple: true
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*

@@ -65,7 +65,7 @@ jobs:
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Bloomberg SDK
         id: sdk
@@ -104,7 +104,7 @@ jobs:
     name: Lint (Rust)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -122,7 +122,7 @@ jobs:
     name: Codegen Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -131,7 +131,7 @@ jobs:
           cache: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -145,10 +145,10 @@ jobs:
     name: Lint (Python)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup pixi
-        uses: prefix-dev/setup-pixi@v0.9.4
+        uses: prefix-dev/setup-pixi@v0.10.1
         with:
           pixi-version: latest
           environments: lint
@@ -170,10 +170,10 @@ jobs:
     name: Quality (JS wrapper)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup pixi
-        uses: prefix-dev/setup-pixi@v0.9.4
+        uses: prefix-dev/setup-pixi@v0.10.1
         with:
           pixi-version: latest
           environments: js
@@ -193,8 +193,8 @@ jobs:
     name: Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: cargo-bins/cargo-binstall@v1.17.5
+      - uses: actions/checkout@v7
+      - uses: cargo-bins/cargo-binstall@v1.21.1
       - run: cargo binstall -y cargo-audit && cargo audit
 
   # ════════════════════════════════════════════════════════════════════════════
@@ -204,8 +204,8 @@ jobs:
     name: Deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: cargo-bins/cargo-binstall@v1.17.5
+      - uses: actions/checkout@v7
+      - uses: cargo-bins/cargo-binstall@v1.21.1
       - run: cargo binstall -y cargo-deny && cargo deny check
 
   # ════════════════════════════════════════════════════════════════════════════
@@ -219,7 +219,7 @@ jobs:
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Bloomberg SDK (Linux)
         id: sdk-linux
@@ -255,7 +255,7 @@ jobs:
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -305,7 +305,7 @@ jobs:
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -373,7 +373,7 @@ jobs:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -381,7 +381,7 @@ jobs:
           rustflags: ""
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -420,7 +420,7 @@ jobs:
       - name: Cache Bloomberg SDK (Linux)
         if: runner.os == 'Linux'
         id: cache-sdk-linux-core
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/blpapi
           # Key is namespaced to the manylinux container layout: caches of
@@ -446,7 +446,7 @@ jobs:
       - name: Cache Bloomberg SDK (Windows)
         if: runner.os == 'Windows'
         id: cache-sdk-windows-core
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/blpapi
           key: blpapi-Windows-${{ env.BLPAPI_VERSION }}
@@ -469,7 +469,7 @@ jobs:
       - name: Cache Bloomberg SDK (macOS)
         if: runner.os == 'macOS'
         id: cache-sdk-macos-core
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/blpapi
           key: blpapi-macOS-${{ env.BLPAPI_VERSION }}
@@ -535,10 +535,10 @@ jobs:
     needs: [core-packages]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -612,7 +612,7 @@ jobs:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -702,13 +702,13 @@ jobs:
           echo "DYLD_LIBRARY_PATH=$LIB_DIR:$DYLD_LIBRARY_PATH" >> "$GITHUB_ENV"
 
       - name: Setup Python ${{ matrix.python }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           allow-prereleases: true
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10
         with:
           version: ${{ env.UV_VERSION }}
 
@@ -738,16 +738,16 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Python ${{ matrix.python }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           allow-prereleases: true
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10
         with:
           version: ${{ env.UV_VERSION }}
 
@@ -820,10 +820,85 @@ jobs:
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: coverage.xml
           fail_ci_if_error: false
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Declared floors - resolve the lower bounds we advertise and actually run them
+  # ════════════════════════════════════════════════════════════════════════════
+  # Without this, every floor in `[project.optional-dependencies]` is an untested
+  # claim: the lockfiles only ever exercise the newest release. Runs on the lowest
+  # supported interpreter because that is where the oldest wheels are selectable
+  # (on 3.14 the floors get dragged upward by wheel availability anyway).
+  floors:
+    name: Declared floors (lowest-direct, Python 3.10)
+    needs: [sdk-version, build]
+    runs-on: ubuntu-latest
+    env:
+      BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Download wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: wheel-ubuntu-latest-py3.10
+          path: dist
+
+      - name: Setup Bloomberg SDK
+        id: sdk-linux
+        uses: ./.github/actions/setup-blpapi-sdk
+        with:
+          version: ${{ env.BLPAPI_VERSION }}
+          os: Linux
+
+      - name: Export Bloomberg SDK env
+        run: |
+          SDK_ROOT="$GITHUB_WORKSPACE/${{ steps.sdk-linux.outputs.sdk-rel-root }}"
+          LIB_DIR="$GITHUB_WORKSPACE/${{ steps.sdk-linux.outputs.lib-rel-dir }}"
+          {
+            echo "BLPAPI_ROOT=$SDK_ROOT"
+            echo "LIBRARY_PATH=$LIB_DIR:$LIBRARY_PATH"
+            echo "LD_LIBRARY_PATH=$LIB_DIR:$LD_LIBRARY_PATH"
+          } >> "$GITHUB_ENV"
+
+      - name: Install blpapi from Bloomberg
+        run: uv pip install --system --index-url https://blpapi.bloomberg.com/repository/releases/python/simple/ blpapi
+
+      - name: Install wheel at declared floors
+        shell: bash
+        # Scoped to this step on purpose: as a job-level variable it would also
+        # drag the blpapi install above down to its oldest release.
+        env:
+          UV_RESOLUTION: lowest-direct
+        run: |
+          WHEEL=$(echo dist/*.whl)
+          uv pip install --system "${WHEEL}[test]"
+
+      - name: Show resolved floor versions
+        run: uv pip list --system
+
+      - name: Copy tests to temp directory
+        shell: bash
+        run: |
+          mkdir -p "${{ runner.temp }}/test-run"
+          cp -r py-xbbg/tests "${{ runner.temp }}/test-run/"
+
+      - name: Run tests at declared floors
+        working-directory: ${{ runner.temp }}/test-run
+        run: pytest tests -v -m "not live"
 
   # ════════════════════════════════════════════════════════════════════════════
   # Unused Dependencies (optional, non-blocking)
@@ -837,7 +912,7 @@ jobs:
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Bloomberg SDK (Linux)
         id: sdk-linux
@@ -881,7 +956,7 @@ jobs:
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Bloomberg SDK (Linux)
         id: sdk-linux
@@ -931,7 +1006,7 @@ jobs:
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install bindgen-cli
         run: cargo install bindgen-cli --version 0.72.1
@@ -955,7 +1030,7 @@ jobs:
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Full history for baseline
 
@@ -1006,14 +1081,14 @@ jobs:
   #   env:
   #     BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
   #   steps:
-  #     - uses: actions/checkout@v6
+  #     - uses: actions/checkout@v7
   #
   #     - name: Install libclang
   #       run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev
   #
   #     - name: Cache Bloomberg SDK
   #       id: cache-sdk
-  #       uses: actions/cache@v5
+  #       uses: actions/cache@v6
   #       with:
   #         path: ~/blpapi
   #         key: blpapi-Linux-${{ env.BLPAPI_VERSION }}
@@ -1089,7 +1164,7 @@ jobs:
     env:
       BLPAPI_VERSION: ${{ needs.sdk-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
