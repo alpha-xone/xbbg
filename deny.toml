@@ -26,13 +26,6 @@ ignore = [
     "RUSTSEC-2025-0090",  # unic-emoji-char
     "RUSTSEC-2025-0098",  # unic-ucd-version
     "RUSTSEC-2025-0100",  # unic-ucd-ident
-    # pyo3 0.28.3 advisories; the fix is pyo3 >=0.29, which numpy/pyo3-arrow
-    # do not support yet. Not exploitable in this workspace: RUSTSEC-2026-0176
-    # requires PyList/PyTuple bound-iterator nth/nth_back and RUSTSEC-2026-0177
-    # requires PyCFunction::new_closure - neither API is used here. Remove
-    # both once the pyo3 0.29 dependency chain is available.
-    "RUSTSEC-2026-0176",  # pyo3 iterator nth/nth_back OOB read
-    "RUSTSEC-2026-0177",  # pyo3 new_closure missing Sync bound
 ]
 
 # ════════════════════════════════════════════════════════════════════════════
