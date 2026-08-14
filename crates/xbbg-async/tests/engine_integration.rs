@@ -118,8 +118,11 @@ async fn test_engine_connects_successfully() {
 
     let engine = create_engine();
 
-    // Clean shutdown
-    std::mem::forget(engine);
+    // Drop inside the async test body on purpose: Engine::drop must tear the
+    // inner tokio runtime down without blocking. This previously needed
+    // std::mem::forget to dodge tokio's "Cannot drop a runtime in a context
+    // where blocking is not allowed" panic, which leaked the runtime.
+    drop(engine);
 }
 
 #[tokio::test(flavor = "multi_thread")]

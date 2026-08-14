@@ -1557,8 +1557,11 @@ pub struct Engine {
     request_pool: RequestWorkerPool,
     /// Pool of subscription sessions
     subscription_pool: Arc<SubscriptionSessionPool>,
-    /// Tokio runtime for async ops
-    rt: Arc<tokio::runtime::Runtime>,
+    /// Tokio runtime for async ops.
+    ///
+    /// `Some` for the entire public lifetime of the Engine; cleared only inside
+    /// `Drop`, which needs to own the runtime to tear it down without blocking.
+    rt: Option<Arc<tokio::runtime::Runtime>>,
     /// Configuration
     config: Arc<EngineConfig>,
     /// Schema cache (in-memory + disk)
@@ -1580,13 +1583,6 @@ impl Engine {
         let field_resolver =
             crate::field_cache::init_global_resolver(config.field_cache_path.clone());
         field_resolver.preload();
-
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| BlpAsyncError::Internal(format!("tokio runtime: {e}")))?,
-        );
 
         xbbg_log::info!(
             request_pool_size = config.request_pool_size,
@@ -1612,6 +1608,19 @@ impl Engine {
             "Engine ready"
         );
 
+        // Built last, after every fallible step above. A tokio Runtime cannot be
+        // dropped from inside an async context, so creating it earlier meant any
+        // `?` here dropped it on an async caller's thread and replaced the real
+        // error with tokio's "Cannot drop a runtime in a context where blocking is
+        // not allowed" panic — masking, for example, a refused Bloomberg
+        // connection behind an unrelated runtime message.
+        let rt = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| BlpAsyncError::Internal(format!("tokio runtime: {e}")))?,
+        );
+
         let (shutdown_signal, _) = watch::channel(false);
 
         let exchange_cache = ExchangeCache::new();
@@ -1622,7 +1631,7 @@ impl Engine {
         Ok(Self {
             request_pool,
             subscription_pool,
-            rt,
+            rt: Some(rt),
             config,
             schema_cache: crate::schema::SchemaCache::new(),
             exchange_cache,
@@ -1986,7 +1995,7 @@ impl Engine {
                     resolver.insert_from_response(&batch);
 
                     let resolver_clone = resolver.clone();
-                    self.rt.spawn(async move {
+                    self.runtime().spawn(async move {
                         match tokio::task::spawn_blocking(move || resolver_clone.save_to_disk())
                             .await
                         {
@@ -2112,7 +2121,7 @@ impl Engine {
         let cache_dir = self.schema_cache.cache_dir();
         let service_for_load = service.to_string();
         match self
-            .rt
+            .runtime()
             .spawn_blocking(move || {
                 crate::schema::SchemaCache::with_cache_dir(cache_dir).get(&service_for_load)
             })
@@ -2138,7 +2147,7 @@ impl Engine {
         let service_for_disk = service.to_string();
         let service_for_log = service_for_disk.clone();
         let schema_for_disk = schema.clone();
-        self.rt.spawn(async move {
+        self.runtime().spawn(async move {
             match tokio::task::spawn_blocking(move || {
                 let cache = crate::schema::SchemaCache::with_cache_dir(cache_dir);
                 cache.persist(&service_for_disk, &schema_for_disk)
@@ -2278,7 +2287,9 @@ impl Engine {
 
     /// Get the tokio runtime (for spawning tasks).
     pub fn runtime(&self) -> &Arc<tokio::runtime::Runtime> {
-        &self.rt
+        self.rt
+            .as_ref()
+            .expect("engine runtime is cleared only while dropping")
     }
 
     pub fn request_pool_health(&self) -> Vec<(usize, WorkerHealth)> {
@@ -2325,11 +2336,83 @@ impl Engine {
     }
 }
 
+/// Release the engine's tokio runtime safely from any calling context.
+///
+/// Tokio panics with "Cannot drop a runtime in a context where blocking is not
+/// allowed" when a `Runtime`'s last handle is released inside an async context,
+/// because teardown blocks to join the worker threads. `Engine` is routinely
+/// owned by async code — `xbbg-mcp` holds one across `#[tokio::main]`, and the
+/// live tests hold one across `#[tokio::test]` — so inside a runtime we hand
+/// teardown to tokio's non-blocking path instead.
+///
+/// Outside a runtime the `Arc` drops here, which is the correct blocking
+/// shutdown. Taking ownership is what makes this race-free: the caller's field
+/// is left `None`, so no second release path can reach a zero refcount on the
+/// async thread. When another clone is still outstanding, `Arc::into_inner`
+/// returns `None` and that remaining owner stays responsible.
+fn release_runtime(rt: Option<Arc<tokio::runtime::Runtime>>) {
+    let Some(rt) = rt else { return };
+
+    if tokio::runtime::Handle::try_current().is_ok() {
+        if let Some(rt) = Arc::into_inner(rt) {
+            rt.shutdown_background();
+        }
+    }
+}
+
 impl Drop for Engine {
     fn drop(&mut self) {
         // Non-blocking: signal all workers to shut down.
         // For blocking shutdown, call shutdown_blocking() explicitly before dropping.
         self.signal_shutdown();
+        release_runtime(self.rt.take());
+    }
+}
+
+#[cfg(test)]
+mod release_runtime_tests {
+    use super::release_runtime;
+    use std::sync::Arc;
+
+    fn new_runtime() -> Arc<tokio::runtime::Runtime> {
+        Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime builds"),
+        )
+    }
+
+    /// Regression guard for the panic that made every clean `xbbg-mcp` shutdown
+    /// abort: releasing the runtime from inside an async context must not panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn releases_inside_async_context() {
+        release_runtime(Some(new_runtime()));
+    }
+
+    /// The synchronous path (Python/atexit, plain `main`) still drops in place.
+    #[test]
+    fn releases_outside_async_context() {
+        release_runtime(Some(new_runtime()));
+    }
+
+    /// With a clone outstanding, `Arc::into_inner` yields `None` and the runtime
+    /// survives for the remaining owner rather than panicking.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tolerates_outstanding_clone() {
+        let rt = new_runtime();
+        let survivor = Arc::clone(&rt);
+
+        release_runtime(Some(rt));
+        assert_eq!(Arc::strong_count(&survivor), 1);
+
+        // Still inside the async context, so this last handle needs the same path.
+        release_runtime(Some(survivor));
+    }
+
+    #[test]
+    fn none_is_a_noop() {
+        release_runtime(None);
     }
 }
 
