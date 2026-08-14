@@ -543,19 +543,19 @@ jobs:
           node-version: "24"
 
       - name: Download linux core package artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: core-package-linux-x64
           path: js-xbbg/packages/xbbg-core-linux-x64
 
       - name: Download windows core package artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: core-package-win32-x64
           path: js-xbbg/packages/xbbg-core-win32-x64
 
       - name: Download macOS core package artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: core-package-darwin-arm64
           path: js-xbbg/packages/xbbg-core-darwin-arm64
@@ -573,7 +573,7 @@ jobs:
           ls -1 dist-offline
 
       - name: Upload offline bundles
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: offline-bundles
           path: dist-offline/*.zip
@@ -708,7 +708,9 @@ jobs:
           allow-prereleases: true
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v10
+        # Exact tag: astral-sh/setup-uv stopped publishing moving major tags
+        # after v7, so `@v10` does not resolve.
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
 
@@ -747,7 +749,7 @@ jobs:
           allow-prereleases: true
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
 
@@ -847,7 +849,7 @@ jobs:
           python-version: "3.10"
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
 

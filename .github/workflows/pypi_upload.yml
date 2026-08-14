@@ -239,7 +239,9 @@ jobs:
           echo "UV_PYTHON=$PYBIN/python" >> "$GITHUB_ENV"
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v10
+        # Exact tag: astral-sh/setup-uv stopped publishing moving major tags
+        # after v7, so `@v10` does not resolve.
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Build wheel
         run: uv build --wheel --out-dir build-wheel/
@@ -555,7 +557,7 @@ jobs:
           fetch-depth: 0  # setuptools_scm needs full git history for version
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Build sdist
         run: uv build --sdist --out-dir dist/
