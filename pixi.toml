@@ -12,7 +12,10 @@ requires-pixi = ">=0.71"
 
 [dependencies]
 python = ">=3.10,<3.15"
-rust = ">=1.75"
+# Must track `rust-version` in the root Cargo.toml `[workspace.package]`. The
+# published sdist compiles the Rust extension on the user's machine, so this is
+# a real compatibility contract, not just a dev-env convenience.
+rust = ">=1.88"
 # conda-forge package `libclang` (versioned on its own schedule; often tracks LLVM major).
 # bindgen loads `$CONDA_PREFIX/lib` via LIBCLANG_PATH in [activation.env].
 libclang = ">=22"
@@ -22,7 +25,7 @@ pip = "*"
 # xbbg itself is installed via `pixi run install` (not here) because
 # activation env vars are only available during `pixi run`, not `pixi install`.
 [pypi-dependencies]
-narwhals = ">=2.0"
+narwhals = ">=2.10.0"
 
 
 [activation.env]
@@ -66,20 +69,20 @@ clean = "cargo clean && rm -rf dist build *.egg-info htmlcov .coverage"
 [feature.test.pypi-dependencies]
 pytest = ">=8.4"
 pytest-asyncio = ">=0.24"
-pytest-cov = "*"
+pytest-cov = ">=5.0"
 
 [feature.test.dependencies]
 pyarrow = ">=22.0"
 pandas = ">=2.3.3,<4"
 polars = ">=0.20.26,<2"
-duckdb = ">=1.0"
+duckdb = ">=1.5.0"
 
 [feature.lint.dependencies]
 python = ">=3.10"
 
 [feature.lint.pypi-dependencies]
-ruff = ">=0.14"
-ty = ">=0.0.1"
+ruff = ">=0.16.3"
+ty = ">=0.0.71"
 
 [feature.lint.tasks]
 lint = "ruff check py-xbbg/src py-xbbg/tests"

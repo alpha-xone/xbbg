@@ -31,23 +31,42 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
-  "narwhals>=2.0",
+  # 2.10.0 is the first release whose plugin discovery honours the
+  # `narwhals.plugins` entry point registered below. On 2.0-2.9 the plugin is
+  # never loaded, so converting an xbbg result raises
+  # "TypeError: Expected pandas-like dataframe, Polars dataframe, or Polars
+  # lazyframe, got: <class 'xbbg._core.ArrowTable'>". The old `>=2.0` floor
+  # therefore advertised a combination that cannot work.
+  "narwhals>=2.10.0",
 ]
 
 [project.optional-dependencies]
 # Runtime stays minimal; extras opt into optional conversion/test surfaces.
+#
+# Every floor below is measured, not guessed: the `floors` CI job resolves this
+# table with `--resolution lowest-direct` on Python 3.10 and runs the suite
+# against it. Three of these were previously false claims:
+#   * pandas 2.0.x declares no `numpy<2` bound, so a fresh resolve pairs it with
+#     numpy 2.x and pandas then fails to import ("numpy.dtype size changed").
+#     2.2.2 is the first release that supports numpy 2.
+#   * duckdb below 1.5.0 loses the connection backing a returned relation
+#     ("Connection has already been closed"); 1.0.0 additionally cannot register
+#     an Arrow PyCapsule object at all.
+#   * narwhals below 2.10.0 ignores our plugin entry point (see above).
 pyarrow = ["pyarrow>=22.0.0"]
-pandas = ["pandas>=2.0"]
+pandas = ["pandas>=2.2.2,<4"]
 polars = ["polars>=0.20"]
-duckdb = ["duckdb>=1.0"]
+duckdb = ["duckdb>=1.5.0"]
 test = [
   "pytest>=8.4",
-  "pytest-cov",
+  # Bounded deliberately: unpinned, a lowest-direct resolve selects pytest-cov
+  # 2.0.0 (2018), which cannot drive pytest 8.
+  "pytest-cov>=5.0",
   "pytest-asyncio>=0.24",
   "pyarrow>=22.0.0",
-  "pandas>=2.0",
+  "pandas>=2.2.2,<4",
   "polars>=0.20",
-  "duckdb>=1.0",
+  "duckdb>=1.5.0",
 ]
 
 [project.urls]
@@ -214,6 +233,6 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.12",
+    "ruff>=0.16.3",
 ]
 
