@@ -60,7 +60,9 @@ export interface CoreResolver {
 
 async function importCore(): Promise<XbbgCoreLike> {
   // @xbbg/core is loaded lazily so constructing tools never loads the native addon.
-  return (await import("@xbbg/core")) as unknown as XbbgCoreLike;
+  // No cast needed: @xbbg/core >=1.4.6 exports types already assignable to
+  // XbbgCoreLike. Older releases needed `as unknown as XbbgCoreLike` here.
+  return await import("@xbbg/core");
 }
 
 export function createCoreResolver(options: BloombergToolsOptions = {}): CoreResolver {

@@ -58,7 +58,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@xbbg/core": "^1.2.4",
+    "@xbbg/core": "^1.4.6",
     "zod": "^3.25.32 || ^4.2.0",
     "zod-to-json-schema": "^3.25.0"
   },
@@ -73,8 +73,8 @@
     "globals": "^17.6.0",
     "jiti": "^2.7.0",
     "langchain": "^1.4.2",
-    "oxfmt": "^0.57.0",
-    "oxlint": "^1.66.0",
+    "oxfmt": "^0.63.0",
+    "oxlint": "~1.74.0",
     "tsup": "^8.5.1",
     "tsx": "^4.22.3",
     "typescript": "~6.0.3",
@@ -85,10 +85,10 @@
     "@langchain/core": ">=1.0.0 <2"
   },
   "overrides": {
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.2"
   },
   "engines": {
     "node": ">=24"
   },
-  "packageManager": "npm@11.13.0"
+  "packageManager": "npm@12.0.2"
 }
