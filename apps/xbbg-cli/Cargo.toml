@@ -7,15 +7,11 @@ repository.workspace = true
 description = "Command-line interface for Bloomberg data via xbbg"
 publish = false
 
+# Not yet enabled: this crate is commented out of `[workspace] members` in the
+# root Cargo.toml. When it is turned on, add `clap` to `[workspace.dependencies]`
+# and inherit every dependency with `{ workspace = true }` — do not restate
+# versions here. Previous stale pins (arrow 57.1.0) are deliberately gone.
+
 # [[bin]]
 # name = "xbbg"
 # path = "src/main.rs"
-
-# [dependencies]
-# clap = { version = "4", features = ["derive"] }
-# xbbg_core = { path = "../../crates/xbbg-core" }
-# xbbg-async = { path = "../../crates/xbbg-async" }
-# xbbg-log = { path = "../../crates/xbbg-log" }
-# arrow = { version = "57.1.0", features = ["csv", "json"] }
-# tokio = { version = "1", features = ["full"] }
-# serde_json = "1.0"

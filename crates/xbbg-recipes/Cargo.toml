@@ -11,13 +11,13 @@ publish = false
 xbbg-async = { path = "../xbbg-async", default-features = false }
 xbbg-ext = { path = "../xbbg-ext" }
 xbbg-log = { path = "../xbbg-log" }
-arrow-array = { version = "59.0.0", default-features = false }
-arrow-arith = "59.0.0"
-arrow-schema = "59.0.0"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-serde_json = "1"
-thiserror = "2"
-tokio = { version = "1.48", features = ["rt"] }
+arrow-array = { workspace = true }
+arrow-arith = { workspace = true }
+arrow-schema = { workspace = true }
+chrono = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
 
 [features]
 default = ["live"]

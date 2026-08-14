@@ -8,6 +8,6 @@ description = "Logging infrastructure for xbbg — zero-GIL atomic level filter 
 publish = false
 
 [dependencies]
-tracing = "0.1"
-tracing-core = "0.1"
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "registry"] }
+tracing = { workspace = true }
+tracing-core = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "std", "registry"] }

@@ -7,9 +7,9 @@ repository.workspace = true
 description = "Pure Arrow carrier helpers for xbbg native bindings"
 
 [dependencies]
-arrow-array = { version = "59.0.0", features = ["chrono-tz"] }
-arrow-ord = "59.0.0"
-arrow-schema = "59.0.0"
-arrow-select = "59.0.0"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-thiserror = "2"
+arrow-array = { workspace = true, features = ["chrono-tz"] }
+arrow-ord = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-select = { workspace = true }
+chrono = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }

@@ -17,21 +17,22 @@ xbbg_core = { path = "../xbbg-core" }
 xbbg-async = { path = "../xbbg-async", features = ["bench-internals"] }
 
 # Benchmark runner/runtime
-arrow-array = { version = "59.0.0", default-features = false }
-arrow-schema = "59.0.0"
-chrono = "0.4"
-tokio = { version = "1.48", features = ["rt-multi-thread", "time"] }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+# Spells out chrono's default feature set, previously picked up implicitly.
+chrono = { workspace = true, features = ["clock", "std", "oldtime", "wasmbind"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 
 # Existing experimental benchmark dependencies kept for unregistered local benches.
-arc-swap = "1"
-criterion = "0.8.2"
-dhat = "0.3"
-hdrhistogram = "7.5"
-tempfile = "3.15"
+arc-swap = { workspace = true }
+criterion = { workspace = true }
+dhat = { workspace = true }
+hdrhistogram = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
-serde_json = "1.0"
-simd-json = "0.15"
+serde_json = { workspace = true }
+simd-json = { workspace = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["criterion", "dhat", "hdrhistogram", "tempfile"]

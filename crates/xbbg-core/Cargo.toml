@@ -14,9 +14,9 @@ default = ["live"]
 live = ["xbbg-sys/live"]
 
 [dependencies]
-thiserror = "2.0"
+thiserror = { workspace = true }
 xbbg-sys = { path = "../xbbg-sys", default-features = false }
-rustc-hash = "2.0"  # Fast non-cryptographic hashing for Name cache
+rustc-hash = { workspace = true }  # Fast non-cryptographic hashing for Name cache
 
 # Benchmarks have been consolidated into crates/xbbg-bench.
 # Run with: cargo bench --package xbbg-bench

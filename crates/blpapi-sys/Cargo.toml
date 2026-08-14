@@ -14,12 +14,14 @@ static = []
 dynamic = []
 
 [dependencies]
-cty = "0.2"
+cty = { workspace = true }
 
 [build-dependencies]
-bindgen = { version = "0.72.1", default-features = false, features = ["runtime"] }
+bindgen = { workspace = true, features = ["runtime"] }
 
+# `static` and `dynamic` select the blpapi linkage and are mutually exclusive:
+# build.rs panics when both are set (see build.rs:32). `--all-features` is
+# therefore unsupported for this crate by design, which is why docs.rs is given
+# the default linkage explicitly instead of `all-features = true`.
 [package.metadata.docs.rs]
-all-features = true
-
-
+features = ["dynamic"]

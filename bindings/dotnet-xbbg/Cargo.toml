@@ -7,16 +7,11 @@ repository.workspace = true
 description = "C#/.NET bindings for xbbg Bloomberg engine"
 publish = false
 
+# Not yet enabled: this crate is commented out of `[workspace] members` in the
+# root Cargo.toml. When it is turned on, add `csbindgen` to
+# `[workspace.dependencies]` and inherit every dependency with
+# `{ workspace = true }` — do not restate versions here. The previous stale pins
+# (arrow 57.1.0, csbindgen 2 — a version that has never been published) are gone.
+
 # [lib]
 # crate-type = ["cdylib"]
-
-# [dependencies]
-# xbbg_core = { path = "../../crates/xbbg-core" }
-# xbbg-async = { path = "../../crates/xbbg-async" }
-# xbbg-ext = { path = "../../crates/xbbg-ext" }
-# xbbg-log = { path = "../../crates/xbbg-log" }
-# arrow = "57.1.0"
-# tokio = { version = "1", features = ["sync"] }
-
-# [build-dependencies]
-# csbindgen = "2"
