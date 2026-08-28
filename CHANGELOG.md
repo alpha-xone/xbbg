@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [1.4.7] - 2026-08-28
+
 ### Added
 
 - **Rust crates now publish automatically on release.** `.github/workflows/crates-publish.yml` publishes the six public crates to crates.io in dependency order, authenticating tokenlessly through `rust-lang/crates-io-auth-action` (GitHub OIDC), so no `CARGO_REGISTRY_TOKEN` secret exists. `semantic_version.yml` invokes it as a `workflow_call` job rather than relying on a tag trigger, because a tag pushed with `GITHUB_TOKEN` does not start tag-triggered workflows -- the documented reason the PyPI and npm workflows still need a manual dispatch. The job skips any version already in the index, so a retry after a partial failure is safe, and it stamps `workspace.package.version` plus every internal `[workspace.dependencies]` entry from the release version so all crates ship in lockstep.
@@ -1564,7 +1566,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ---
 
-[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.6...HEAD
+[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.7...HEAD
+[1.4.7]: https://github.com/xbbg-org/xbbg/compare/v1.4.6...v1.4.7
 [1.4.6]: https://github.com/xbbg-org/xbbg/compare/v1.4.5...v1.4.6
 [1.4.5]: https://github.com/xbbg-org/xbbg/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/xbbg-org/xbbg/compare/v1.4.3...v1.4.4
