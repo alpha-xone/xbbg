@@ -1,3 +1,5 @@
+import type { OverflowPolicy, SdkLogLevel, ValidationMode } from './_defs_gen';
+
 /**
  * Date-like input accepted by xbbg JS surfaces (issue #317).
  *
@@ -99,12 +101,14 @@ export interface EngineConfig {
   shardChunkSize?: number;
   /** Maximum concurrent shard requests per user request. Default 4. */
   shardMaxConcurrent?: number;
-  validationMode?: string;
+  /** Field validation before a request is sent. Default `'disabled'`. */
+  validationMode?: ValidationMode;
   subscriptionFlushThreshold?: number;
   maxEventQueueSize?: number;
   commandQueueSize?: number;
   subscriptionStreamCapacity?: number;
-  overflowPolicy?: string;
+  /** What a subscription does when a consumer stalls. Default `'drop_newest'`. */
+  overflowPolicy?: OverflowPolicy;
   warmupServices?: string[];
   fieldCachePath?: string;
   auth?: AuthConfig;
@@ -126,7 +130,8 @@ export interface EngineConfig {
   slowConsumerHiWaterMark?: number;
   /** Slow-consumer lo water mark as fraction of maxEventQueueSize. SDK default: 0.5. */
   slowConsumerLoWaterMark?: number;
-  sdkLogLevel?: string;
+  /** Verbosity of the Bloomberg C SDK's own logging. Default `'off'`. */
+  sdkLogLevel?: SdkLogLevel;
   socks5?: Socks5Config;
 }
 
@@ -159,7 +164,7 @@ export interface RequestInput {
   validateFields?: boolean;
   searchSpec?: string;
   fieldIds?: readonly string[];
-  format?: string;
+  format?: RequestFormat;
   backend?: BackendKind;
 }
 
@@ -206,7 +211,7 @@ export type OverridesInput = OverrideSource;
 export interface BdpOptions {
   overrides?: OverridesInput;
   kwargs?: OverridesMap;
-  format?: string;
+  format?: RequestFormat;
   backend?: BackendKind;
   includeSecurityErrors?: boolean;
   returnEids?: boolean;
@@ -218,7 +223,7 @@ export interface BdhOptions {
   end?: DateLike;
   overrides?: OverridesInput;
   kwargs?: OverridesMap;
-  format?: string;
+  format?: RequestFormat;
   backend?: BackendKind;
   returnEids?: boolean;
   validateFields?: boolean;
@@ -261,7 +266,7 @@ export interface CdxOptions extends BdpOptions {
 
 export interface BqlOptions {
   kwargs?: OverridesMap;
-  format?: string;
+  format?: RequestFormat;
   backend?: BackendKind;
 }
 
@@ -271,14 +276,14 @@ export interface BeqsOptions {
   group?: string;
   overrides?: OverridesInput;
   kwargs?: OverridesMap;
-  format?: string;
+  format?: RequestFormat;
   backend?: BackendKind;
 }
 
 export interface BsrchOptions {
   overrides?: OverridesInput;
   kwargs?: OverridesMap;
-  format?: string;
+  format?: RequestFormat;
   backend?: BackendKind;
 }
 
@@ -291,7 +296,7 @@ export interface BtaOptions {
   end_date?: DateLike;
   periodicity?: string;
   interval?: number;
-  format?: string;
+  format?: RequestFormat;
   backend?: BackendKind;
 }
 
@@ -299,20 +304,20 @@ export interface BfldsOptions {
   fields?: string | readonly string[];
   searchSpec?: string;
   kwargs?: OverridesMap;
-  format?: string;
+  format?: RequestFormat;
   backend?: BackendKind;
 }
 
 export interface BlkpOptions {
   kwargs?: OverridesMap;
-  format?: string;
+  format?: RequestFormat;
   backend?: BackendKind;
 }
 
 export interface RequestOptions {
   overrides?: OverridesInput;
   kwargs?: OverridesMap;
-  format?: string;
+  format?: RequestFormat;
   backend?: BackendKind;
 }
 
@@ -320,7 +325,7 @@ export interface StreamOptions {
   options?: readonly string[];
   conflate?: boolean;
   flushThreshold?: number;
-  overflowPolicy?: string;
+  overflowPolicy?: OverflowPolicy;
   streamCapacity?: number;
   allFields?: boolean;
   fields?: readonly string[];
@@ -514,4 +519,19 @@ export interface ExchangeOverrideInput {
 }
 
 export type BackendKind = 'arrow' | 'json' | 'polars';
-export type FormatKind = 'long' | 'long_typed' | 'long_with_metadata' | 'semi_long';
+
+// Closed string sets live in defs/bloomberg.toml and are generated into
+// _defs_gen.ts, so these can never drift from what the Rust engine accepts.
+export type { FormatKind, OverflowPolicy, SdkLogLevel, ValidationMode } from './_defs_gen';
+
+/**
+ * Output format for a request.
+ *
+ * Canonical values are `long` (default), `long_typed`, `long_metadata` and
+ * `semi_long`; the engine also accepts the legacy aliases `typed`, `metadata`,
+ * `with_metadata` and `wide`. Deliberately `string` rather than a union so
+ * callers threading a computed value keep compiling — {@link FormatKind} is the
+ * canonical closed set, and `FORMAT_VALUES` in `_defs_gen.ts` is the generated
+ * list to quote in messages.
+ */
+export type RequestFormat = string;

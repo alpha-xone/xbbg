@@ -2919,3 +2919,7 @@ export type {
   VolSurfacePreset,
   YasOptions,
 };
+
+// Closed string sets generated from defs/bloomberg.toml. These appear in
+// EngineConfig and StreamOptions; FormatKind is re-exported above.
+export type { OverflowPolicy, RequestFormat, SdkLogLevel, ValidationMode } from './types';

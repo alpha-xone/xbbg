@@ -936,6 +936,30 @@ describe("Bloomberg request tools", () => {
     ).rejects.toThrow();
   });
 
+  it("advertises the overflow policies the engine accepts and rejects removed ones", async () => {
+    const engine = fakeEngine();
+    const tools = createBloombergTools({ core: fakeCore(engine) });
+    const snapshot = byName(tools, "xbbg_stream_snapshot");
+
+    // The model must be shown the closed set. Advertising a free-form string is
+    // what made models emit `drop_oldest`, removed in 1.2.0 and rejected by the
+    // engine only after a subscription had already been opened.
+    const described = toolParameterJsonSchema(snapshot) as {
+      properties: { overflowPolicy: { enum?: string[]; description?: string } };
+    };
+    expect(described.properties.overflowPolicy.enum).toStrictEqual(["block", "drop_newest"]);
+    expect(described.properties.overflowPolicy.description).toContain("drop_newest");
+
+    await expect(
+      snapshot.invoke({
+        fields: ["PX"],
+        maxUpdates: 1,
+        overflowPolicy: "drop_oldest",
+        tickers: ["A"],
+      }),
+    ).rejects.toThrow(/overflowPolicy must be one of block, drop_newest/u);
+  });
+
   it("does not mutate original results while truncating output", async () => {
     const original = [{ text: "1234567890" }, { text: "second" }];
     const engine = fakeEngine();

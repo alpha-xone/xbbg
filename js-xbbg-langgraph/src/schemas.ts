@@ -1,5 +1,15 @@
 import * as z from "zod/v3";
 
+import type { OverflowPolicy } from "./_defs_gen";
+import {
+  FORMAT_BY_NAME,
+  FORMATS,
+  OVERFLOW_POLICIES,
+  OVERFLOW_POLICY_DEFAULT,
+  OVERFLOW_POLICY_DOCS,
+  OVERFLOW_POLICY_VALUES,
+} from "./_defs_gen";
+
 import type { NormalizedBloombergToolsOptions } from "./options";
 import { MAX_BLOOMBERG_EID, MAX_ENTITLEMENT_EIDS } from "./result-limits";
 type ZodOutput<T> = z.ZodType<T, z.ZodTypeDef, unknown>;
@@ -8,14 +18,15 @@ export type PrimitiveValue = string | number | boolean;
 export type PrimitiveMap = Record<string, PrimitiveValue>;
 export type OverrideMap = Record<string, PrimitiveValue | PrimitiveMap>;
 
-export const REFERENCE_FORMATS = ["long", "long_typed", "long_metadata"] as const;
-export const HISTORICAL_FORMATS = [
-  "long",
-  "long_typed",
-  "long_metadata",
-  "semi_long",
-  "wide",
+// Reference data has no date axis, so the semi-long shape is meaningless there;
+// this is a deliberate narrowing of the generated set, not a separate vocabulary.
+export const REFERENCE_FORMATS = [
+  FORMAT_BY_NAME.LONG,
+  FORMAT_BY_NAME.LONG_TYPED,
+  FORMAT_BY_NAME.LONG_WITH_METADATA,
 ] as const;
+
+export const HISTORICAL_FORMATS = FORMATS;
 
 export type ReferenceFormat = (typeof REFERENCE_FORMATS)[number];
 export type HistoricalFormat = (typeof HISTORICAL_FORMATS)[number];
@@ -170,7 +181,7 @@ export interface StreamSnapshotInput {
   readonly options?: readonly string[];
   readonly conflate?: boolean;
   readonly flushThreshold?: number;
-  readonly overflowPolicy?: string;
+  readonly overflowPolicy?: OverflowPolicy;
   readonly streamCapacity?: number;
   readonly allFields?: boolean;
 }
@@ -184,7 +195,7 @@ export interface MktbarSnapshotInput {
   readonly options?: readonly string[];
   readonly conflate?: boolean;
   readonly flushThreshold?: number;
-  readonly overflowPolicy?: string;
+  readonly overflowPolicy?: OverflowPolicy;
   readonly streamCapacity?: number;
   readonly allFields?: boolean;
 }
@@ -198,7 +209,7 @@ export interface DepthSnapshotInput {
   readonly options?: readonly string[];
   readonly conflate?: boolean;
   readonly flushThreshold?: number;
-  readonly overflowPolicy?: string;
+  readonly overflowPolicy?: OverflowPolicy;
   readonly streamCapacity?: number;
   readonly allFields?: boolean;
 }
@@ -516,6 +527,30 @@ function historicalFormat(tool: string): ZodOutput<HistoricalFormat | undefined>
     .optional();
 }
 
+/**
+ * Closed enum for the subscription overflow policy.
+ *
+ * The value set, the default and the per-value semantics all come from the
+ * generated vocabulary. This field previously accepted a free-form string and
+ * documented no values at all, so models guessed `drop_oldest` — a policy that
+ * was removed in 1.2.0 and that the engine rejects outright.
+ */
+function overflowPolicy(tool: string): ZodOutput<OverflowPolicy | undefined> {
+  const semantics = OVERFLOW_POLICIES.map(
+    (policy) => `${policy} - ${OVERFLOW_POLICY_DOCS[policy]}`,
+  ).join(" ");
+  return z
+    .enum(OVERFLOW_POLICIES, {
+      errorMap: () => ({
+        message: `${tool}: overflowPolicy must be one of ${OVERFLOW_POLICY_VALUES}`,
+      }),
+    })
+    .optional()
+    .describe(
+      `What the stream does when updates arrive faster than they are collected. ${semantics} Omit to use ${OVERFLOW_POLICY_DEFAULT}.`,
+    );
+}
+
 export function createBdpSchema(options: NormalizedBloombergToolsOptions): ZodOutput<BdpInput> {
   const tool = "xbbg_bdp";
   return z.object({
@@ -569,7 +604,7 @@ export function createBdhSchema(options: NormalizedBloombergToolsOptions): ZodOu
         '["<FIELD>"]',
       ).describe("Bloomberg historical field mnemonics supplied by the user."),
       format: historicalFormat(tool).describe(
-        "Historical JSON output shape. Use wide only when the user asks for a table by date.",
+        "Historical JSON output shape. Use semi_long only when the user asks for a table by date.",
       ),
       kwargs: primitiveMap(tool, "kwargs").describe(
         "Advanced Bloomberg request kwargs as flat string/number/boolean values only.",
@@ -1033,7 +1068,7 @@ interface SnapshotControlShape {
   readonly flushThreshold: ZodOutput<number | undefined>;
   readonly maxUpdates: ZodOutput<number>;
   readonly options: ZodOutput<string[] | undefined>;
-  readonly overflowPolicy: ZodOutput<string | undefined>;
+  readonly overflowPolicy: ZodOutput<OverflowPolicy | undefined>;
   readonly streamCapacity: ZodOutput<number | undefined>;
   readonly timeoutMs: ZodOutput<number>;
 }
@@ -1078,9 +1113,7 @@ function snapshotControlFields(
     )
       .optional()
       .describe("Advanced Bloomberg subscription options."),
-    overflowPolicy: nonEmptyString(tool, "overflowPolicy", options.maxStringChars, "drop_oldest")
-      .optional()
-      .describe("Optional stream overflow policy."),
+    overflowPolicy: overflowPolicy(tool),
     streamCapacity: z.number().int().positive().optional().describe("Optional stream capacity."),
     timeoutMs: z
       .number()

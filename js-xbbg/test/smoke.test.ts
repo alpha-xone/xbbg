@@ -210,7 +210,8 @@ describe('@xbbg/core surface', () => {
     expect(Object.isFrozen(api.Format)).toBeTruthy();
     expect(api.Format.LONG).toBe('long');
     expect(api.Format.LONG_TYPED).toBe('long_typed');
-    expect(api.Format.LONG_WITH_METADATA).toBe('long_with_metadata');
+    // 'long_with_metadata' is rejected by the engine; the wire value is 'long_metadata'.
+    expect(api.Format.LONG_WITH_METADATA).toBe('long_metadata');
     expect(api.Format.SEMI_LONG).toBe('semi_long');
     expect(Object.keys(api.Format)).toHaveLength(4);
   });
