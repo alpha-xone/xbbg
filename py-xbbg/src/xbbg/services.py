@@ -1,8 +1,13 @@
 """Bloomberg service definitions and request parameters.
 
-Enum definitions (Service, Operation, ExtractorHint, Format, OutputMode) are
-generated from ``defs/bloomberg.toml`` into ``_services_gen.py``.  This module
-re-exports them and provides the hand-written :class:`RequestParams` dataclass.
+Enum definitions (Service, Operation, ExtractorHint, Format, OutputMode) and
+closed-set constants (FORMATS, FORMAT_DEFAULT, FORMAT_VALUES,
+OVERFLOW_POLICIES, OVERFLOW_POLICY_ALIASES, OVERFLOW_POLICY_DEFAULT,
+OVERFLOW_POLICY_VALUES, VALIDATION_MODES, VALIDATION_MODE_DEFAULT,
+VALIDATION_MODE_VALUES, SDK_LOG_LEVELS, SDK_LOG_LEVEL_DEFAULT,
+SDK_LOG_LEVEL_VALUES) are generated from ``defs/bloomberg.toml`` into
+``_services_gen.py``.  This module re-exports them and provides the hand-written
+:class:`RequestParams` dataclass.
 
 Example::
 
@@ -25,6 +30,19 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 from xbbg._services_gen import (
+    FORMAT_DEFAULT,
+    FORMAT_VALUES,
+    FORMATS,
+    OVERFLOW_POLICIES,
+    OVERFLOW_POLICY_ALIASES,
+    OVERFLOW_POLICY_DEFAULT,
+    OVERFLOW_POLICY_VALUES,
+    SDK_LOG_LEVEL_DEFAULT,
+    SDK_LOG_LEVEL_VALUES,
+    SDK_LOG_LEVELS,
+    VALIDATION_MODE_DEFAULT,
+    VALIDATION_MODE_VALUES,
+    VALIDATION_MODES,
     ExtractorHint,
     Format,
     Operation,
@@ -32,6 +50,31 @@ from xbbg._services_gen import (
     Service,
 )
 from xbbg.exceptions import BlpValidationError
+
+# Declared explicitly because the generated closed-set constants are re-exported
+# for callers rather than used in this module.
+__all__ = [
+    "FORMATS",
+    "FORMAT_DEFAULT",
+    "FORMAT_VALUES",
+    "OVERFLOW_POLICIES",
+    "OVERFLOW_POLICY_ALIASES",
+    "OVERFLOW_POLICY_DEFAULT",
+    "OVERFLOW_POLICY_VALUES",
+    "SDK_LOG_LEVELS",
+    "SDK_LOG_LEVEL_DEFAULT",
+    "SDK_LOG_LEVEL_VALUES",
+    "VALIDATION_MODES",
+    "VALIDATION_MODE_DEFAULT",
+    "VALIDATION_MODE_VALUES",
+    "ExtractorHint",
+    "Format",
+    "LongMode",
+    "Operation",
+    "OutputMode",
+    "RequestParams",
+    "Service",
+]
 
 # Backwards compatibility alias
 LongMode = Format
@@ -82,7 +125,10 @@ class RequestParams:
         output: Output format (arrow or json).
         extractor: Override the auto-detected extractor hint.  When ``None``
             the Rust layer picks the correct extractor for the operation.
-        format: Output format (LONG, LONG_TYPED, LONG_WITH_METADATA).
+        format: Output format: ``Format.LONG`` (wire value ``"long"``, default),
+            ``Format.LONG_TYPED`` (``"long_typed"``),
+            ``Format.LONG_WITH_METADATA`` (``"long_metadata"``), or
+            ``Format.SEMI_LONG`` (``"semi_long"``).
         include_security_errors: When True for ReferenceData requests, include
             ``__SECURITY_ERROR__`` rows for securities that failed.
         return_eids: When True for ReferenceDataRequest (including BDS bulk

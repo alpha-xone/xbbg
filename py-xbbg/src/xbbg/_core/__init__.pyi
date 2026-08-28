@@ -452,9 +452,15 @@ class PyEngineConfig:
         Multiple servers for failover: list of (host, port) tuples. Overrides host/port when set.
         """
     @property
-    def zfp_remote(self) -> typing.Optional[builtins.str]: ...
+    def zfp_remote(self) -> typing.Optional[builtins.str]:
+        r"""
+        ZFP remote: "8194" or "8196". Default: None (direct transport).
+        """
     @zfp_remote.setter
-    def zfp_remote(self, value: typing.Optional[builtins.str]) -> None: ...
+    def zfp_remote(self, value: typing.Optional[builtins.str]) -> None:
+        r"""
+        ZFP remote: "8194" or "8196". Default: None (direct transport).
+        """
     @property
     def request_pool_size(self) -> builtins.int:
         r"""
@@ -518,12 +524,14 @@ class PyEngineConfig:
     @property
     def validation_mode(self) -> builtins.str:
         r"""
-        Validation mode: "disabled" (default), "strict", or "lenient"
+        Validation mode: "disabled" (default), "lenient", or "strict".
+        Also accepts "off" and "none" as aliases for "disabled".
         """
     @validation_mode.setter
     def validation_mode(self, value: builtins.str) -> None:
         r"""
-        Validation mode: "disabled" (default), "strict", or "lenient"
+        Validation mode: "disabled" (default), "lenient", or "strict".
+        Also accepts "off" and "none" as aliases for "disabled".
         """
     @property
     def subscription_flush_threshold(self) -> builtins.int:
@@ -568,12 +576,14 @@ class PyEngineConfig:
     @property
     def overflow_policy(self) -> builtins.str:
         r"""
-        Overflow policy for slow consumers: "drop_newest" (default) or "block"
+        Overflow policy for slow consumers: "drop_newest" (default) or "block".
+        Also accepts "dropnewest" as an alias for "drop_newest".
         """
     @overflow_policy.setter
     def overflow_policy(self, value: builtins.str) -> None:
         r"""
-        Overflow policy for slow consumers: "drop_newest" (default) or "block"
+        Overflow policy for slow consumers: "drop_newest" (default) or "block".
+        Also accepts "dropnewest" as an alias for "drop_newest".
         """
     @property
     def warmup_services(self) -> builtins.list[builtins.str]:
@@ -600,12 +610,16 @@ class PyEngineConfig:
     @property
     def auth_method(self) -> typing.Optional[builtins.str]:
         r"""
-        Optional auth method: "user", "app", "userapp", "dir", "manual", or "token".
+        Optional auth method: "none", "user", "app", "userapp", "dir", "manual", or "token".
+        Default: None (no auth). Also accepts "directory" as an alias for "dir" and the empty
+        string as "none".
         """
     @auth_method.setter
     def auth_method(self, value: typing.Optional[builtins.str]) -> None:
         r"""
-        Optional auth method: "user", "app", "userapp", "dir", "manual", or "token".
+        Optional auth method: "none", "user", "app", "userapp", "dir", "manual", or "token".
+        Default: None (no auth). Also accepts "directory" as an alias for "dir" and the empty
+        string as "none".
         """
     @property
     def app_name(self) -> typing.Optional[builtins.str]:
@@ -776,9 +790,17 @@ class PyEngineConfig:
         Slow-consumer lo water mark as fraction of max_event_queue_size. None = SDK default (0.5).
         """
     @property
-    def sdk_log_level(self) -> builtins.str: ...
+    def sdk_log_level(self) -> builtins.str:
+        r"""
+        Bloomberg SDK log level: "off" (default), "fatal", "error", "warn", "info", "debug",
+        or "trace". Also accepts "warning" as an alias for "warn".
+        """
     @sdk_log_level.setter
-    def sdk_log_level(self, value: builtins.str) -> None: ...
+    def sdk_log_level(self, value: builtins.str) -> None:
+        r"""
+        Bloomberg SDK log level: "off" (default), "fatal", "error", "warn", "info", "debug",
+        or "trace". Also accepts "warning" as an alias for "warn".
+        """
     @property
     def socks5_host(self) -> typing.Optional[builtins.str]:
         r"""

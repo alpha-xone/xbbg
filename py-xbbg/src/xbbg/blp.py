@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, Any, TypeAlias, cast
 import warnings
 
 from xbbg.services import (
+    OVERFLOW_POLICIES,
+    OVERFLOW_POLICY_VALUES,
     ExtractorHint,
     Format,
     Operation,
@@ -584,7 +586,12 @@ def configure(
         **kwargs: Override individual fields (host, port, request_pool_size,
             subscription_pool_size, shard_requests, shard_threshold,
             shard_chunk_size, shard_max_concurrent, field_cache_path,
-            auth_method, app_name, user_id, ip_address, token, etc.).
+            auth_method, app_name, user_id, ip_address, token, etc.). The closed
+            string fields are ``validation_mode`` (``"disabled"`` (default),
+            ``"lenient"``, or ``"strict"``), ``overflow_policy``
+            (``"drop_newest"`` (default) or ``"block"``), and
+            ``sdk_log_level`` (``"off"`` (default), ``"fatal"``, ``"error"``,
+            ``"warn"``, ``"info"``, ``"debug"``, or ``"trace"``).
 
     Raises:
         TypeError: If an unknown keyword argument is passed.
@@ -1656,9 +1663,12 @@ async def arequest(
         options: Additional Bloomberg options as dict or list of (key, value) tuples.
         field_types: Manual type overrides for fields (for future type resolution).
         output: Output format: OutputMode.ARROW (default) or OutputMode.JSON.
-        extractor: Override the auto-detected extractor. Use ExtractorHint.BULK for
-            bulk data fields. If None, auto-detected from operation.
-        format: Output format hint for result structure.
+        extractor: Override the auto-detected extractor: ``ExtractorHint.REFDATA``,
+            ``HISTDATA``, ``BULK``, ``INTRADAY_BAR``, ``INTRADAY_TICK``, ``GENERIC``,
+            ``BQL``, ``BSRCH``, or ``FIELD_INFO``. Use ``ExtractorHint.BULK`` for bulk
+            data fields. If None, auto-detected from operation.
+        format: Output format: ``Format.LONG`` (default), ``Format.LONG_TYPED``,
+            ``Format.LONG_WITH_METADATA``, or ``Format.SEMI_LONG``.
         include_security_errors: Include ``__SECURITY_ERROR__`` rows for
             failed securities on ReferenceData requests.
         return_eids: Request EID entitlement metadata for ReferenceDataRequest
@@ -2636,7 +2646,11 @@ async def asubscribe(
         tick_mode: If True, return native dict ticks without building Arrow (implies raw=True)
         flush_threshold: Batch flush threshold (validation only in Wave 1)
         stream_capacity: Stream channel capacity (validation only in Wave 1)
-        overflow_policy: Overflow policy for stream (validation only in Wave 1)
+        overflow_policy: Overflow policy for the stream: ``"drop_newest"``
+            (default) or ``"block"``.
+        output: Output selector: ``"record_batch"``, ``"backend"``, ``"dict"``,
+            or ``"tick"`` (case-insensitive). ``None`` (default) retains the
+            behavior selected by ``raw`` and ``tick_mode``.
 
     Returns:
         Subscription handle for iteration and control
@@ -2685,8 +2699,8 @@ async def asubscribe(
         raise ValueError("flush_threshold must be >= 1")
     if stream_capacity is not None and stream_capacity < 1:
         raise ValueError("stream_capacity must be >= 1")
-    if overflow_policy is not None and overflow_policy not in ("drop_newest", "block"):
-        raise ValueError(f"overflow_policy must be one of 'drop_newest', 'block', got {overflow_policy!r}")
+    if overflow_policy is not None and overflow_policy not in OVERFLOW_POLICIES:
+        raise ValueError(f"overflow_policy must be one of {OVERFLOW_POLICY_VALUES}, got {overflow_policy!r}")
 
     # tick_mode=True forces flush_threshold=1
     if tick_mode and flush_threshold is not None and flush_threshold > 1:
@@ -2788,6 +2802,8 @@ async def astream(
         callback: Optional callback function to invoke on each batch
         tick_mode: If True, convert batches to dicts
         conflate: If True, request Bloomberg conflated market data for //blp/mktdata.
+        overflow_policy: Overflow policy for the stream: ``"drop_newest"``
+            (default) or ``"block"``.
 
     Yields:
         Batches of market data (RecordBatch, DataFrame, or dict)
@@ -2857,6 +2873,8 @@ def stream(
         callback: Optional callback function to invoke on each batch
         tick_mode: If True, convert batches to dicts
         conflate: If True, request Bloomberg conflated market data for //blp/mktdata.
+        overflow_policy: Overflow policy for the stream: ``"drop_newest"``
+            (default) or ``"block"``.
 
     Yields:
         Batches of market data

@@ -438,9 +438,10 @@ await raw_sub.unsubscribe()
 
 Key behaviors:
 
+- `output` accepts exactly `record_batch`, `backend`, `dict`, or `tick` (case-insensitive); omitting it keeps whatever `raw` and `tick_mode` select
 - `raw=True` or `output="record_batch"` yields raw xbbg `ArrowRecordBatch` values for max-performance consumers
-- default iteration without `raw=True` returns the configured backend output instead of raw record batches
-- `tick_mode=True` or `output="dict"` returns native dict ticks and implies raw subscription mode
+- `tick_mode=True`, `output="dict"`, or `output="tick"` returns native dict ticks and implies raw subscription mode
+- `output="backend"` returns the configured backend output, the same as default iteration without `raw=True`
 - `all_fields=True` exposes all top-level scalar Bloomberg subscription fields
 - filtered mode keeps requested fields plus `MKTDATA_EVENT_TYPE` and `MKTDATA_EVENT_SUBTYPE`
 - `conflate=True` requests Bloomberg-conflated quote updates on `//blp/mktdata`; trades are still delivered as received

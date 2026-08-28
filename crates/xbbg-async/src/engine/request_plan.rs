@@ -69,7 +69,7 @@ impl PlannedOutput {
             }),
             Some(other) => Err(BlpAsyncError::ConfigError {
                 detail: format!(
-                    "unknown output format '{other}' (expected long, long_typed, long_metadata, wide, or semi_long)"
+                    "unknown output format '{other}' (expected long, long_typed, long_metadata, or semi_long; aliases: typed, metadata, with_metadata, or wide)"
                 ),
             }),
         }

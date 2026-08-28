@@ -189,6 +189,13 @@ async def asubscribe_etf_inav(
     opened. Stream topics are the normalized iNAV tickers, so dynamic
     ``add``/``remove`` on the returned handle expect already-resolved iNAV
     tickers, not source ETFs.
+
+    Args:
+        overflow_policy: Overflow policy for the stream: ``"drop_newest"``
+            (default) or ``"block"``.
+        output: Output selector: ``"record_batch"``, ``"backend"``, ``"dict"``,
+            or ``"tick"`` (case-insensitive). ``None`` (default) retains the
+            behavior selected by ``raw`` and ``tick_mode``.
     """
     etf_list = _normalize_etfs(etfs)
     if not etf_list:

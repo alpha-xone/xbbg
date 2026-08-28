@@ -266,7 +266,7 @@ impl ServerHandler for XbbgMcpServer {
                     ),
             )
             .with_instructions(
-                "Use bdp, bdh, bds, bdib, bql, bsrch, bflds, check_entitlements, or request. Results are JSON with schema metadata and bounded rows. This MCP server currently exposes host/port, selected auth env vars, and core pool settings rather than the full EngineConfig surface.",
+                "Use bdp, bdh, bds, bdib, bql, bsrch, bflds, check_entitlements, or request. Results are JSON with schema metadata and bounded rows. This MCP server currently exposes host/port, selected auth env vars, and core pool settings rather than the full EngineConfig surface. For XBBG_MCP_VALIDATION_MODE/XBBG_VALIDATION_MODE use disabled (default), lenient, or strict; for XBBG_MCP_SDK_LOG_LEVEL/XBBG_SDK_LOG_LEVEL use off (default), fatal, error, warn, info, debug, or trace; for XBBG_MCP_OVERFLOW_POLICY/XBBG_OVERFLOW_POLICY use drop_newest (default) or block.",
             )
     }
 }
@@ -398,7 +398,7 @@ fn build_auth_from_env() -> Result<Option<AuthConfig>, String> {
         }),
         other => {
             return Err(format!(
-                "invalid auth_method '{other}' (expected none, user, app, userapp, dir, manual, or token)"
+                "invalid auth_method '{other}' (expected none, user, app, userapp, dir, directory, manual, or token)"
             ));
         }
     };

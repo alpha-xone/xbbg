@@ -31,8 +31,9 @@ pub(crate) enum HistoricalFormat {
     Long,
     LongTyped,
     LongMetadata,
-    #[serde(alias = "semi_long")]
-    Wide,
+    /// `wide` is the pre-1.2 spelling; both reach the same engine output.
+    #[serde(alias = "wide")]
+    SemiLong,
 }
 
 impl HistoricalFormat {
@@ -41,7 +42,7 @@ impl HistoricalFormat {
             Self::Long => "long",
             Self::LongTyped => "long_typed",
             Self::LongMetadata => "long_metadata",
-            Self::Wide => "wide",
+            Self::SemiLong => "semi_long",
         }
     }
 }
@@ -599,7 +600,7 @@ mod tests {
             overrides: None,
             options: None,
             field_types: None,
-            format: Some(HistoricalFormat::Wide),
+            format: Some(HistoricalFormat::SemiLong),
             validate_fields: Some(true),
             return_eids: true,
         })
@@ -608,7 +609,7 @@ mod tests {
         assert_eq!(bdh.extractor, ExtractorType::HistData);
         assert_eq!(bdh.start_date.as_deref(), Some("20240101"));
         assert_eq!(bdh.end_date.as_deref(), Some("20240131"));
-        assert_eq!(bdh.format.as_deref(), Some("wide"));
+        assert_eq!(bdh.format.as_deref(), Some("semi_long"));
         assert_eq!(bdh.validate_fields, Some(true));
         assert!(bdh.return_eids);
 

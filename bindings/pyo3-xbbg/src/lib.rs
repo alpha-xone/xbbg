@@ -409,6 +409,7 @@ pub struct PyEngineConfig {
     /// Multiple servers for failover: list of (host, port) tuples. Overrides host/port when set.
     #[pyo3(get, set)]
     pub servers: Vec<(String, u16)>,
+    /// ZFP remote: "8194" or "8196". Default: None (direct transport).
     #[pyo3(get, set)]
     pub zfp_remote: Option<String>,
     /// Number of pre-warmed request workers (default: 2)
@@ -429,7 +430,8 @@ pub struct PyEngineConfig {
     /// Maximum concurrent shard requests per user request (default: 4).
     #[pyo3(get, set)]
     pub shard_max_concurrent: usize,
-    /// Validation mode: "disabled" (default), "strict", or "lenient"
+    /// Validation mode: "disabled" (default), "lenient", or "strict".
+    /// Also accepts "off" and "none" as aliases for "disabled".
     #[pyo3(get, set)]
     pub validation_mode: String,
     /// Number of ticks to buffer before flushing to Python (default: 1)
@@ -444,7 +446,8 @@ pub struct PyEngineConfig {
     /// Subscription stream backpressure capacity (default: 256)
     #[pyo3(get, set)]
     pub subscription_stream_capacity: usize,
-    /// Overflow policy for slow consumers: "drop_newest" (default) or "block"
+    /// Overflow policy for slow consumers: "drop_newest" (default) or "block".
+    /// Also accepts "dropnewest" as an alias for "drop_newest".
     #[pyo3(get, set)]
     pub overflow_policy: String,
     /// Services to pre-warm on startup (default: ["//blp/refdata", "//blp/apiflds"])
@@ -454,7 +457,9 @@ pub struct PyEngineConfig {
     /// Set to None to use the default path.
     #[pyo3(get, set)]
     pub field_cache_path: Option<String>,
-    /// Optional auth method: "user", "app", "userapp", "dir", "manual", or "token".
+    /// Optional auth method: "none", "user", "app", "userapp", "dir", "manual", or "token".
+    /// Default: None (no auth). Also accepts "directory" as an alias for "dir" and the empty
+    /// string as "none".
     #[pyo3(get, set)]
     pub auth_method: Option<String>,
     /// Bloomberg application name for app/userapp/manual auth.
@@ -517,6 +522,8 @@ pub struct PyEngineConfig {
     /// Slow-consumer lo water mark as fraction of max_event_queue_size. None = SDK default (0.5).
     #[pyo3(get, set)]
     pub slow_consumer_lo_water_mark: Option<f32>,
+    /// Bloomberg SDK log level: "off" (default), "fatal", "error", "warn", "info", "debug",
+    /// or "trace". Also accepts "warning" as an alias for "warn".
     #[pyo3(get, set)]
     pub sdk_log_level: String,
     /// SOCKS5 proxy hostname for Bloomberg connections.

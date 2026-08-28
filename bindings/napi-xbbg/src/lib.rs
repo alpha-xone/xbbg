@@ -66,6 +66,9 @@ pub struct ServerAddressInput {
 
 #[napi(object)]
 pub struct AuthConfigInput {
+    /// Auth method: "none", "user", "app", "userapp", "dir", "manual", or "token".
+    /// Omit `auth` for the default (no auth). Also accepts "directory" as an alias for "dir" and
+    /// the empty string as "none".
     pub method: String,
     pub app_name: Option<String>,
     pub dir_property: Option<String>,
@@ -102,6 +105,7 @@ pub struct EngineConfigInput {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub servers: Option<Vec<ServerAddressInput>>,
+    /// ZFP remote: "8194" or "8196". Default: unset (direct transport).
     pub zfp_remote: Option<String>,
     pub request_pool_size: Option<u32>,
     pub subscription_pool_size: Option<u32>,
@@ -109,11 +113,15 @@ pub struct EngineConfigInput {
     pub shard_threshold: Option<u32>,
     pub shard_chunk_size: Option<u32>,
     pub shard_max_concurrent: Option<u32>,
+    /// Validation mode: "disabled" (default), "lenient", or "strict".
+    /// Also accepts "off" and "none" as aliases for "disabled".
     pub validation_mode: Option<String>,
     pub subscription_flush_threshold: Option<u32>,
     pub max_event_queue_size: Option<u32>,
     pub command_queue_size: Option<u32>,
     pub subscription_stream_capacity: Option<u32>,
+    /// Overflow policy: "drop_newest" (default) or "block".
+    /// Also accepts "dropnewest" as an alias for "drop_newest".
     pub overflow_policy: Option<String>,
     pub warmup_services: Option<Vec<String>>,
     pub field_cache_path: Option<String>,
@@ -129,6 +137,8 @@ pub struct EngineConfigInput {
     pub keep_alive_response_timeout_ms: Option<i32>,
     pub slow_consumer_hi_water_mark: Option<f64>,
     pub slow_consumer_lo_water_mark: Option<f64>,
+    /// Bloomberg SDK log level: "off" (default), "fatal", "error", "warn", "info", "debug",
+    /// or "trace". Also accepts "warning" as an alias for "warn".
     pub sdk_log_level: Option<String>,
     pub socks5: Option<Socks5ConfigInput>,
 }

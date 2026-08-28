@@ -161,6 +161,9 @@ Common settings:
 - `XBBG_MCP_REQUEST_POOL_SIZE`
 - `XBBG_MCP_MAX_ROWS`
 - `XBBG_MCP_MAX_STRING_CHARS`
+- `XBBG_MCP_VALIDATION_MODE` / `XBBG_VALIDATION_MODE` – `disabled` (default), `lenient`, `strict`
+- `XBBG_MCP_SDK_LOG_LEVEL` / `XBBG_SDK_LOG_LEVEL` – `off` (default), `fatal`, `error`, `warn`, `info`, `debug`, `trace`
+- `XBBG_MCP_OVERFLOW_POLICY` / `XBBG_OVERFLOW_POLICY` – `drop_newest` (default), `block`
 
 Supported auth methods:
 
@@ -169,6 +172,7 @@ Supported auth methods:
 - `app`
 - `userapp`
 - `dir`
+- `directory`
 - `manual`
 - `token`
 

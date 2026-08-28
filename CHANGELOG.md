@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Closed value sets now declared in `defs/bloomberg.toml`**: Overflow policies, validation modes, and SDK log levels are now centralized in the configuration file as the single source of truth. `defs/codegen/generate.py` generates a TypeScript vocabulary (`_defs_gen.ts`) for both JavaScript packages and Rust contract tests that fail if a hand-written parser stops accepting a declared spelling.
+
+### Changed
+
+- **Documentation and error messages now name complete legal value sets and defaults**: Surface layers across Python (`pyo3-xbbg`), JavaScript (N-API), the MCP server, API docstrings, and READMEs now document every accepted value for closed enums (overflow policy, validation mode, SDK log level, subscription output, request format, auth method, ZFP remote) alongside the default and any accepted aliases.
+
+### Fixed
+
+- **`@xbbg/core` exported a format wire value the engine rejects**: `Format.LONG_WITH_METADATA` was `'long_with_metadata'`, but the engine only accepts `'long_metadata'` (`defs/bloomberg.toml` and the generated Python enum already used the correct value, so only the hand-written JavaScript constant was wrong). `js-xbbg/test/smoke.test.ts` asserted the broken value, which is why it went unnoticed. `Format` and `FormatKind` are now generated from `defs/bloomberg.toml`.
+- **LangGraph snapshot tools advertised a rejected overflow policy**: `overflowPolicy` on `xbbg_stream_snapshot`, `xbbg_mktbar_snapshot`, and `xbbg_depth_snapshot` was a free-form string whose description named no legal values and whose example was the `drop_oldest` policy removed in 1.2.0, so models emitted it and the engine failed the call with `unknown overflow policy 'drop_oldest'`. It is now a closed enum generated from `defs/bloomberg.toml`, and its description carries the accepted values, their semantics, and the default.
+
+
 ## [1.4.7] - 2026-08-28
 
 ### Added
