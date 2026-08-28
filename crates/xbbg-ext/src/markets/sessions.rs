@@ -33,8 +33,10 @@ pub struct SessionWindows {
     pub pm: Option<(String, String)>,
 }
 
-// The TOML is embedded at compile time.
-const EXCHANGES_TOML: &str = include_str!("../../../../defs/exchanges.toml");
+// The TOML is embedded at compile time. It lives inside this crate rather than in
+// the repo-root `defs/` because `include_str!` may not reach outside the package
+// root: an out-of-crate path publishes an sdist that cannot build.
+const EXCHANGES_TOML: &str = include_str!("../../data/exchanges.toml");
 
 #[derive(Deserialize)]
 struct ExchangesToml {

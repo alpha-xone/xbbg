@@ -1,10 +1,17 @@
 [package]
 name = "xbbg-ext"
 version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-edition.workspace = true
-description = "Extension utilities for xbbg - futures resolution, currency adjustment, historical data helpers"
+homepage.workspace = true
+readme = "README.md"
+description = "Extension utilities for xbbg: futures resolution, currency adjustment, and historical helpers"
+keywords = ["bloomberg", "market-data", "finance", "timezones", "xbbg"]
+categories = ["finance", "date-and-time"]
+publish = ["crates-io"]
+include = ["src/**/*.rs", "data/*.toml", "Cargo.toml", "README.md"]
 
 [dependencies]
 # Arrow for zero-copy DataFrame operations (narrow crates keep Python wheels small).

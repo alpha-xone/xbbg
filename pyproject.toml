@@ -9,8 +9,14 @@ readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
+# Deliberately a project identity, not a person: this metadata is published to
+# PyPI on every release. Security contact is GitHub private vulnerability
+# reporting (see SECURITY.md), so no individual mailbox is exposed.
 authors = [
-  { name = "Alpha x1", email = "alpha.xone@outlook.com" },
+  { name = "xbbg contributors" },
+]
+maintainers = [
+  { name = "xbbg contributors" },
 ]
 classifiers = [
   "Development Status :: 5 - Production/Stable",

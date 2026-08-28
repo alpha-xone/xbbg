@@ -2,15 +2,21 @@
 name = "xbbg-recipes"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "High-level Bloomberg recipe functions built on xbbg-async engine"
-publish = false
+homepage.workspace = true
+readme = "README.md"
+description = "High-level Bloomberg recipe functions built on the xbbg-async engine"
+keywords = ["bloomberg", "blpapi", "market-data", "finance", "xbbg"]
+categories = ["finance", "api-bindings"]
+publish = ["crates-io"]
+include = ["src/**/*.rs", "Cargo.toml", "README.md"]
 
 [dependencies]
-xbbg-async = { path = "../xbbg-async", default-features = false }
-xbbg-ext = { path = "../xbbg-ext" }
-xbbg-log = { path = "../xbbg-log" }
+xbbg-async = { workspace = true }
+xbbg-ext = { workspace = true }
+xbbg-log = { workspace = true }
 arrow-array = { workspace = true }
 arrow-arith = { workspace = true }
 arrow-schema = { workspace = true }

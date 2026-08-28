@@ -338,14 +338,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
-name = "blpapi-sys"
-version = "0.0.0"
-dependencies = [
- "bindgen",
- "cty",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1316,7 +1308,7 @@ dependencies = [
 
 [[package]]
 name = "napi-xbbg"
-version = "0.0.0"
+version = "1.4.7"
 dependencies = [
  "arrow",
  "chrono",
@@ -1818,7 +1810,7 @@ dependencies = [
 
 [[package]]
 name = "pyo3-xbbg"
-version = "0.0.0"
+version = "1.4.7"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -2896,7 +2888,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "xbbg-arrow"
-version = "0.0.0"
+version = "1.4.7"
 dependencies = [
  "arrow-array",
  "arrow-ord",
@@ -2908,13 +2900,12 @@ dependencies = [
 
 [[package]]
 name = "xbbg-async"
-version = "0.0.0"
+version = "1.4.7"
 dependencies = [
  "arc-swap",
  "arrow-array",
  "arrow-schema",
  "arrow-select",
- "blpapi-sys",
  "chrono",
  "chrono-tz",
  "futures-util",
@@ -2933,6 +2924,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "xbbg-blpapi-sys",
  "xbbg-ext",
  "xbbg-log",
  "xbbg_core",
@@ -2940,7 +2932,7 @@ dependencies = [
 
 [[package]]
 name = "xbbg-bench"
-version = "0.0.0"
+version = "1.4.7"
 dependencies = [
  "arc-swap",
  "arrow-array",
@@ -2958,8 +2950,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "xbbg-blpapi-sys"
+version = "1.4.7"
+dependencies = [
+ "bindgen",
+ "cty",
+]
+
+[[package]]
 name = "xbbg-ext"
-version = "0.0.0"
+version = "1.4.7"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2973,7 +2973,7 @@ dependencies = [
 
 [[package]]
 name = "xbbg-log"
-version = "0.0.0"
+version = "1.4.7"
 dependencies = [
  "tracing",
  "tracing-core",
@@ -2982,7 +2982,7 @@ dependencies = [
 
 [[package]]
 name = "xbbg-mcp"
-version = "0.0.0"
+version = "1.4.7"
 dependencies = [
  "arrow",
  "chrono",
@@ -2997,7 +2997,7 @@ dependencies = [
 
 [[package]]
 name = "xbbg-recipes"
-version = "0.0.0"
+version = "1.4.7"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -3012,19 +3012,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "xbbg-sys"
-version = "0.0.0"
-dependencies = [
- "blpapi-sys",
-]
-
-[[package]]
 name = "xbbg_core"
-version = "0.0.0"
+version = "1.4.7"
 dependencies = [
  "rustc-hash 2.1.3",
  "thiserror 2.0.20",
- "xbbg-sys",
+ "xbbg-blpapi-sys",
 ]
 
 [[package]]

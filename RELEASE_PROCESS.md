@@ -89,9 +89,23 @@ Go to **GitHub Actions** > **Bump Version and Create Release** > **Run workflow*
 3. **README Release Sync**: Updates the `README.md` latest-release marker block to the new version/tag
 4. **Git Tag**: Creates `vX.Y.Z` tag and pushes it
 5. **GitHub Release**: Creates release with notes from CHANGELOG
-6. **PyPI Publish**: Tag push triggers `pypi_upload.yml` — builds wheels and publishes via OIDC trusted publishing
-7. **npm Publish**: Tag push triggers `npm-publish.yml` — builds platform-native `@xbbg/core-*` packages, stamps JS versions from the git tag, and publishes `@xbbg/core` to npm via trusted publishing
-8. **Release Assets**: Wheels and sdist are attached to the GitHub release
+6. **crates.io Publish**: `semantic_version.yml` calls `crates-publish.yml` directly as a
+   dependent job, so the six published Rust crates go out in dependency order with no
+   manual step. Stable versions only; pre-releases are skipped.
+
+**Still manual after the run:** PyPI and npm are *not* automatic. Both
+`pypi_upload.yml` and `npm-publish.yml` declare `push.tags: ["v*"]`, but the tag is
+created with `GITHUB_TOKEN`, and a `GITHUB_TOKEN` tag push does not start
+tag-triggered workflows. Dispatch each one manually on the new tag:
+
+| Workflow | Dispatch with |
+|----------|---------------|
+| `pypi_upload.yml` | ref `vX.Y.Z`, `dry-run=false` |
+| `npm-publish.yml` | `version=vX.Y.Z` |
+| `mcp_registry_publish.yml` | `version=vX.Y.Z`, after `server.json` is attached to the Release |
+
+`crates-publish.yml` avoids this trap entirely by being invoked as a reusable
+workflow rather than waiting on a tag event.
 
 ## CI/CD Workflows
 
@@ -102,24 +116,99 @@ Go to **GitHub Actions** > **Bump Version and Create Release** > **Run workflow*
 | CI | `ci-rust.yml` | Rust lint, clippy, build, test (Linux + Windows) |
 | Docker | `ci-docker.yml` | Build CI Docker image |
 
-### On Release (tag push `v*`)
+### Called by the release workflow
+
+| Workflow | File | Purpose |
+|----------|------|---------|
+| Publish Rust Crates | `crates-publish.yml` | Reusable job invoked by `semantic_version.yml`; stamps the workspace version and publishes the six crates.io packages in dependency order |
+
+### On Release (dispatch on tag `vX.Y.Z`)
 
 | Workflow | File | Purpose |
 |----------|------|---------|
 | Release | `pypi_upload.yml` | Build wheels (manylinux_2_28 Linux + Windows + macOS × Python 3.10–3.14), sdist, publish to PyPI, attach to GitHub release |
 | Release | `npm-publish.yml` | Build and publish stable `@xbbg/core` prebuilt native packages for supported platforms, then publish the `@xbbg/core` wrapper and `@xbbg/langgraph` package via npm trusted publishing |
 
-### npm trusted publishing setup
+### crates.io publishing
 
-`npm-publish.yml` is tokenless: the publish job uses GitHub OIDC (`id-token: write`) from GitHub-hosted runners and npm CLI `>=11.10.0`. Configure this once on npmjs.com for each published package before relying on tag-push publishing:
+Published crates (6), in publish order:
+
+| Crate | Depends on | Notes |
+|-------|-----------|-------|
+| `xbbg-blpapi-sys` | — | Registry name is prefixed because `blpapi-sys` is taken; `[lib] name = "blpapi_sys"` keeps `blpapi_sys::` working |
+| `xbbg-log` | — | |
+| `xbbg-ext` | — | Embeds `crates/xbbg-ext/data/exchanges.toml`; `include_str!` may not reach outside the package root |
+| `xbbg_core` | `xbbg-blpapi-sys` | Underscore is permanent: crates.io treats `-` and `_` as the same identity, so `xbbg-core` cannot be claimed separately |
+| `xbbg-async` | `xbbg_core`, `xbbg-ext`, `xbbg-log` | |
+| `xbbg-recipes` | `xbbg-async`, `xbbg-ext`, `xbbg-log` | |
+
+Never published (`publish = false`): `xbbg-arrow`, `xbbg-bench`, `pyo3-xbbg`,
+`napi-xbbg`, `xbbg-mcp`. The bindings have no standalone value, and `xbbg-mcp`
+ships as a prebuilt binary on the GitHub Release because `cargo install` cannot
+build it without the Bloomberg SDK.
+
+#### Known limitation: docs.rs
+
+`xbbg-blpapi-sys`, `xbbg_core`, `xbbg-async`, and `xbbg-recipes` do **not** build on
+docs.rs. The BLPAPI SDK is proprietary and the docs.rs sandbox has no network to
+fetch it, so bindgen has no headers. `xbbg_core/src/ffi.rs` re-exports the BLPAPI
+symbols unconditionally, so the failure propagates to everything above it.
+
+An empty-stub build script was evaluated and rejected: it makes only the `-sys`
+crate green, and with an empty API page, while `xbbg_core` still fails with 29
+unresolved imports. `build.rs` therefore detects `DOCS_RS` and fails with an
+explicit message so the docs.rs log states the real reason.
+
+Making docs.rs green requires committing a pregenerated binding surface to the
+repo. That is an open decision, not an oversight: the Bloomberg SDK license grants
+permission to "use, publish, or distribute copies" but states that "modifying,
+adapting, reverse engineering, decompiling, or disassembling, is not permitted",
+and bindgen output is plausibly an adaptation of the SDK headers. Resolve the
+licensing question before adding one.
+
+`xbbg-log` and `xbbg-ext` are SDK-free and document normally on docs.rs.
+
+#### crates.io trusted publishing setup
+
+Tokenless via `rust-lang/crates-io-auth-action` and GitHub OIDC; there is no
+`CARGO_REGISTRY_TOKEN` secret. **Each crate needs two Trusted Publisher entries:**
+
+| # | Workflow filename | Covers |
+|---|-------------------|--------|
+| 1 | `semantic_version.yml` | The automatic release path |
+| 2 | `crates-publish.yml` | Manual `workflow_dispatch` retries |
+
+Both are required because crates.io validates the OIDC `workflow_ref` claim, and
+for a `workflow_call` GitHub sets `workflow_ref` to the **calling** workflow. The
+called file appears only as `job_workflow_ref`, which crates.io does not check. If
+you register only `crates-publish.yml`, automatic releases fail OIDC while manual
+dispatch still succeeds.
+
+For every entry use repository owner `xbbg-org`, repository `xbbg`, and leave the
+environment blank.
+
+#### First publish of a new crate name
+
+crates.io has no PyPI-style "pending publisher", so a Trusted Publisher cannot be
+attached to a crate that does not exist yet. For a brand-new name:
+
+1. Publish once locally with a scoped API token: `cargo publish -p <crate>`
+2. Add both Trusted Publisher entries above in the crates.io UI
+3. Revoke the temporary token
+
+Crates already on crates.io need only steps 2 and 3.
+
+#### npm trusted publishing setup
+
+`npm-publish.yml` is tokenless: the publish job uses GitHub OIDC (`id-token: write`) from GitHub-hosted runners and npm CLI `>=11.10.0`. Configure this once on npmjs.com for each published package:
 
 | npm package | Publisher | GitHub org/user | Repository | Workflow filename | Environment |
 |-------------|-----------|-----------------|------------|-------------------|-------------|
-| `@xbbg/core` | GitHub Actions | `alpha-xone` | `xbbg` | `npm-publish.yml` | leave blank |
-| `@xbbg/core-linux-x64` | GitHub Actions | `alpha-xone` | `xbbg` | `npm-publish.yml` | leave blank |
-| `@xbbg/core-win32-x64` | GitHub Actions | `alpha-xone` | `xbbg` | `npm-publish.yml` | leave blank |
-| `@xbbg/core-darwin-arm64` | GitHub Actions | `alpha-xone` | `xbbg` | `npm-publish.yml` | leave blank |
-| `@xbbg/langgraph` | GitHub Actions | `alpha-xone` | `xbbg` | `npm-publish.yml` | leave blank |
+| `@xbbg/core` | GitHub Actions | `xbbg-org` | `xbbg` | `npm-publish.yml` | leave blank |
+| `@xbbg/core-linux-x64` | GitHub Actions | `xbbg-org` | `xbbg` | `npm-publish.yml` | leave blank |
+| `@xbbg/core-win32-x64` | GitHub Actions | `xbbg-org` | `xbbg` | `npm-publish.yml` | leave blank |
+| `@xbbg/core-darwin-arm64` | GitHub Actions | `xbbg-org` | `xbbg` | `npm-publish.yml` | leave blank |
+| `@xbbg/langgraph` | GitHub Actions | `xbbg-org` | `xbbg` | `npm-publish.yml` | leave blank |
 
 GitHub environment `npm` is intentionally not required because current repository credentials cannot create it. Add an environment only if an admin wants reviewer-based release approvals; if you do, update both the workflow `environment:` and all npm trusted publisher entries to the exact same environment name.
 
@@ -284,6 +373,15 @@ When asked to create a release:
 - Reuse `vX.Y.Z` tags for JS-only GitHub assets; use `js-vX.Y.Z` instead so the PyPI/npm publish workflows do not trigger
 - Upload to PyPI manually (OIDC trusted publishing only)
 - Upload npm packages manually except for emergency recovery or first-time package seeding; normal npm releases must go through `npm-publish.yml` trusted publishing on a stable `vX.Y.Z` tag
+- Edit `version` in `Cargo.toml` for a release; `crates-publish.yml` stamps
+  `workspace.package.version` and every internal `workspace.dependencies` entry from
+  the release version
+- Run `cargo publish` by hand, except for the one-time seeding of a brand-new crate
+  name that has no Trusted Publisher yet
+- Add a path dependency without a matching `version`; `cargo publish` rejects a bare
+  `{ path = ... }`, which is what blocked crates.io releases before 1.4.7
+- Use `include_str!` to reach outside a published crate's own directory; the sdist
+  will not contain the file and the crate becomes unbuildable
 
 ## CHANGELOG.md Format
 

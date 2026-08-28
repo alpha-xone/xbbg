@@ -363,9 +363,25 @@ jobs:
         make_latest: ${{ inputs.pre_release == 'none' || inputs.pre_release == '' }}
         draft: false
 
+  # Publish the Rust crates to crates.io. Invoked directly rather than relying on
+  # the tag push: tags created above use GITHUB_TOKEN, and a GITHUB_TOKEN tag push
+  # does not start tag-triggered workflows. Pre-releases are excluded because
+  # crates.io only accepts the stable X.Y.Z versions this repo tags.
+  publish-crates:
+    name: Publish Rust crates
+    needs: [bump-version]
+    if: inputs.create_release == true && (inputs.pre_release == 'none' || inputs.pre_release == '')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/crates-publish.yml
+    with:
+      version: ${{ needs.bump-version.outputs.new_version }}
+      dry-run: false
+
   # Summary job
   summary:
-    needs: [bump-version]
+    needs: [bump-version, publish-crates]
     if: always() && inputs.create_release == true
     runs-on: ubuntu-latest
 
@@ -380,6 +396,8 @@ jobs:
           echo "- **Tag**: ${{ needs.bump-version.outputs.tag }}"
           echo "- **Type**: ${{ inputs.bump_type }}${{ inputs.pre_release != 'none' && inputs.pre_release != '' && format(' ({0})', inputs.pre_release) || '' }}"
           echo ""
+          echo "- **crates.io**: ${{ needs.publish-crates.result }} (published by this run via crates-publish.yml)"
+          echo ""
           echo "### Next Steps"
-          echo "The tag push will automatically trigger **pypi_upload.yml** for Python artifacts and **npm-publish.yml** for @xbbg/core native npm packages."
+          echo "Dispatch **pypi_upload.yml** and **npm-publish.yml** on the new tag. A GITHUB_TOKEN tag push does not start tag-triggered workflows, so those two still need a manual dispatch; crates.io is already handled above."
         } >> "$GITHUB_STEP_SUMMARY"

@@ -2,9 +2,11 @@
 name = "xbbg-arrow"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Pure Arrow carrier helpers for xbbg native bindings"
+publish = false
 
 [dependencies]
 arrow-array = { workspace = true, features = ["chrono-tz"] }

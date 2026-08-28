@@ -2,6 +2,7 @@
 name = "xbbg-bench"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Benchmarks for xbbg — performance, allocation profiling, and live Bloomberg tests"
@@ -13,9 +14,10 @@ name = "xbbg_bench"
 
 [dependencies]
 # Crates under test
-xbbg_core = { path = "../xbbg-core" }
-xbbg-async = { path = "../xbbg-async", features = ["bench-internals"] }
-
+# `live` is named explicitly because the workspace entries disable default
+# features; these benchmarks previously inherited it.
+xbbg_core = { workspace = true, features = ["live"] }
+xbbg-async = { workspace = true, features = ["bench-internals", "live"] }
 # Benchmark runner/runtime
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }

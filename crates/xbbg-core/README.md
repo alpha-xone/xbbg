@@ -2,14 +2,14 @@
 
 Safe, zero-allocation Rust wrappers over the Bloomberg C++ SDK (`blpapi`).
 
-This is the core abstraction layer between raw FFI (`xbbg-sys`) and the async engine (`xbbg-async`). Every unsafe FFI call is wrapped in a safe Rust API with proper ownership, lifetimes, and error handling.
+This is the core abstraction layer between raw FFI (`xbbg-blpapi-sys`) and the async engine (`xbbg-async`). Every unsafe FFI call is wrapped in a safe Rust API with proper ownership, lifetimes, and error handling.
 
 ## Crate structure
 
 ```
 src/
 ├── lib.rs           Module declarations + public re-exports
-├── ffi.rs           Centralized FFI re-exports from xbbg-sys + local datetime types
+├── ffi.rs           Centralized FFI re-exports from blpapi_sys + local datetime types
 │
 ├── Core types
 │   ├── element.rs   Element wrapper — typed field access, iteration
