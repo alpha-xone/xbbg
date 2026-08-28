@@ -203,10 +203,16 @@ jobs:
           print(f"Stamped {version}: 1 workspace.package + {dep_hits} internal deps")
           PY
 
-          cargo generate-lockfile --offline || cargo generate-lockfile
+          # No `--offline`: a fresh runner has no registry cache, so an offline
+          # resolve fails with "no matching package named `arrow-array` found".
+          cargo generate-lockfile
+
           echo "--- resolved workspace versions ---"
+          # jq, not an inline `python -c`: escaping `\"` inside a single-quoted
+          # shell string produces an f-string backslash that Python rejects with
+          # "unexpected character after line continuation character".
           cargo metadata --no-deps --format-version 1 \
-            | python -c 'import json,sys; [print(f"{p[\"name\"]}\t{p[\"version\"]}\t{p.get(\"publish\")}") for p in json.load(sys.stdin)["packages"]]'
+            | jq -r '.packages[] | "\(.name)\t\(.version)\t\(.publish | tostring)"'
 
       - name: Authenticate with crates.io trusted publishing
         id: crates-auth
