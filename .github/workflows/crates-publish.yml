@@ -105,15 +105,59 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved crates.io version: $VERSION (dry-run=${{ inputs.dry-run }})"
 
-      - name: Detect latest downloadable Bloomberg C++ SDK version
+      # Compute the work list before doing any expensive or network-dependent
+      # setup. A re-run after a complete release has nothing to publish, and in
+      # that case the SDK download below is pure waste that can fail spuriously on
+      # Bloomberg's index (observed: run 33132993025 failed here with
+      # "Could not detect BLPAPI SDK version" even though every crate was already
+      # published). Gating on `has_work` makes an idempotent re-run fast and green.
+      - name: Determine crates needing publish
+        id: pending
         if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -uo pipefail
+          UA='xbbg-release-workflow (+https://github.com/xbbg-org/xbbg)'
+          pending=""
+          for crate in $CRATE_ORDER; do
+            if curl -fsS -o /dev/null -H "User-Agent: $UA" \
+                 "https://crates.io/api/v1/crates/$crate/$VERSION"; then
+              echo "$crate $VERSION already on crates.io"
+            else
+              pending="$pending $crate"
+            fi
+          done
+          pending="$(echo "$pending" | sed 's/^ *//')"
+          echo "pending=$pending" >> "$GITHUB_OUTPUT"
+          if [ -n "$pending" ]; then
+            echo "has_work=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Crates to publish:$pending"
+          else
+            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::All crates already published at $VERSION; nothing to do."
+          fi
+
+      - name: Detect latest downloadable Bloomberg C++ SDK version
+        if: steps.pending.outputs.has_work == 'true'
         id: sdk-version
         shell: bash
         run: |
-          set -euo pipefail
-          VERSION=$(curl -fsSL https://blpapi.bloomberg.com/repository/releases/python/simple/blpapi/ \
-            | grep -oP 'blpapi-\K[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?' | sort -V | tail -1)
-          [ -n "$VERSION" ] || { echo "::error::Could not detect BLPAPI SDK version"; exit 1; }
+          set -uo pipefail
+          # Bloomberg's index is an external dependency of the release; retry
+          # rather than failing the whole publish on one transient response.
+          VERSION=""
+          for attempt in 1 2 3 4 5; do
+            VERSION=$(curl -fsSL --max-time 30 \
+              https://blpapi.bloomberg.com/repository/releases/python/simple/blpapi/ \
+              | grep -oP 'blpapi-\K[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?' \
+              | sort -V | tail -1) || VERSION=""
+            [ -n "$VERSION" ] && break
+            echo "::warning::BLPAPI SDK index attempt $attempt returned nothing; retrying."
+            sleep $((attempt * 5))
+          done
+          [ -n "$VERSION" ] || { echo "::error::Could not detect BLPAPI SDK version after 5 attempts"; exit 1; }
           echo "Detected BLPAPI SDK version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -121,7 +165,7 @@ jobs:
       # runs bindgen against the real SDK headers, so the SDK must be present even
       # for a dry run.
       - name: Setup Bloomberg SDK
-        if: steps.version.outputs.publish == 'true'
+        if: steps.pending.outputs.has_work == 'true'
         id: sdk
         uses: ./.github/actions/setup-blpapi-sdk
         with:
@@ -129,7 +173,7 @@ jobs:
           os: Linux
 
       - name: Export Bloomberg SDK env
-        if: steps.version.outputs.publish == 'true'
+        if: steps.pending.outputs.has_work == 'true'
         shell: bash
         run: |
           SDK_ROOT="$GITHUB_WORKSPACE/${{ steps.sdk.outputs.sdk-rel-root }}"
@@ -141,7 +185,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Setup Rust
-        if: steps.version.outputs.publish == 'true'
+        if: steps.pending.outputs.has_work == 'true'
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           rustflags: ""
@@ -152,7 +196,7 @@ jobs:
       # expected number of anchors so a manifest reshuffle fails loudly instead of
       # silently publishing mismatched versions.
       - name: Stamp workspace version
-        if: steps.version.outputs.publish == 'true'
+        if: steps.pending.outputs.has_work == 'true'
         shell: bash
         env:
           STAMP_VERSION: ${{ steps.version.outputs.version }}
@@ -216,11 +260,11 @@ jobs:
 
       - name: Authenticate with crates.io trusted publishing
         id: crates-auth
-        if: steps.version.outputs.publish == 'true' && inputs.dry-run != true
+        if: steps.pending.outputs.has_work == 'true' && inputs.dry-run != true
         uses: rust-lang/crates-io-auth-action@v1
 
       - name: Publish crates.io packages
-        if: steps.version.outputs.publish == 'true'
+        if: steps.pending.outputs.has_work == 'true'
         shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
@@ -319,4 +363,16 @@ jobs:
             echo "- **Dry run**: \`$DRY_RUN\`"
             echo "- **Published**:${published:- none}"
             echo "- **Skipped**:${skipped:- none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report no-op
+        if: steps.version.outputs.publish == 'true' && steps.pending.outputs.has_work != 'true'
+        shell: bash
+        run: |
+          {
+            echo "## crates.io publish"
+            echo ""
+            echo "- **Version**: \`${{ steps.version.outputs.version }}\`"
+            echo "- Every published crate already exists at this version; nothing to do."
+            echo "- SDK setup and version stamping were skipped."
           } >> "$GITHUB_STEP_SUMMARY"
