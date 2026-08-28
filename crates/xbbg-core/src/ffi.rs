@@ -1,9 +1,9 @@
 //! FFI bindings to Bloomberg BLPAPI
 //!
-//! Re-exports from xbbg-sys plus local type definitions.
+//! Re-exports from xbbg-blpapi-sys plus local type definitions.
 
 // --- Opaque types ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_AuthApplication_t, blpapi_AuthOptions_t, blpapi_AuthToken_t, blpapi_AuthUser_t,
     blpapi_CorrelationId_t, blpapi_Element_t, blpapi_Event_t, blpapi_Identity_t,
     blpapi_MessageIterator_t, blpapi_Message_t, blpapi_Name_t, blpapi_Request_t, blpapi_Service_t,
@@ -11,7 +11,7 @@ pub use xbbg_sys::{
 };
 
 // --- Auth functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_AuthApplication_create, blpapi_AuthApplication_destroy,
     blpapi_AuthOptions_create_default, blpapi_AuthOptions_create_forAppMode,
     blpapi_AuthOptions_create_forToken, blpapi_AuthOptions_create_forUserAndAppMode,
@@ -22,19 +22,19 @@ pub use xbbg_sys::{
 };
 
 // --- Schema opaque types ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_ConstantList_t, blpapi_Constant_t, blpapi_Operation_t, blpapi_SchemaElementDefinition_t,
     blpapi_SchemaTypeDefinition_t,
 };
 
 // --- Name functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_Name_create, blpapi_Name_destroy, blpapi_Name_duplicate, blpapi_Name_findName,
     blpapi_Name_string,
 };
 
 // --- Element functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_Element_datatype, blpapi_Element_getElement, blpapi_Element_getElementAt,
     blpapi_Element_getValueAsBool, blpapi_Element_getValueAsBytes, blpapi_Element_getValueAsChar,
     blpapi_Element_getValueAsElement, blpapi_Element_getValueAsFloat64,
@@ -44,26 +44,26 @@ pub use xbbg_sys::{
 };
 
 // --- Element setters ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_Element_appendElement, blpapi_Element_setElementFloat64, blpapi_Element_setElementInt32,
     blpapi_Element_setElementString, blpapi_Element_setValueFloat64, blpapi_Element_setValueInt32,
     blpapi_Element_setValueInt64, blpapi_Element_setValueString, BLPAPI_ELEMENT_INDEX_END,
 };
 
 // --- Message functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_Message_correlationId, blpapi_Message_elements, blpapi_Message_messageType,
     blpapi_Message_numCorrelationIds, blpapi_Message_typeString,
 };
 
 // --- Event functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_Event_eventType, blpapi_Event_release, blpapi_MessageIterator_create,
     blpapi_MessageIterator_destroy, blpapi_MessageIterator_next,
 };
 
 // --- Session functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_Session_cancel, blpapi_Session_create, blpapi_Session_createIdentity,
     blpapi_Session_destroy, blpapi_Session_generateToken, blpapi_Session_getService,
     blpapi_Session_nextEvent, blpapi_Session_openService, blpapi_Session_openServiceAsync,
@@ -73,31 +73,31 @@ pub use xbbg_sys::{
 };
 
 // --- Service functions ---
-pub use xbbg_sys::{blpapi_Service_createRequest, blpapi_Service_name};
+pub use blpapi_sys::{blpapi_Service_createRequest, blpapi_Service_name};
 
 // --- Service schema introspection ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_Service_description, blpapi_Service_getOperationAt, blpapi_Service_numOperations,
 };
 
 // --- Operation functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_Operation_description, blpapi_Operation_name, blpapi_Operation_numResponseDefinitions,
     blpapi_Operation_requestDefinition, blpapi_Operation_responseDefinition,
 };
 
 // --- SchemaElementDefinition functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_SchemaElementDefinition_description, blpapi_SchemaElementDefinition_maxValues,
     blpapi_SchemaElementDefinition_minValues, blpapi_SchemaElementDefinition_name,
     blpapi_SchemaElementDefinition_type,
 };
 
 #[cfg(feature = "live")]
-pub use xbbg_sys::blpapi_SchemaElementDefinition_status;
+pub use blpapi_sys::blpapi_SchemaElementDefinition_status;
 
 // --- SchemaTypeDefinition functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_SchemaTypeDefinition_datatype, blpapi_SchemaTypeDefinition_description,
     blpapi_SchemaTypeDefinition_enumeration, blpapi_SchemaTypeDefinition_getElementDefinitionAt,
     blpapi_SchemaTypeDefinition_isComplexType, blpapi_SchemaTypeDefinition_isEnumerationType,
@@ -106,30 +106,30 @@ pub use xbbg_sys::{
 };
 
 #[cfg(feature = "live")]
-pub use xbbg_sys::blpapi_SchemaTypeDefinition_status;
+pub use blpapi_sys::blpapi_SchemaTypeDefinition_status;
 
 // --- ConstantList/Constant functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_ConstantList_getConstantAt, blpapi_ConstantList_numConstants,
     blpapi_Constant_description, blpapi_Constant_name,
 };
 
 // --- Request functions ---
-pub use xbbg_sys::{blpapi_Request_destroy, blpapi_Request_elements};
+pub use blpapi_sys::{blpapi_Request_destroy, blpapi_Request_elements};
 
 // --- SubscriptionList functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_SubscriptionList_add, blpapi_SubscriptionList_create, blpapi_SubscriptionList_destroy,
 };
 
 // --- CorrelationId constants ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     BLPAPI_CORRELATION_TYPE_AUTOGEN, BLPAPI_CORRELATION_TYPE_INT, BLPAPI_CORRELATION_TYPE_POINTER,
     BLPAPI_CORRELATION_TYPE_UNSET,
 };
 
 // --- SessionOptions functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_SessionOptions_create, blpapi_SessionOptions_destroy,
     blpapi_SessionOptions_maxEventQueueSize, blpapi_SessionOptions_setAuthenticationOptions,
     blpapi_SessionOptions_setAutoRestartOnDisconnection,
@@ -151,23 +151,23 @@ pub use xbbg_sys::{
 };
 
 // --- TlsOptions functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_TlsOptions_createFromBlobs, blpapi_TlsOptions_createFromFiles,
     blpapi_TlsOptions_destroy, blpapi_TlsOptions_setCrlFetchTimeoutMs,
     blpapi_TlsOptions_setTlsHandshakeTimeoutMs,
 };
 
 // --- Socks5Config type ---
-pub use xbbg_sys::blpapi_Socks5Config_t;
+pub use blpapi_sys::blpapi_Socks5Config_t;
 
 // --- Socks5Config functions ---
-pub use xbbg_sys::{blpapi_Socks5Config_create, blpapi_Socks5Config_destroy};
+pub use blpapi_sys::{blpapi_Socks5Config_create, blpapi_Socks5Config_destroy};
 
 // --- SessionOptions proxy function ---
-pub use xbbg_sys::blpapi_SessionOptions_setServerAddressWithProxy;
+pub use blpapi_sys::blpapi_SessionOptions_setServerAddressWithProxy;
 
 // --- Identity functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_AbstractSession_generateAuthorizedIdentityAsync,
     blpapi_AbstractSession_getAuthorizedIdentity, blpapi_AbstractSession_t,
     blpapi_Identity_getSeatType, blpapi_Identity_hasEntitlements, blpapi_Identity_isAuthorized,
@@ -175,7 +175,7 @@ pub use xbbg_sys::{
 };
 
 // --- Logging functions ---
-pub use xbbg_sys::{
+pub use blpapi_sys::{
     blpapi_Datetime_tag as blpapi_Logging_Datetime_t, blpapi_Logging_Func_t,
     blpapi_Logging_Severity_t, blpapi_Logging_Severity_t_blpapi_Logging_SEVERITY_DEBUG,
     blpapi_Logging_Severity_t_blpapi_Logging_SEVERITY_ERROR,
@@ -188,7 +188,7 @@ pub use xbbg_sys::{
 };
 
 // --- ZfpUtil functions ---
-pub use xbbg_sys::blpapi_ZfpUtil_getOptionsForLeasedLines;
+pub use blpapi_sys::blpapi_ZfpUtil_getOptionsForLeasedLines;
 
 // --- HighPrecisionDatetime (defined locally for layout control) ---
 

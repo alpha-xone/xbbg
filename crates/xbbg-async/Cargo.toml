@@ -2,17 +2,23 @@
 name = "xbbg-async"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Async worker-pool engine over xbbg-core for Bloomberg API requests and subscriptions"
-publish = false
+homepage.workspace = true
+readme = "README.md"
+description = "Async worker-pool engine over xbbg_core for Bloomberg API requests and subscriptions"
+keywords = ["bloomberg", "blpapi", "async", "market-data", "xbbg"]
+categories = ["asynchronous", "finance"]
+publish = ["crates-io"]
+include = ["src/**/*.rs", "Cargo.toml", "README.md"]
 
 [dependencies]
-xbbg_core = { path = "../xbbg-core", default-features = false }
-xbbg-ext = { path = "../xbbg-ext" }
+xbbg_core = { workspace = true }
+xbbg-ext = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
-xbbg-log = { path = "../xbbg-log" }
+xbbg-log = { workspace = true }
 once_cell = { workspace = true }
 slab = { workspace = true }
 arrow-array = { workspace = true, features = ["chrono-tz"] }
@@ -43,7 +49,7 @@ bench-internals = []
 normal = ["xbbg-log"]
 
 [dev-dependencies]
-blpapi-sys = { path = "../blpapi-sys" }
+blpapi-sys = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true }
 # Restores tracing-subscriber's default set on top of the env-filter this uses.

@@ -78,7 +78,7 @@ require_cmd perl
 # --------------------------------------------------------------------------- #
 info "Extracting required symbols from ffi.rs ..."
 
-# The file re-exports C symbols via `pub use xbbg_sys::{ ... }`, declares
+# The file re-exports C symbols via `pub use blpapi_sys::{ ... }`, declares
 # FFI functions in `extern "C" { ... }`, and defines struct/const types.
 #
 # Strategy:

@@ -1,0 +1,308 @@
+name: Publish Rust Crates
+
+# =============================================================================
+# CRATES.IO PUBLISH
+# =============================================================================
+#
+# Reusable workflow invoked by semantic_version.yml immediately after the tag
+# and GitHub Release are created, plus workflow_dispatch for manual retries.
+#
+# This is deliberately NOT triggered by `push.tags`. Tags created by
+# semantic_version.yml use GITHUB_TOKEN, and a GITHUB_TOKEN tag push does not
+# start tag-triggered workflows. A `push.tags` trigger here would silently never
+# run, which is the same trap that forces pypi_upload.yml and npm-publish.yml to
+# be dispatched by hand.
+#
+# Auth is tokenless: `rust-lang/crates-io-auth-action` exchanges the GitHub OIDC
+# identity for a short-lived crates.io token, so no CARGO_REGISTRY_TOKEN secret
+# exists.
+#
+# IMPORTANT — each crate needs TWO Trusted Publisher entries on crates.io:
+#
+#   1. workflow `semantic_version.yml`  — the automatic release path
+#   2. workflow `crates-publish.yml`    — manual workflow_dispatch retries
+#
+# crates.io validates the OIDC `workflow_ref` claim, and for a `workflow_call`
+# GitHub sets `workflow_ref` to the CALLING workflow; the called file appears
+# only as `job_workflow_ref`, which crates.io does not check. So an automatic
+# release authenticates as `semantic_version.yml` even though the publish logic
+# lives here. Registering only this filename makes the automatic path fail with
+# an OIDC audience error while manual dispatch still works.
+#
+# crates.io also has no "pending publisher" equivalent, so a brand-new crate name
+# must be published once with a scoped API token before trusted publishing can be
+# attached to it at all.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Stable version to publish (X.Y.Z or vX.Y.Z)"
+        required: true
+        type: string
+      dry-run:
+        description: "Package and verify without uploading"
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Stable version/tag to publish (vX.Y.Z or X.Y.Z)"
+        required: true
+        type: string
+      dry-run:
+        description: "Package and verify without uploading"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: crates-publish-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Dependency order. Each crate is published only after everything it depends
+  # on is live in the index:
+  #   xbbg-blpapi-sys  (no internal deps)
+  #   xbbg-log         (no internal deps)
+  #   xbbg-ext         (no internal deps)
+  #   xbbg_core        -> xbbg-blpapi-sys
+  #   xbbg-async       -> xbbg_core, xbbg-ext, xbbg-log
+  #   xbbg-recipes     -> xbbg-async, xbbg-ext, xbbg-log
+  CRATE_ORDER: xbbg-blpapi-sys xbbg-log xbbg-ext xbbg_core xbbg-async xbbg-recipes
+
+jobs:
+  publish:
+    name: Publish crates.io packages
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW_VERSION="${{ inputs.version }}"
+          VERSION="${RAW_VERSION#v}"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping crates.io publish: '$RAW_VERSION' is not a stable Cargo semver version."
+            exit 0
+          fi
+
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved crates.io version: $VERSION (dry-run=${{ inputs.dry-run }})"
+
+      - name: Detect latest downloadable Bloomberg C++ SDK version
+        if: steps.version.outputs.publish == 'true'
+        id: sdk-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(curl -fsSL https://blpapi.bloomberg.com/repository/releases/python/simple/blpapi/ \
+            | grep -oP 'blpapi-\K[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?' | sort -V | tail -1)
+          [ -n "$VERSION" ] || { echo "::error::Could not detect BLPAPI SDK version"; exit 1; }
+          echo "Detected BLPAPI SDK version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # `cargo publish` verifies each package by building it, and xbbg-blpapi-sys
+      # runs bindgen against the real SDK headers, so the SDK must be present even
+      # for a dry run.
+      - name: Setup Bloomberg SDK
+        if: steps.version.outputs.publish == 'true'
+        id: sdk
+        uses: ./.github/actions/setup-blpapi-sdk
+        with:
+          version: ${{ steps.sdk-version.outputs.version }}
+          os: Linux
+
+      - name: Export Bloomberg SDK env
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        run: |
+          SDK_ROOT="$GITHUB_WORKSPACE/${{ steps.sdk.outputs.sdk-rel-root }}"
+          LIB_DIR="$GITHUB_WORKSPACE/${{ steps.sdk.outputs.lib-rel-dir }}"
+          {
+            echo "BLPAPI_ROOT=$SDK_ROOT"
+            echo "LIBRARY_PATH=$LIB_DIR:$LIBRARY_PATH"
+            echo "LD_LIBRARY_PATH=$LIB_DIR:$LD_LIBRARY_PATH"
+          } >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        if: steps.version.outputs.publish == 'true'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      # Every internal version lives in the root manifest: workspace.package.version
+      # plus the `version` field of each internal entry in workspace.dependencies.
+      # Stamping one file keeps them in lockstep. The script asserts it changed the
+      # expected number of anchors so a manifest reshuffle fails loudly instead of
+      # silently publishing mismatched versions.
+      - name: Stamp workspace version
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          STAMP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          version = os.environ["STAMP_VERSION"]
+          path = Path("Cargo.toml")
+          text = path.read_text(encoding="utf-8")
+
+          # 1. [workspace.package] version
+          new_text, pkg_hits = re.subn(
+              r'(?ms)(^\[workspace\.package\]\n(?:.*?\n)??version\s*=\s*)"[^"]+"',
+              rf'\1"{version}"',
+              text,
+              count=1,
+          )
+          if pkg_hits != 1:
+              sys.exit("could not stamp [workspace.package] version in Cargo.toml")
+
+          # 2. version field of every internal workspace.dependencies entry
+          internal = (
+              "blpapi-sys",
+              "xbbg_core",
+              "xbbg-arrow",
+              "xbbg-async",
+              "xbbg-ext",
+              "xbbg-log",
+              "xbbg-recipes",
+          )
+          dep_hits = 0
+          for name in internal:
+              pattern = rf'(?m)^({re.escape(name)}\s*=\s*\{{[^\n}}]*?version\s*=\s*)"[^"]+"'
+              new_text, n = re.subn(pattern, rf'\1"{version}"', new_text, count=1)
+              if n != 1:
+                  sys.exit(f"could not stamp workspace.dependencies version for {name}")
+              dep_hits += n
+
+          if dep_hits != len(internal):
+              sys.exit(f"stamped {dep_hits} internal deps, expected {len(internal)}")
+
+          path.write_text(new_text, encoding="utf-8")
+          print(f"Stamped {version}: 1 workspace.package + {dep_hits} internal deps")
+          PY
+
+          cargo generate-lockfile --offline || cargo generate-lockfile
+          echo "--- resolved workspace versions ---"
+          cargo metadata --no-deps --format-version 1 \
+            | python -c 'import json,sys; [print(f"{p[\"name\"]}\t{p[\"version\"]}\t{p.get(\"publish\")}") for p in json.load(sys.stdin)["packages"]]'
+
+      - name: Authenticate with crates.io trusted publishing
+        id: crates-auth
+        if: steps.version.outputs.publish == 'true' && inputs.dry-run != true
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish crates.io packages
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ "$DRY_RUN" != "true" ] && [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::error::crates.io trusted publishing returned no token. Each crate needs a Trusted Publisher for the workflow that GitHub reports in the OIDC workflow_ref claim: 'semantic_version.yml' when the release calls this workflow, or 'crates-publish.yml' for a manual dispatch. Register both, then retry."
+            exit 1
+          fi
+
+          crate_exists() {
+            curl -fsS -o /dev/null "https://crates.io/api/v1/crates/$1/$2"
+          }
+
+          wait_for_crate() {
+            local crate="$1" version="$2"
+            for _ in $(seq 1 30); do
+              if crate_exists "$crate" "$version"; then
+                echo "$crate $version is live in the index."
+                return 0
+              fi
+              sleep 10
+            done
+            echo "::error::$crate $version did not appear in the crates.io index in time."
+            return 1
+          }
+
+          internal_dependencies() {
+            case "$1" in
+              xbbg_core)    echo "xbbg-blpapi-sys" ;;
+              xbbg-async)   echo "xbbg_core xbbg-ext xbbg-log" ;;
+              xbbg-recipes) echo "xbbg-async xbbg-ext xbbg-log" ;;
+              *)            echo "" ;;
+            esac
+          }
+
+          missing_dependencies() {
+            local missing=""
+            for dep in $(internal_dependencies "$1"); do
+              crate_exists "$dep" "$VERSION" || missing="$missing $dep"
+            done
+            echo "$missing"
+          }
+
+          published=""
+          skipped=""
+
+          for crate in $CRATE_ORDER; do
+            if crate_exists "$crate" "$VERSION"; then
+              echo "::notice::$crate $VERSION already exists on crates.io; skipping."
+              skipped="$skipped $crate"
+              continue
+            fi
+
+            missing="$(missing_dependencies "$crate")"
+
+            # A dry run cannot verify a crate whose internal dependencies are not
+            # in the index yet: the packaged manifest resolves them from crates.io,
+            # not from the local path. Skip rather than fail spuriously.
+            if [ "$DRY_RUN" = "true" ] && [ -n "$missing" ]; then
+              echo "::notice::Skipping dry run for $crate: unpublished internal deps:$missing"
+              skipped="$skipped $crate"
+              continue
+            fi
+
+            echo "::group::cargo publish --dry-run -p $crate"
+            cargo publish -p "$crate" --dry-run --allow-dirty
+            echo "::endgroup::"
+
+            if [ "$DRY_RUN" = "true" ]; then
+              continue
+            fi
+
+            echo "::group::cargo publish -p $crate"
+            cargo publish -p "$crate" --allow-dirty --no-verify
+            echo "::endgroup::"
+            wait_for_crate "$crate" "$VERSION"
+            published="$published $crate"
+          done
+
+          {
+            echo "## crates.io publish"
+            echo ""
+            echo "- **Version**: \`$VERSION\`"
+            echo "- **Dry run**: \`$DRY_RUN\`"
+            echo "- **Published**:${published:- none}"
+            echo "- **Skipped**:${skipped:- none}"
+          } >> "$GITHUB_STEP_SUMMARY"

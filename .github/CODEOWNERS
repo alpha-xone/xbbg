@@ -1,32 +1,43 @@
 # CODEOWNERS file
-# This file defines code ownership for automatic PR review requests
+# Defines code ownership for automatic PR review requests.
 # See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Ownership is assigned to the @xbbg-org/maintainers team rather than to an
+# individual account, so review routing does not depend on one person and no
+# personal handle is published in the repository. A team must have at least write
+# access to the repository to be a valid code owner.
 
 # Global owners - all files default to these owners
-# Note: To use teams, the repository must be owned by an organization
-* @alpha-xone
+* @xbbg-org/maintainers
 
-# Core library code
-/xbbg/ @alpha-xone
-/xbbg/core/ @alpha-xone
-/xbbg/io/ @alpha-xone
-/xbbg/markets/ @alpha-xone
+# Rust workspace
+/crates/ @xbbg-org/maintainers
+/bindings/ @xbbg-org/maintainers
+/apps/ @xbbg-org/maintainers
 
-# Tests
-/xbbg/tests/ @alpha-xone
-/tests/ @alpha-xone
+# Python package
+/py-xbbg/ @xbbg-org/maintainers
 
-/README.md @alpha-xone
-/SECURITY.md @alpha-xone
+# JavaScript packages
+/js-xbbg/ @xbbg-org/maintainers
+/js-xbbg-langgraph/ @xbbg-org/maintainers
+
+# Service definitions and codegen
+/defs/ @xbbg-org/maintainers
+
+# Documentation and policy
+/README.md @xbbg-org/maintainers
+/SECURITY.md @xbbg-org/maintainers
+/CODE_OF_CONDUCT.md @xbbg-org/maintainers
+/RELEASE_PROCESS.md @xbbg-org/maintainers
 
 # GitHub workflows and configuration
-/.github/ @alpha-xone
+/.github/ @xbbg-org/maintainers
 
 # Build and project configuration
-/pyproject.toml @alpha-xone
-/MANIFEST.in @alpha-xone
-/uv.lock @alpha-xone
-
-# Examples
-/py-xbbg/examples/ @alpha-xone
-
+/Cargo.toml @xbbg-org/maintainers
+/Cargo.lock @xbbg-org/maintainers
+/pyproject.toml @xbbg-org/maintainers
+/MANIFEST.in @xbbg-org/maintainers
+/uv.lock @xbbg-org/maintainers
+/pixi.toml @xbbg-org/maintainers

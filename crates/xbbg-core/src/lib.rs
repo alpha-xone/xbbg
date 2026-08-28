@@ -8,6 +8,13 @@
 
 #![allow(clippy::result_large_err)]
 
+// src/ffi.rs re-exports the BLPAPI symbols unconditionally, so a build without
+// `live` has no `blpapi_sys` dependency to resolve them against. This guard
+// replaces the one that used to live in the removed `xbbg-sys` shim and turns
+// that configuration into one clear error instead of dozens of import failures.
+#[cfg(not(feature = "live"))]
+compile_error!("The 'live' feature must be enabled");
+
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }

@@ -26,7 +26,6 @@ recursive-include py-xbbg/src *.py *.pyi
 recursive-include crates/blpapi-sys *.rs *.toml
 recursive-include crates/xbbg-core *.rs *.toml
 recursive-include crates/xbbg-async *.rs *.toml
-recursive-include crates/xbbg-sys *.rs *.toml
 recursive-include crates/xbbg-ext *.rs *.toml
 recursive-include crates/xbbg-recipes *.rs *.toml
 recursive-include crates/xbbg-log *.rs *.toml
@@ -50,10 +49,6 @@ recursive-include defs *
 prune crates/xbbg-core/examples
 prune crates/xbbg-core/tests
 prune crates/xbbg-async/tests
-
-# Inactive language bindings / applications (not active Cargo workspace members)
-prune bindings/dotnet-xbbg
-prune apps/xbbg-cli
 
 # Dev/CI files
 prune .github

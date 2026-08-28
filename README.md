@@ -549,7 +549,7 @@ If you use xbbg in research or published work, please cite:
 
 ```bibtex
 @software{xbbg,
-  author = {{Alpha x1 and xbbg contributors}},
+  author = {{xbbg contributors}},
   title = {{xbbg}: Independent client for Bloomberg-connected data workflows},
   year = {2026},
   publisher = {GitHub},

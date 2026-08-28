@@ -18,6 +18,30 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=libclang.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
+
+    // docs.rs has no Bloomberg SDK and no network access, so header discovery and
+    // bindgen cannot run there and this crate cannot be documented on docs.rs.
+    //
+    // Emitting an empty stub here was tried and rejected: it makes THIS crate build
+    // green with an empty API page, while xbbg_core/src/ffi.rs re-exports ~150
+    // BLPAPI symbols unconditionally and still fails with 29 unresolved imports,
+    // taking xbbg-async and xbbg-recipes down with it. Fixing docs.rs properly
+    // requires committing a pregenerated binding surface, and the Bloomberg SDK
+    // license permits distributing copies but not "modifying, adapting", which
+    // makes redistributing bindgen-derived declarations a licensing decision rather
+    // than a build-script one.
+    //
+    // So fail, but fail legibly: the docs.rs log states the real reason instead of
+    // an opaque "SDK root does not exist" from the resolver below.
+    if env::var_os("DOCS_RS").is_some() {
+        panic!(
+            "blpapi-sys: cannot build on docs.rs. The BLPAPI C SDK is proprietary and \
+             is neither bundled nor downloadable in the docs.rs sandbox (no network), \
+             so bindgen cannot generate bindings. Documentation for this crate must be \
+             built locally with BLPAPI_ROOT set: `cargo doc -p xbbg-blpapi-sys`."
+        );
+    }
 
     // Resolve include and lib directories from environment (precedence order)
     let (include_dir, lib_dir) =

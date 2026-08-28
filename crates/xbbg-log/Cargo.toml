@@ -2,10 +2,16 @@
 name = "xbbg-log"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
 description = "Logging infrastructure for xbbg — zero-GIL atomic level filter with tracing"
-publish = false
+keywords = ["bloomberg", "logging", "tracing", "pyo3", "xbbg"]
+categories = ["development-tools::debugging"]
+publish = ["crates-io"]
+include = ["src/**/*.rs", "Cargo.toml", "README.md"]
 
 [dependencies]
 tracing = { workspace = true }

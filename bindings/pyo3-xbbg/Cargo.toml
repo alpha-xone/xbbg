@@ -2,9 +2,11 @@
 name = "pyo3-xbbg"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "PyO3 bindings for xbbg Bloomberg engine"
+publish = false
 
 [lib]
 name = "_core"
@@ -22,20 +24,19 @@ pyo3-async-runtimes = { workspace = true, features = ["tokio-runtime"] }
 pyo3-stub-gen = { workspace = true, features = ["infer_signature"], optional = true }
 pyo3-stub-gen-derive = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync"] }
-xbbg-log = { path = "../../crates/xbbg-log" }
+xbbg-log = { workspace = true }
 arrow-array = { workspace = true, features = ["ffi", "chrono-tz"] }
 arrow-schema = { workspace = true, features = ["ffi"] }
 chrono = { workspace = true, features = ["std"] }
 chrono-tz = { workspace = true }
 pyo3-arrow = { workspace = true }
-xbbg-arrow = { path = "../../crates/xbbg-arrow" }
+xbbg-arrow = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
-xbbg_core = { path = "../../crates/xbbg-core", default-features = false }
-xbbg-async = { path = "../../crates/xbbg-async", default-features = false }
-xbbg-ext = { path = "../../crates/xbbg-ext" }
-xbbg-recipes = { path = "../../crates/xbbg-recipes", default-features = false }
-
+xbbg_core = { workspace = true }
+xbbg-async = { workspace = true }
+xbbg-ext = { workspace = true }
+xbbg-recipes = { workspace = true }
 [features]
 default = ["live", "extension-module"]
 extension-module = ["pyo3/extension-module"]

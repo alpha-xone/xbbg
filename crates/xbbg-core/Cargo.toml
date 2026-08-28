@@ -1,21 +1,36 @@
 [package]
+# The registry name is `xbbg_core` with an underscore. crates.io normalizes `-`
+# and `_` to the same identity, so `xbbg-core` is not a separate name and cannot
+# be claimed while this one exists; renaming would mean deleting this crate and
+# waiting out the name-reuse block. The underscore therefore stays.
 name = "xbbg_core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Rust core for xbbg Python package (PyO3)"
+homepage.workspace = true
+readme = "README.md"
+description = "Safe Rust wrappers for BLPAPI session, request, and response primitives"
+keywords = ["blpapi", "bloomberg", "ffi", "market-data", "xbbg"]
+categories = ["api-bindings", "finance"]
+publish = ["crates-io"]
+include = ["src/**/*.rs", "Cargo.toml", "README.md"]
 
 [lib]
 name = "xbbg_core"
 
 [features]
 default = ["live"]
-live = ["xbbg-sys/live"]
+# `live` gates the FFI dependency. Every `pub use blpapi_sys::…` in src/ffi.rs is
+# unconditional, so a non-live build cannot compile; src/lib.rs raises an
+# explicit compile_error! so that failure is legible instead of surfacing as a
+# wall of unresolved imports.
+live = ["dep:blpapi-sys"]
 
 [dependencies]
 thiserror = { workspace = true }
-xbbg-sys = { path = "../xbbg-sys", default-features = false }
+blpapi-sys = { workspace = true, optional = true }
 rustc-hash = { workspace = true }  # Fast non-cryptographic hashing for Name cache
 
 # Benchmarks have been consolidated into crates/xbbg-bench.
