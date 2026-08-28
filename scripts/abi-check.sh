@@ -83,13 +83,19 @@ info "Extracting required symbols from ffi.rs ..."
 #
 # Strategy:
 #   1. Strip line comments (// ...) to avoid matching header filenames etc.
-#   2. Find Rust-side aliases (tokens after `as` keyword) to exclude.
-#   3. Extract all blpapi_*/BLPAPI_* tokens.
-#   4. Remove the aliases — they are Rust names, not C symbols.
+#   2. Strip the `blpapi_sys::` module qualifier. The sys crate's lib name itself
+#      matches the `blpapi_*` token pattern below, so leaving it in would report a
+#      phantom required symbol named `blpapi_sys` that no SDK header can provide.
+#      (This crate used to be imported as `xbbg_sys`, which the pattern missed.)
+#   3. Find Rust-side aliases (tokens after `as` keyword) to exclude.
+#   4. Extract all blpapi_*/BLPAPI_* tokens.
+#   5. Remove the aliases — they are Rust names, not C symbols.
 
 extract_required_symbols() {
     local stripped
-    stripped=$(sed 's|//.*||' "$FFI_RS")
+    # NB: literal `blpapi_sys::`, not `\bblpapi_sys::` — `\b` is not portable
+    # across the sed implementations this script runs under.
+    stripped=$(sed -e 's|//.*||' -e 's|blpapi_sys::||g' "$FFI_RS")
 
     # Find Rust-side aliases: the identifier after `as` in `X as Y`
     local aliases_file

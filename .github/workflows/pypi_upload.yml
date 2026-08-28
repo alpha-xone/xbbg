@@ -89,7 +89,7 @@ jobs:
       - name: Generate bindings artifact
         run: |
           mkdir -p "$GITHUB_WORKSPACE/ci-bindings"
-          BLPAPI_BINDINGS_EXPORT_PATH="$GITHUB_WORKSPACE/ci-bindings/bindings.rs" cargo build -p blpapi-sys
+          BLPAPI_BINDINGS_EXPORT_PATH="$GITHUB_WORKSPACE/ci-bindings/bindings.rs" cargo build -p xbbg-blpapi-sys
           test -s "$GITHUB_WORKSPACE/ci-bindings/bindings.rs"
 
       - name: Upload bindings artifact
