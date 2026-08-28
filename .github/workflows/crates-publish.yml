@@ -234,8 +234,16 @@ jobs:
             exit 1
           fi
 
+          # crates.io rejects requests with a curl-like User-Agent (HTTP 403), so
+          # every API call MUST send an identifying one. Without this, crate_exists
+          # always reported "missing": the index wait timed out after a successful
+          # upload, and the skip-if-already-published path never triggered, making
+          # retries fail instead of being idempotent.
+          CRATES_UA='xbbg-release-workflow (+https://github.com/xbbg-org/xbbg)'
+
           crate_exists() {
-            curl -fsS -o /dev/null "https://crates.io/api/v1/crates/$1/$2"
+            curl -fsS -o /dev/null -H "User-Agent: $CRATES_UA" \
+              "https://crates.io/api/v1/crates/$1/$2"
           }
 
           wait_for_crate() {
