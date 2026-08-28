@@ -187,16 +187,37 @@ dispatch still succeeds.
 For every entry use repository owner `xbbg-org`, repository `xbbg`, and leave the
 environment blank.
 
+**Status: all 12 entries are configured** (6 crates × 2 workflows) as of 1.4.7.
+No `CARGO_REGISTRY_TOKEN` secret exists and none is needed. Do not remove either
+entry for a crate — dropping `semantic_version.yml` silently breaks automatic
+releases while leaving manual dispatch working.
+
 #### First publish of a new crate name
 
 crates.io has no PyPI-style "pending publisher", so a Trusted Publisher cannot be
-attached to a crate that does not exist yet. For a brand-new name:
+attached to a crate that does not exist yet, and an OIDC token is rejected with
+`Trusted Publishing tokens do not support creating new crates`. When adding a
+brand-new crate to the published set:
 
-1. Publish once locally with a scoped API token: `cargo publish -p <crate>`
+1. Publish once with a temporary API token, scoped as tightly as possible
+   (`publish-new`, short expiry, crate pattern such as `xbbg-*`)
 2. Add both Trusted Publisher entries above in the crates.io UI
-3. Revoke the temporary token
+3. Revoke the temporary token immediately and confirm it returns 403
 
-Crates already on crates.io need only steps 2 and 3.
+This was done once for `xbbg-async` and `xbbg-recipes` at 1.4.7. Every existing
+crate publishes tokenlessly from CI.
+
+#### Retiring a published crate
+
+A crate can be **yanked** at any time, but **deletion is usually impossible**:
+crates.io refuses to delete a crate while *any* published version of another
+crate depends on it, and individual versions can never be deleted. `xbbg-sys` is
+permanently undeletable because `xbbg_core@1.1.2` depends on it, so it is yanked
+instead.
+
+Note that the `reverse_dependencies` API reports only edges from each crate's
+*latest* version, so it can show no dependents while the delete endpoint still
+returns 422. Yanking is the realistic retirement path.
 
 #### npm trusted publishing setup
 
