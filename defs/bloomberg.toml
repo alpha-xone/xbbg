@@ -3,8 +3,9 @@
 # Single source of truth for all Bloomberg API names.
 #
 # Run `python defs/codegen/generate.py` to regenerate:
-#   - crates/xbbg-async/src/services.rs   (Rust enums)
+#   - crates/xbbg-async/src/services.rs   (Rust enums + defs contract tests)
 #   - py-xbbg/src/xbbg/_services_gen.py   (Python enums)
+#   - js-xbbg/src/_defs_gen.ts            (TypeScript unions + value docs)
 #
 # Adding a new service or operation:
 #   1. Add the entry below
@@ -250,14 +251,17 @@ doc = "Long format with all values as strings (default, backwards-compatible)."
 
 [formats.LONG_TYPED]
 value = "long_typed"
+aliases = ["typed"]
 doc = "Long format with typed value columns."
 
 [formats.LONG_WITH_METADATA]
 value = "long_metadata"
+aliases = ["metadata", "with_metadata"]
 doc = "Long format with string values and dtype metadata column."
 
 [formats.SEMI_LONG]
 value = "semi_long"
+aliases = ["wide"]
 doc = "Semi-long format with one row per ticker/timestamp and fields as columns."
 
 
@@ -275,3 +279,99 @@ doc = "Convert to Arrow RecordBatch using appropriate extractor."
 [output_modes.JSON]
 value = "json"
 doc = "Return raw JSON as a single-column Arrow table."
+
+
+# ============================================================================
+# Overflow Policies
+# ============================================================================
+# What a subscription does when the consumer cannot keep up with Bloomberg.
+#
+# `value` is the canonical spelling advertised to callers. `aliases` are extra
+# spellings the parser accepts but which are deliberately not advertised.
+# Parsing is ASCII-case-insensitive.
+#
+# Authority: `OverflowPolicy` in crates/xbbg-async/src/engine/mod.rs; the
+# behaviour described below is `SubscriptionState::send_update` in
+# crates/xbbg-async/src/engine/state/subscription.rs.
+
+[overflow_policies.DROP_NEWEST]
+rust_name = "DropNewest"
+value = "drop_newest"
+aliases = ["dropnewest"]
+default = true
+doc = "Drop the newest update as soon as the buffer is full; never stalls Bloomberg's callback thread."
+
+[overflow_policies.BLOCK]
+rust_name = "Block"
+value = "block"
+doc = "Retry within a short bounded window on Bloomberg's callback thread, then flag a slow consumer and drop the update."
+
+
+# ============================================================================
+# Validation Modes
+# ============================================================================
+# How aggressively field names are validated before a request is sent.
+#
+# Authority: `ValidationMode` in crates/xbbg-async/src/engine/mod.rs.
+
+[validation_modes.DISABLED]
+rust_name = "Disabled"
+value = "disabled"
+aliases = ["off", "none"]
+default = true
+doc = "No field validation (default)."
+
+[validation_modes.STRICT]
+rust_name = "Strict"
+value = "strict"
+doc = "Reject the request when any field is unknown."
+
+[validation_modes.LENIENT]
+rust_name = "Lenient"
+value = "lenient"
+doc = "Drop unknown fields and send the remaining ones."
+
+
+# ============================================================================
+# SDK Log Levels
+# ============================================================================
+# Verbosity of the Bloomberg C SDK's own logging.
+#
+# Authority: `SdkLogLevel` in crates/xbbg-async/src/sdk_logging.rs.
+
+[sdk_log_levels.OFF]
+rust_name = "Off"
+value = "off"
+default = true
+doc = "Disable SDK logging (default)."
+
+[sdk_log_levels.FATAL]
+rust_name = "Fatal"
+value = "fatal"
+doc = "Fatal errors only."
+
+[sdk_log_levels.ERROR]
+rust_name = "Error"
+value = "error"
+doc = "Errors and above."
+
+[sdk_log_levels.WARN]
+rust_name = "Warn"
+value = "warn"
+aliases = ["warning"]
+doc = "Warnings and above."
+
+[sdk_log_levels.INFO]
+rust_name = "Info"
+value = "info"
+doc = "Informational messages and above."
+
+[sdk_log_levels.DEBUG]
+rust_name = "Debug"
+value = "debug"
+doc = "Debug messages and above."
+
+[sdk_log_levels.TRACE]
+rust_name = "Trace"
+value = "trace"
+doc = "Most verbose SDK logging."

@@ -724,3 +724,153 @@ mod tests {
         assert_eq!(back, OutputMode::Json);
     }
 }
+
+#[cfg(test)]
+mod defs_contract {
+    //! @generated - binds the hand-written parsers to the spellings
+    //! declared in defs/bloomberg.toml, in both directions.
+
+    use std::str::FromStr;
+
+    #[test]
+    fn overflow_policy_accepts_every_defs_spelling() {
+        for spelling in ["block", "drop_newest", "dropnewest"] {
+            assert!(
+                crate::engine::OverflowPolicy::from_str(spelling).is_ok(),
+                "defs/bloomberg.toml declares {spelling} but the parser rejects it"
+            );
+        }
+    }
+
+    #[test]
+    fn overflow_policy_defs_covers_every_variant() {
+        // Non-exhaustive matches do not compile, so adding a variant to the
+        // enum without declaring it in defs breaks the build instead of
+        // silently leaving it out of every advertised value set.
+        fn canonical(value: crate::engine::OverflowPolicy) -> &'static str {
+            match value {
+                crate::engine::OverflowPolicy::Block => "block",
+                crate::engine::OverflowPolicy::DropNewest => "drop_newest",
+            }
+        }
+        for spelling in ["block", "drop_newest"] {
+            assert_eq!(
+                canonical(crate::engine::OverflowPolicy::from_str(spelling).unwrap()),
+                spelling,
+                "defs maps this spelling to a different variant than the parser does"
+            );
+        }
+    }
+
+    #[test]
+    fn overflow_policy_display_matches_defs() {
+        for canonical in ["block", "drop_newest"] {
+            assert_eq!(
+                crate::engine::OverflowPolicy::from_str(canonical)
+                    .unwrap()
+                    .to_string(),
+                canonical,
+                "the canonical defs value must be the value the engine emits"
+            );
+        }
+    }
+
+    #[test]
+    fn overflow_policy_default_matches_defs() {
+        assert_eq!(
+            crate::engine::OverflowPolicy::from_str("drop_newest").unwrap(),
+            crate::engine::OverflowPolicy::default(),
+            "defs marks a different member as default than the parser does"
+        );
+    }
+
+    #[test]
+    fn validation_mode_accepts_every_defs_spelling() {
+        for spelling in ["disabled", "off", "none", "lenient", "strict"] {
+            assert!(
+                crate::engine::ValidationMode::from_str(spelling).is_ok(),
+                "defs/bloomberg.toml declares {spelling} but the parser rejects it"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_mode_defs_covers_every_variant() {
+        // Non-exhaustive matches do not compile, so adding a variant to the
+        // enum without declaring it in defs breaks the build instead of
+        // silently leaving it out of every advertised value set.
+        fn canonical(value: crate::engine::ValidationMode) -> &'static str {
+            match value {
+                crate::engine::ValidationMode::Disabled => "disabled",
+                crate::engine::ValidationMode::Lenient => "lenient",
+                crate::engine::ValidationMode::Strict => "strict",
+            }
+        }
+        for spelling in ["disabled", "lenient", "strict"] {
+            assert_eq!(
+                canonical(crate::engine::ValidationMode::from_str(spelling).unwrap()),
+                spelling,
+                "defs maps this spelling to a different variant than the parser does"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_mode_display_matches_defs() {
+        for canonical in ["disabled", "lenient", "strict"] {
+            assert_eq!(
+                crate::engine::ValidationMode::from_str(canonical)
+                    .unwrap()
+                    .to_string(),
+                canonical,
+                "the canonical defs value must be the value the engine emits"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_mode_default_matches_defs() {
+        assert_eq!(
+            crate::engine::ValidationMode::from_str("disabled").unwrap(),
+            crate::engine::ValidationMode::default(),
+            "defs marks a different member as default than the parser does"
+        );
+    }
+
+    #[test]
+    fn sdk_log_level_accepts_every_defs_spelling() {
+        for spelling in [
+            "debug", "error", "fatal", "info", "off", "trace", "warn", "warning",
+        ] {
+            assert!(
+                crate::sdk_logging::SdkLogLevel::from_str(spelling).is_ok(),
+                "defs/bloomberg.toml declares {spelling} but the parser rejects it"
+            );
+        }
+    }
+
+    #[test]
+    fn sdk_log_level_defs_covers_every_variant() {
+        // Non-exhaustive matches do not compile, so adding a variant to the
+        // enum without declaring it in defs breaks the build instead of
+        // silently leaving it out of every advertised value set.
+        fn canonical(value: crate::sdk_logging::SdkLogLevel) -> &'static str {
+            match value {
+                crate::sdk_logging::SdkLogLevel::Debug => "debug",
+                crate::sdk_logging::SdkLogLevel::Error => "error",
+                crate::sdk_logging::SdkLogLevel::Fatal => "fatal",
+                crate::sdk_logging::SdkLogLevel::Info => "info",
+                crate::sdk_logging::SdkLogLevel::Off => "off",
+                crate::sdk_logging::SdkLogLevel::Trace => "trace",
+                crate::sdk_logging::SdkLogLevel::Warn => "warn",
+            }
+        }
+        for spelling in ["debug", "error", "fatal", "info", "off", "trace", "warn"] {
+            assert_eq!(
+                canonical(crate::sdk_logging::SdkLogLevel::from_str(spelling).unwrap()),
+                spelling,
+                "defs maps this spelling to a different variant than the parser does"
+            );
+        }
+    }
+}

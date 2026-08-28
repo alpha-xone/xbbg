@@ -146,3 +146,52 @@ class OutputMode(str, Enum):
 
     JSON = "json"
     """Return raw JSON as a single-column Arrow table."""
+
+
+FORMATS: tuple[str, ...] = ("long", "long_typed", "long_metadata", "semi_long")
+"""Output format for reference and historical data."""
+
+FORMAT_ALIASES: tuple[str, ...] = ("typed", "metadata", "with_metadata", "wide")
+"""Extra spellings FORMATS also accepts but which are not advertised."""
+
+FORMAT_DEFAULT = "long"
+"""Value used when the caller omits it."""
+
+FORMAT_VALUES = "long, long_typed, long_metadata, semi_long"
+"""Canonical FORMATS as a list for error messages and docstrings."""
+
+OVERFLOW_POLICIES: tuple[str, ...] = ("block", "drop_newest")
+"""Subscription behaviour when a consumer cannot keep up with Bloomberg."""
+
+OVERFLOW_POLICY_ALIASES: tuple[str, ...] = ("dropnewest",)
+"""Extra spellings OVERFLOW_POLICIES also accepts but which are not advertised."""
+
+OVERFLOW_POLICY_DEFAULT = "drop_newest"
+"""Value used when the caller omits it."""
+
+OVERFLOW_POLICY_VALUES = "block, drop_newest"
+"""Canonical OVERFLOW_POLICIES as a list for error messages and docstrings."""
+
+VALIDATION_MODES: tuple[str, ...] = ("disabled", "lenient", "strict")
+"""Field validation applied before a request is sent."""
+
+VALIDATION_MODE_ALIASES: tuple[str, ...] = ("off", "none")
+"""Extra spellings VALIDATION_MODES also accepts but which are not advertised."""
+
+VALIDATION_MODE_DEFAULT = "disabled"
+"""Value used when the caller omits it."""
+
+VALIDATION_MODE_VALUES = "disabled, lenient, strict"
+"""Canonical VALIDATION_MODES as a list for error messages and docstrings."""
+
+SDK_LOG_LEVELS: tuple[str, ...] = ("debug", "error", "fatal", "info", "off", "trace", "warn")
+"""Verbosity of the Bloomberg C SDK's own logging."""
+
+SDK_LOG_LEVEL_ALIASES: tuple[str, ...] = ("warning",)
+"""Extra spellings SDK_LOG_LEVELS also accepts but which are not advertised."""
+
+SDK_LOG_LEVEL_DEFAULT = "off"
+"""Value used when the caller omits it."""
+
+SDK_LOG_LEVEL_VALUES = "debug, error, fatal, info, off, trace, warn"
+"""Canonical SDK_LOG_LEVELS as a list for error messages and docstrings."""
