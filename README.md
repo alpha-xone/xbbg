@@ -23,7 +23,7 @@
 ---
 
 <!-- xbbg:latest-release-start -->
-Latest release: xbbg==1.4.9 (release: [notes](https://github.com/xbbg-org/xbbg/releases/tag/v1.4.9))
+Latest release: xbbg==1.4.10 (release: [notes](https://github.com/xbbg-org/xbbg/releases/tag/v1.4.10))
 <!-- xbbg:latest-release-end -->
 
 > This `main` branch is the Rust-powered v1 release. For the legacy pure-Python line, use [`release/0.x`](https://github.com/xbbg-org/xbbg/tree/release/0.x).
