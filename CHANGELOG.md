@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [1.4.8] - 2026-09-01
+
 ### Added
 
 - **Closed value sets now declared in `defs/bloomberg.toml`**: Overflow policies, validation modes, and SDK log levels are now centralized in the configuration file as the single source of truth. `defs/codegen/generate.py` generates a TypeScript vocabulary (`_defs_gen.ts`) for both JavaScript packages and Rust contract tests that fail if a hand-written parser stops accepting a declared spelling.
@@ -1580,7 +1582,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ---
 
-[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.7...HEAD
+[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.8...HEAD
+[1.4.8]: https://github.com/xbbg-org/xbbg/compare/v1.4.7...v1.4.8
 [1.4.7]: https://github.com/xbbg-org/xbbg/compare/v1.4.6...v1.4.7
 [1.4.6]: https://github.com/xbbg-org/xbbg/compare/v1.4.5...v1.4.6
 [1.4.5]: https://github.com/xbbg-org/xbbg/compare/v1.4.4...v1.4.5
