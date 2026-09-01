@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [1.4.9] - 2026-09-01
+
 ### Fixed
 
 - **`xbbg-mcp` no longer stops silently when stdin misbehaves, and the Windows MCPB launcher stays out of the byte stream (#348).** On one Windows host the v1.4.6 server answered `initialize` and exited a moment later with status 0 and nothing on stderr: `tokio::io::stdin()` reports any zero-byte read as end-of-input and turns read errors into a bare "connection closed", and no log subscriber was installed, so nothing recorded why. The server now reads stdin on its own thread -- a zero-byte read on a pipe whose writer is still connected (`PeekNamedPipe`) is retried instead of ending the session, a failed read is reported on stderr, and the process states why it stops (`xbbg-mcp: stdin closed; shutting down`, or the abnormal quit reason). It also installs the workspace stderr logger, so `RUST_LOG` works and `rmcp`/engine warnings reach the host's server log. The Windows launcher (`xbbg-mcp.ps1`) ran `xbbg-mcp.exe` as a PowerShell native command, which lets Windows PowerShell 5.1 sit between the MCP host and the server -- re-encoding stdout through the console code page and, under the script's `$ErrorActionPreference = "Stop"`, terminating the child on its first stderr line. It now starts the binary with inherited standard handles and propagates its exit status, the Windows equivalent of the POSIX launcher's `exec`. The reported machine state did not reproduce on Windows 11 through Claude Desktop's own client library, a Node parent, a console, or a bare pipe, with either the shipped v1.4.6 binary or this build; the fix therefore closes every path by which stdin could end the process without a message rather than a single guessed cause.
@@ -1589,7 +1591,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ---
 
-[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.8...HEAD
+[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.9...HEAD
+[1.4.9]: https://github.com/xbbg-org/xbbg/compare/v1.4.8...v1.4.9
 [1.4.8]: https://github.com/xbbg-org/xbbg/compare/v1.4.7...v1.4.8
 [1.4.7]: https://github.com/xbbg-org/xbbg/compare/v1.4.6...v1.4.7
 [1.4.6]: https://github.com/xbbg-org/xbbg/compare/v1.4.5...v1.4.6
