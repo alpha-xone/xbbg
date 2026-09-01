@@ -471,7 +471,7 @@ jobs:
   # ════════════════════════════════════════════════════════════════════════════
   mcpb-bundle:
     name: Build xbbg-mcp MCPB bundle
-    needs: [mcp-binary]
+    needs: [sdk-version, mcp-binary]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -524,6 +524,7 @@ jobs:
             --darwin-arm64-bin "$DARWIN_BIN" \
             --linux-amd64-bin "$LINUX_BIN" \
             --windows-amd64-bin "$WINDOWS_BIN" \
+            --blpapi-sdk-version "${{ needs.sdk-version.outputs.version }}" \
             --output-dir "$RUNNER_TEMP/mcpb"
           npx -y @anthropic-ai/mcpb validate "$RUNNER_TEMP/mcpb/xbbg-mcp-mcpb/manifest.json"
           npx -y @anthropic-ai/mcpb pack "$RUNNER_TEMP/mcpb/xbbg-mcp-mcpb" "$DIST_DIR/xbbg-mcp-v${VERSION}.mcpb"

@@ -28,7 +28,7 @@ Version: {version}
 
 This MCPB bundles the xbbg MCP launchers and prebuilt xbbg MCP binaries for macOS arm64, Linux amd64, and Windows amd64. It does not bundle Bloomberg SDK files, Bloomberg runtime libraries, Bloomberg credentials, or market data. You must provide Bloomberg runtime access locally through your own Bloomberg agreements and entitlements.
 
-The macOS/Linux launcher searches for Bloomberg runtime libraries through `XBBG_MCP_LIB_DIR`, `BLPAPI_LIB_DIR`, `BLPAPI_ROOT`, a vendored authorized SDK layout, or the official Python `blpapi` package. The Windows launcher uses the same precedence and prepends the resolved directory to `PATH` before launching `xbbg-mcp.exe`.
+The macOS/Linux launcher searches for Bloomberg runtime libraries through `XBBG_MCP_LIB_DIR`, `BLPAPI_LIB_DIR`, `BLPAPI_ROOT`, a vendored authorized SDK layout, or the official Python `blpapi` package. The Windows launcher uses the same precedence, also scans `PATH` (where a Bloomberg Terminal install places `C:\\blp\\DAPI`), skips any `blpapi3_64.dll` older than the Bloomberg API version this build was linked against, and prepends the resolved directory to `PATH` before launching `xbbg-mcp.exe`.
 
 Documentation: https://github.com/xbbg-org/xbbg/tree/main/apps/xbbg-mcp
 Privacy policy: https://github.com/xbbg-org/xbbg/tree/main/apps/xbbg-mcp#privacy-policy
@@ -60,76 +60,150 @@ POSIX_FIND_REAL_BINARY = f'''find_real_binary() {{
     return 0
 }}'''
 
-WINDOWS_LAUNCHER = rf'''$ErrorActionPreference = "Stop"
+# Windows has no exec(2). The launcher therefore starts xbbg-mcp.exe with inherited standard
+# handles and waits: the MCP byte stream never passes through PowerShell. Running the binary as
+# a PowerShell native command (`& $exe`) would let Windows PowerShell 5.1 sit between the host
+# and the server -- re-encoding stdout through the console code page and, under
+# $ErrorActionPreference = "Stop", terminating the child on its first stderr line.
+WINDOWS_LAUNCHER_TEMPLATE = r"""$ErrorActionPreference = "Stop"
 
-function Warn($message) {{
+# Bloomberg API version the bundled xbbg-mcp.exe was linked against. An older blpapi3_64.dll
+# lacks entry points the binary imports, and the loader then kills the process before main()
+# with STATUS_ENTRYPOINT_NOT_FOUND and no message.
+$requiredBlpapiVersion = @REQUIRED_BLPAPI_VERSION@
+$dllName = "blpapi3_64.dll"
+$rejectedCandidates = New-Object System.Collections.Generic.List[string]
+
+function Warn($message) {
     [Console]::Error.WriteLine("xbbg-mcp: $message")
-}}
+}
 
-function Die($message) {{
+function Die($message) {
     Warn $message
     exit 1
-}}
+}
 
-function Contains-BlpapiLib($dir) {{
-    if (-not $dir) {{
-        return $false
-    }}
-    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {{
-        return $false
-    }}
-
-    foreach ($name in @("blpapi3_64.dll", "blpapi3_32.dll")) {{
-        if (Test-Path -LiteralPath (Join-Path $dir $name) -PathType Leaf) {{
-            return $true
-        }}
-    }}
-
-    return $false
-}}
-
-function Resolve-SdkRootLayout($root) {{
-    if (-not $root) {{
+function Get-BlpapiDll($dir) {
+    if (-not $dir) {
         return $null
-    }}
-    if (-not (Test-Path -LiteralPath $root -PathType Container)) {{
+    }
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
         return $null
-    }}
+    }
+    $dll = Join-Path $dir $dllName
+    if (Test-Path -LiteralPath $dll -PathType Leaf) {
+        return $dll
+    }
+    return $null
+}
+
+function Get-DllVersion($dll) {
+    try {
+        $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dll)
+    } catch {
+        return $null
+    }
+    if (($info.FileMajorPart + $info.FileMinorPart + $info.FileBuildPart + $info.FilePrivatePart) -eq 0) {
+        return $null
+    }
+    return New-Object System.Version($info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart)
+}
+
+# Returns the directory when it holds a usable 64-bit runtime, otherwise $null. A runtime that
+# is present but too old is recorded so the final error can name it.
+function Select-LibDir($dir, $source) {
+    $dll = Get-BlpapiDll $dir
+    if (-not $dll) {
+        return $null
+    }
+    if ($requiredBlpapiVersion) {
+        $version = Get-DllVersion $dll
+        if ($version -and $version -lt $requiredBlpapiVersion) {
+            $rejectedCandidates.Add("$dll is Bloomberg API $version, older than the $requiredBlpapiVersion this build needs ($source)")
+            return $null
+        }
+    }
+    return $dir
+}
+
+function Select-ExplicitLibDir($dir, $name) {
+    if (-not $dir) {
+        return $null
+    }
+    if (-not (Get-BlpapiDll $dir)) {
+        Warn "$name=$dir does not contain $dllName; searching elsewhere"
+        return $null
+    }
+    $selected = Select-LibDir $dir $name
+    if (-not $selected) {
+        # Already reported here; keep the final summary for candidates rejected silently.
+        $last = $rejectedCandidates.Count - 1
+        Warn ($rejectedCandidates[$last] + "; searching elsewhere")
+        $rejectedCandidates.RemoveAt($last)
+    }
+    return $selected
+}
+
+function Resolve-SdkRootLayout($root, $source) {
+    if (-not $root) {
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        return $null
+    }
 
     foreach ($candidate in @(
         $root,
         (Join-Path $root "bin"),
         (Join-Path $root "lib"),
         (Join-Path $root "lib64")
-    )) {{
-        if (Contains-BlpapiLib $candidate) {{
-            return $candidate
-        }}
-    }}
+    )) {
+        $selected = Select-LibDir $candidate $source
+        if ($selected) {
+            return $selected
+        }
+    }
 
     $versionChildren = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
-        Where-Object {{ $_.Name -match '^\d+\.\d+\.\d+(\.\d+)?$' }} |
-        Sort-Object -Descending -Property @{{ Expression = {{
-            (($_.Name -split '\\.') | ForEach-Object {{ "{{0:D8}}" -f [int]$_ }}) -join '.'
-        }} }}
+        Where-Object { $_.Name -match '^\d+\.\d+\.\d+(\.\d+)?$' } |
+        Sort-Object -Descending -Property @{ Expression = {
+            (($_.Name -split '\.') | ForEach-Object { "{0:D8}" -f [int]$_ }) -join '.'
+        } }
 
-    foreach ($child in $versionChildren) {{
+    foreach ($child in $versionChildren) {
         foreach ($candidate in @(
             $child.FullName,
             (Join-Path $child.FullName "bin"),
             (Join-Path $child.FullName "lib"),
             (Join-Path $child.FullName "lib64")
-        )) {{
-            if (Contains-BlpapiLib $candidate) {{
-                return $candidate
-            }}
-        }}
-    }}
+        )) {
+            $selected = Select-LibDir $candidate $source
+            if ($selected) {
+                return $selected
+            }
+        }
+    }
 
     return $null
-}}
+}
 
-function Find-PythonBlpapiDir() {{
+# Windows convention: a Terminal install puts C:\blp\DAPI on PATH. Its DLL may be older than
+# the one this build needs, so PATH entries go through the same version gate as everything else.
+function Find-PathLibDir() {
+    foreach ($entry in ($env:PATH -split ';')) {
+        $dir = $entry.Trim().Trim('"')
+        if (-not $dir) {
+            continue
+        }
+        $selected = Select-LibDir $dir "PATH"
+        if ($selected) {
+            return $selected
+        }
+    }
+    return $null
+}
+
+function Find-PythonBlpapiDir() {
     $pythonScript = @'
 from pathlib import Path
 
@@ -144,81 +218,135 @@ if not module_path:
 
 path = Path(module_path).resolve().parent
 for candidate in (path, path / "lib"):
-    if any((candidate / name).is_file() for name in ("blpapi3_64.dll", "blpapi3_32.dll")):
+    if (candidate / "blpapi3_64.dll").is_file():
         print(candidate)
         raise SystemExit(0)
 
 raise SystemExit(1)
 '@
 
-    foreach ($python in @("py", "python", "python3")) {{
-        if (-not (Get-Command $python -ErrorAction SilentlyContinue)) {{
+    foreach ($python in @("py", "python", "python3")) {
+        if (-not (Get-Command $python -ErrorAction SilentlyContinue)) {
             continue
-        }}
+        }
 
         $output = & $python -c $pythonScript 2>$null
-        if ($LASTEXITCODE -eq 0 -and $output) {{
-            return ($output | Select-Object -First 1)
-        }}
-    }}
+        if ($LASTEXITCODE -eq 0 -and $output) {
+            $dir = ($output | Select-Object -First 1)
+            $selected = Select-LibDir $dir "Python blpapi package"
+            if ($selected) {
+                return $selected
+            }
+        }
+    }
 
     return $null
-}}
+}
 
-function Find-VendoredSdkDir($baseDir) {{
+function Find-VendoredSdkDir($baseDir) {
     $vendorRoot = Join-Path $baseDir "vendor\blpapi-sdk"
-    return Resolve-SdkRootLayout $vendorRoot
-}}
+    return Resolve-SdkRootLayout $vendorRoot "vendored SDK"
+}
 
-function Find-RuntimeLibDir() {{
-    if ($env:XBBG_MCP_LIB_DIR -and (Contains-BlpapiLib $env:XBBG_MCP_LIB_DIR)) {{
-        return $env:XBBG_MCP_LIB_DIR
-    }}
+function Find-RuntimeLibDir() {
+    $libDir = Select-ExplicitLibDir $env:XBBG_MCP_LIB_DIR "XBBG_MCP_LIB_DIR"
+    if ($libDir) {
+        return $libDir
+    }
 
-    if ($env:BLPAPI_LIB_DIR -and (Contains-BlpapiLib $env:BLPAPI_LIB_DIR)) {{
-        return $env:BLPAPI_LIB_DIR
-    }}
+    $libDir = Select-ExplicitLibDir $env:BLPAPI_LIB_DIR "BLPAPI_LIB_DIR"
+    if ($libDir) {
+        return $libDir
+    }
 
-    if ($env:BLPAPI_ROOT) {{
-        $libDir = Resolve-SdkRootLayout $env:BLPAPI_ROOT
-        if ($libDir) {{
+    if ($env:BLPAPI_ROOT) {
+        $libDir = Resolve-SdkRootLayout $env:BLPAPI_ROOT "BLPAPI_ROOT"
+        if ($libDir) {
             return $libDir
-        }}
-    }}
+        }
+    }
 
     $mcpbRoot = Join-Path $PSScriptRoot ".."
     $libDir = Find-VendoredSdkDir $mcpbRoot
-    if ($libDir) {{
+    if ($libDir) {
         return $libDir
-    }}
+    }
+
+    $libDir = Find-PathLibDir
+    if ($libDir) {
+        return $libDir
+    }
 
     $libDir = Find-PythonBlpapiDir
-    if ($libDir) {{
+    if ($libDir) {
         return $libDir
-    }}
+    }
 
     return $null
-}}
+}
 
-$architectures = @($env:PROCESSOR_ARCHITECTURE, $env:PROCESSOR_ARCHITEW6432) | Where-Object {{ $_ }}
-if (-not ($architectures -contains "AMD64")) {{
-    Die "{UNSUPPORTED_PLATFORM_MESSAGE}"
-}}
+# Quote one argument the way the Microsoft C runtime parses argv (CommandLineToArgvW rules).
+function Format-Argument($arg) {
+    if ($arg -eq "") {
+        return '""'
+    }
+    if ($arg -notmatch '[\s"]') {
+        return $arg
+    }
+    $escaped = $arg -replace '(\\*)"', '$1$1\"'
+    $escaped = $escaped -replace '(\\+)$', '$1$1'
+    return '"' + $escaped + '"'
+}
+
+$architectures = @($env:PROCESSOR_ARCHITECTURE, $env:PROCESSOR_ARCHITEW6432) | Where-Object { $_ }
+if (-not ($architectures -contains "AMD64")) {
+    Die "@UNSUPPORTED_PLATFORM_MESSAGE@"
+}
 
 $realBin = Join-Path $PSScriptRoot "bin\windows-amd64\xbbg-mcp.exe"
-if (-not (Test-Path -LiteralPath $realBin -PathType Leaf)) {{
-    Die "{MISSING_REAL_BINARY_MESSAGE}"
-}}
+if (-not (Test-Path -LiteralPath $realBin -PathType Leaf)) {
+    Die "@MISSING_REAL_BINARY_MESSAGE@"
+}
 
 $libDir = Find-RuntimeLibDir
-if (-not $libDir) {{
-    Die "{MISSING_RUNTIME_MESSAGE}"
-}}
+if (-not $libDir) {
+    foreach ($rejected in $rejectedCandidates) {
+        Warn $rejected
+    }
+    Die "@MISSING_RUNTIME_MESSAGE@"
+}
 
 $env:PATH = "$libDir;$env:PATH"
-& $realBin @args
-exit $LASTEXITCODE
-'''
+
+$startInfo = New-Object System.Diagnostics.ProcessStartInfo
+$startInfo.FileName = $realBin
+$startInfo.Arguments = (@($args | ForEach-Object { Format-Argument $_ }) -join ' ')
+$startInfo.UseShellExecute = $false
+# No redirection: the child inherits this process's stdin, stdout, and stderr handles, so the
+# MCP host talks to xbbg-mcp.exe directly and PowerShell never touches the byte stream.
+$process = [System.Diagnostics.Process]::Start($startInfo)
+$process.WaitForExit()
+$exitCode = $process.ExitCode
+
+# The loader reports an unusable runtime by exit status alone; translate the common ones.
+$dllVersion = Get-DllVersion (Join-Path $libDir $dllName)
+switch ($exitCode) {
+    -1073741515 { Warn "xbbg-mcp.exe exited with STATUS_DLL_NOT_FOUND: a DLL it depends on was not found. Runtime directory: $libDir" }
+    -1073741511 { Warn "xbbg-mcp.exe exited with STATUS_ENTRYPOINT_NOT_FOUND: $libDir\$dllName (Bloomberg API $dllVersion) lacks entry points this build needs; install a newer Bloomberg API runtime or point XBBG_MCP_LIB_DIR at one" }
+    -1073741701 { Warn "xbbg-mcp.exe exited with STATUS_INVALID_IMAGE_FORMAT: $libDir\$dllName is not a 64-bit library" }
+}
+exit $exitCode
+"""
+
+
+def render_windows_launcher(required_blpapi_version: str | None) -> str:
+    version_literal = f'[Version]"{required_blpapi_version}"' if required_blpapi_version else "$null"
+    return (
+        WINDOWS_LAUNCHER_TEMPLATE.replace("@REQUIRED_BLPAPI_VERSION@", version_literal)
+        .replace("@UNSUPPORTED_PLATFORM_MESSAGE@", UNSUPPORTED_PLATFORM_MESSAGE)
+        .replace("@MISSING_REAL_BINARY_MESSAGE@", MISSING_REAL_BINARY_MESSAGE)
+        .replace("@MISSING_RUNTIME_MESSAGE@", MISSING_RUNTIME_MESSAGE)
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -228,6 +356,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--linux-amd64-bin", required=True, type=Path)
     parser.add_argument("--windows-amd64-bin", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument(
+        "--blpapi-sdk-version",
+        default=None,
+        help="Bloomberg API version the binaries were linked against; the Windows launcher rejects older runtimes",
+    )
     return parser.parse_args()
 
 
@@ -306,6 +439,7 @@ def build_manifest(version: str) -> dict[str, object]:
             {"name": "bql", "description": "Bloomberg Query Language request."},
             {"name": "bsrch", "description": "Bloomberg search request."},
             {"name": "bflds", "description": "Bloomberg field metadata lookup."},
+            {"name": "check_entitlements", "description": "Bloomberg entitlement-ID check for a service."},
             {"name": "request", "description": "Generic Bloomberg request."},
         ],
         "tools_generated": True,
@@ -322,8 +456,8 @@ def build_manifest(version: str) -> dict[str, object]:
                 "title": "Bloomberg runtime library directory",
                 "description": (
                     "Optional directory containing libblpapi3.dylib, libblpapi3.so, libblpapi3_64.so, "
-                    "blpapi3_64.dll, or blpapi3_32.dll. Leave empty to let the launcher try BLPAPI_ROOT, "
-                    "a vendored authorized SDK layout, or Python blpapi."
+                    "or blpapi3_64.dll. Leave empty to let the launcher try BLPAPI_ROOT, a vendored "
+                    "authorized SDK layout, PATH (Windows), or Python blpapi."
                 ),
                 "required": False,
             },
@@ -422,7 +556,7 @@ def stage_bundle(args: argparse.Namespace) -> Path:
     posix_launcher = server_dir / "xbbg-mcp"
     posix_launcher.write_text(render_posix_launcher(repo_root), encoding="utf-8")
     powershell_launcher = server_dir / "xbbg-mcp.ps1"
-    powershell_launcher.write_text(WINDOWS_LAUNCHER, encoding="utf-8")
+    powershell_launcher.write_text(render_windows_launcher(args.blpapi_sdk_version), encoding="utf-8")
 
     shutil.copyfile(darwin_bin, darwin_dir / "xbbg-mcp-real")
     shutil.copyfile(linux_bin, linux_dir / "xbbg-mcp-real")

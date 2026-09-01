@@ -175,7 +175,17 @@ def main() -> int:
         tool_names = [tool["name"] for tool in tools_result.get("tools", [])]
         print(json.dumps(tool_names, indent=2))
 
-        expected_tools = {"bdp", "bdh", "bds", "bdib", "bflds", "bql", "bsrch", "request"}
+        expected_tools = {
+            "bdp",
+            "bdh",
+            "bds",
+            "bdib",
+            "bflds",
+            "bql",
+            "bsrch",
+            "check_entitlements",
+            "request",
+        }
         missing_tools = sorted(expected_tools.difference(tool_names))
         if missing_tools:
             raise McpProtocolError(f"Missing expected tools: {missing_tools}")

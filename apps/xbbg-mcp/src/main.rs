@@ -12,7 +12,6 @@ use arrow::util::display::array_value_to_string;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerInfo};
-use rmcp::transport::stdio;
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler, ServiceExt};
 use serde_json::{json, Map, Number, Value};
 use tokio::sync::OnceCell;
@@ -21,6 +20,7 @@ use xbbg_async::BlpAsyncError;
 use xbbg_core::{AuthConfig, BlpError, EntitlementCheck};
 
 mod request_adapter;
+mod stdin;
 
 use request_adapter::{
     bdh_request_params, bdib_request_params, bdp_request_params, bds_request_params,
@@ -827,8 +827,18 @@ fn display_error(error: arrow::error::ArrowError) -> ErrorData {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Warnings and errors from rmcp and the engine go to stderr (RUST_LOG raises the level).
+    // Without a subscriber a transport failure ends the process silently with status 0.
+    xbbg_log::init();
     let server = XbbgMcpServer::new_from_env()?;
-    server.serve(stdio()).await?.waiting().await?;
+    let quit_reason = server
+        .serve((stdin::stdin(), tokio::io::stdout()))
+        .await?
+        .waiting()
+        .await?;
+    if !matches!(quit_reason, rmcp::service::QuitReason::Closed) {
+        eprintln!("xbbg-mcp: server stopped: {quit_reason:?}");
+    }
     Ok(())
 }
 

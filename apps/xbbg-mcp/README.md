@@ -97,7 +97,13 @@ Windows release assets are attached as `.zip` files, but the convenience install
 
 Claude Desktop and MCPB-aware registries can use the `xbbg-mcp-v<VERSION>.mcpb` asset attached to GitHub Releases. The MCPB currently supports macOS arm64, Linux amd64, and Windows amd64. The raw platform tar/zip assets remain available for manual installs and troubleshooting.
 
-The MCPB does not include Bloomberg SDK files, Bloomberg runtime libraries, credentials, or market data. Configure `XBBG_MCP_LIB_DIR`, `BLPAPI_LIB_DIR`, `BLPAPI_ROOT`, or install Bloomberg's official Python `blpapi` package so the launcher can find the authorized Bloomberg runtime locally. On Windows, the MCPB PowerShell launcher prepends the resolved Bloomberg runtime directory to `PATH` before starting `xbbg-mcp.exe`.
+The MCPB does not include Bloomberg SDK files, Bloomberg runtime libraries, credentials, or market data. Configure `XBBG_MCP_LIB_DIR`, `BLPAPI_LIB_DIR`, `BLPAPI_ROOT`, or install Bloomberg's official Python `blpapi` package so the launcher can find the authorized Bloomberg runtime locally.
+
+On Windows the MCPB PowerShell launcher follows the same order, then also scans `PATH` (a Bloomberg Terminal install puts `C:\blp\DAPI` there) before falling back to the Python package. `xbbg-mcp.exe` is 64-bit and needs `blpapi3_64.dll`; a runtime older than the Bloomberg API version the release was built against is skipped with a message naming the version found, because the Windows loader would otherwise kill the process before it starts without printing anything. The launcher prepends the chosen directory to `PATH` and starts `xbbg-mcp.exe` with inherited standard handles, so the MCP host talks to the binary directly rather than through PowerShell. If the binary still exits with a loader status such as `STATUS_ENTRYPOINT_NOT_FOUND`, the launcher translates it into a one-line explanation on stderr.
+
+## Troubleshooting
+
+The server writes only to stderr, which MCP hosts such as Claude Desktop capture in their server logs. When stdin is closed by the host it prints `xbbg-mcp: stdin closed; shutting down`; a failed stdin read or an abnormal stop prints the underlying error. Set `RUST_LOG=info` (or `debug`) to also see the engine's and the MCP library's own log lines.
 
 ## Build from source
 
