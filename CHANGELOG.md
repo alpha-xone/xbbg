@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Fixed
+
+- **The 1.4.9 Windows MCPB launcher refused every Bloomberg runtime older than 3.26.7.1, including current Python `blpapi` packages.** The runtime gate introduced in 1.4.9 was seeded with the SDK version the release was *built* against rather than the oldest runtime that exports the entry points the binary imports, so the bundle rejected runtimes such as `blpapi` 3.26.4.2 that work. `scripts/package_xbbg_mcpb.py` now derives the minimum from the binaries themselves -- the newest `BLPAPI_x.y.z` symbol version referenced by the Linux build, currently 3.20.0, which is the same function set the Windows binary imports by name -- and accepts `--min-blpapi-version` only as an explicit override. Every `blpapi` package on Bloomberg's index from 3.21.0 onward passes; a Terminal DLL older than 3.20.0 is still skipped with a message naming its version, because the loader would kill the process without one.
+
 ## [1.4.9] - 2026-09-01
 
 ### Fixed

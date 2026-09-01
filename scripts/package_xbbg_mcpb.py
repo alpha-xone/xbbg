@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -28,7 +29,7 @@ Version: {version}
 
 This MCPB bundles the xbbg MCP launchers and prebuilt xbbg MCP binaries for macOS arm64, Linux amd64, and Windows amd64. It does not bundle Bloomberg SDK files, Bloomberg runtime libraries, Bloomberg credentials, or market data. You must provide Bloomberg runtime access locally through your own Bloomberg agreements and entitlements.
 
-The macOS/Linux launcher searches for Bloomberg runtime libraries through `XBBG_MCP_LIB_DIR`, `BLPAPI_LIB_DIR`, `BLPAPI_ROOT`, a vendored authorized SDK layout, or the official Python `blpapi` package. The Windows launcher uses the same precedence, also scans `PATH` (where a Bloomberg Terminal install places `C:\\blp\\DAPI`), skips any `blpapi3_64.dll` older than the Bloomberg API version this build was linked against, and prepends the resolved directory to `PATH` before launching `xbbg-mcp.exe`.
+The macOS/Linux launcher searches for Bloomberg runtime libraries through `XBBG_MCP_LIB_DIR`, `BLPAPI_LIB_DIR`, `BLPAPI_ROOT`, a vendored authorized SDK layout, or the official Python `blpapi` package. The Windows launcher uses the same precedence, also scans `PATH` (where a Bloomberg Terminal install places `C:\\blp\\DAPI`), skips any `blpapi3_64.dll` too old to export the entry points `xbbg-mcp.exe` imports (the minimum version is recorded in the launcher at packaging time), and prepends the resolved directory to `PATH` before launching `xbbg-mcp.exe`.
 
 Documentation: https://github.com/xbbg-org/xbbg/tree/main/apps/xbbg-mcp
 Privacy policy: https://github.com/xbbg-org/xbbg/tree/main/apps/xbbg-mcp#privacy-policy
@@ -67,9 +68,9 @@ POSIX_FIND_REAL_BINARY = f'''find_real_binary() {{
 # $ErrorActionPreference = "Stop", terminating the child on its first stderr line.
 WINDOWS_LAUNCHER_TEMPLATE = r"""$ErrorActionPreference = "Stop"
 
-# Bloomberg API version the bundled xbbg-mcp.exe was linked against. An older blpapi3_64.dll
-# lacks entry points the binary imports, and the loader then kills the process before main()
-# with STATUS_ENTRYPOINT_NOT_FOUND and no message.
+# Oldest Bloomberg API runtime that exports every entry point xbbg-mcp.exe imports (derived
+# from the binaries at packaging time). An older blpapi3_64.dll lacks some of them, and the
+# loader then kills the process before main() with STATUS_ENTRYPOINT_NOT_FOUND and no message.
 $requiredBlpapiVersion = @REQUIRED_BLPAPI_VERSION@
 $dllName = "blpapi3_64.dll"
 $rejectedCandidates = New-Object System.Collections.Generic.List[string]
@@ -349,6 +350,33 @@ def render_windows_launcher(required_blpapi_version: str | None) -> str:
     )
 
 
+BLPAPI_SYMBOL_VERSION = re.compile(rb"BLPAPI_(\d+)\.(\d+)\.(\d+)")
+
+
+def minimum_blpapi_version(linux_bin: Path) -> str | None:
+    """Oldest Bloomberg API runtime that exports every entry point the binaries import.
+
+    libblpapi3.so tags each exported function with the release that introduced it
+    (``BLPAPI_3.20.0`` and so on) and the linker records the tags a binary needs in its
+    ``.gnu.version_r`` section, so the newest tag referenced is the minimum runtime. The
+    Windows binary imports the same functions by name, and Bloomberg numbers the C++ SDK
+    identically on every platform. The version the release was *built* against is the
+    wrong bound: a binary built against 3.26.7 that only uses 3.20.0 entry points runs on
+    any 3.20.0 or newer DLL, and gating on 3.26.7 would refuse current runtimes.
+    """
+    versions = {
+        tuple(int(part) for part in match.groups())
+        for match in BLPAPI_SYMBOL_VERSION.finditer(linux_bin.read_bytes())
+    }
+    if not versions:
+        print(
+            f"warning: no BLPAPI symbol versions found in {linux_bin}; the Windows launcher will not gate on runtime version",
+            file=sys.stderr,
+        )
+        return None
+    return ".".join(str(part) for part in max(versions))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stage a cross-platform xbbg MCPB directory.")
     parser.add_argument("--version", required=True)
@@ -357,9 +385,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--windows-amd64-bin", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument(
-        "--blpapi-sdk-version",
+        "--min-blpapi-version",
         default=None,
-        help="Bloomberg API version the binaries were linked against; the Windows launcher rejects older runtimes",
+        help="Oldest Bloomberg API runtime the Windows launcher accepts; derived from the Linux binary's symbol versions when omitted",
     )
     return parser.parse_args()
 
@@ -556,7 +584,8 @@ def stage_bundle(args: argparse.Namespace) -> Path:
     posix_launcher = server_dir / "xbbg-mcp"
     posix_launcher.write_text(render_posix_launcher(repo_root), encoding="utf-8")
     powershell_launcher = server_dir / "xbbg-mcp.ps1"
-    powershell_launcher.write_text(render_windows_launcher(args.blpapi_sdk_version), encoding="utf-8")
+    min_blpapi_version = args.min_blpapi_version or minimum_blpapi_version(linux_bin)
+    powershell_launcher.write_text(render_windows_launcher(min_blpapi_version), encoding="utf-8")
 
     shutil.copyfile(darwin_bin, darwin_dir / "xbbg-mcp-real")
     shutil.copyfile(linux_bin, linux_dir / "xbbg-mcp-real")
