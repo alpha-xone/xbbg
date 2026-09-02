@@ -478,6 +478,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: scripts/mcpb/package-lock.json
+
+      - name: Install and test pinned MCPB tooling
+        run: |
+          npm ci --prefix scripts/mcpb --ignore-scripts
+          npm test --prefix scripts/mcpb
+
       - name: Download darwin xbbg-mcp asset
         uses: actions/download-artifact@v8
         with:
@@ -525,8 +537,9 @@ jobs:
             --linux-amd64-bin "$LINUX_BIN" \
             --windows-amd64-bin "$WINDOWS_BIN" \
             --output-dir "$RUNNER_TEMP/mcpb"
-          npx -y @anthropic-ai/mcpb validate "$RUNNER_TEMP/mcpb/xbbg-mcp-mcpb/manifest.json"
-          npx -y @anthropic-ai/mcpb pack "$RUNNER_TEMP/mcpb/xbbg-mcp-mcpb" "$DIST_DIR/xbbg-mcp-v${VERSION}.mcpb"
+          scripts/mcpb/node_modules/.bin/mcpb validate "$RUNNER_TEMP/mcpb/xbbg-mcp-mcpb/manifest.json"
+          node scripts/mcpb/pack.mjs "$RUNNER_TEMP/mcpb/xbbg-mcp-mcpb" "$DIST_DIR/xbbg-mcp-v${VERSION}.mcpb"
+          scripts/mcpb/node_modules/.bin/mcpb info "$DIST_DIR/xbbg-mcp-v${VERSION}.mcpb"
 
           MCPB_SHA256="$(shasum -a 256 "$DIST_DIR/xbbg-mcp-v${VERSION}.mcpb" | cut -d ' ' -f 1)"
           python scripts/render_mcp_registry_server.py \

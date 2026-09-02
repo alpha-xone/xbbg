@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Fixed
+
+- **`xbbg-mcp` no longer mistakes a failed stdin worker or abnormal service stop for clean EOF.** Stderr diagnostics are now best-effort instead of using `eprintln!`, whose panic on a closed host log pipe could kill the detached reader and recreate the silent exit from #348. The reader reports its terminal state out of band before closing the transport; read failures, worker panics, unexpected transport closure, task failures, cancellation, and reader-thread spawn failures now reach `main` as errors and return a nonzero process status.
+- **The Windows MCPB launcher now guarantees that the Bloomberg DLL it validates is the one the loader can select.** The chosen runtime directory becomes the child's working directory and first `PATH` entry, while a higher-priority `blpapi3_64.dll` beside the executable or in a Windows system directory is rejected rather than silently shadowing the checked file. Candidates with unreadable version metadata are skipped; packaging fails closed when the binary exposes no versioned Bloomberg imports; `--min-blpapi-version` accepts only a canonical three- or four-part numeric version; and loader-status messages no longer blame a specific module without evidence.
+- **MCPB release artifacts are now reproducible and built with integrity-locked tooling.** A locked `fflate` 0.8.2 compressor writes sorted members with fixed timestamps and explicit Unix modes, so rerunning the same tag with identical binaries preserves both the executable launchers and the MCPB SHA-256 recorded in the official registry. The workflow also installs exactly `@anthropic-ai/mcpb` 2.1.2 from the committed npm lockfile, overrides its vulnerable transitive `tmp` dependency with patched 0.2.7, disables lifecycle scripts, runs the packer regression tests, and uses the pinned CLI to validate and inspect the deterministic archive instead of executing mutable `latest` code.
+
 ## [1.4.10] - 2026-09-01
 
 ### Fixed

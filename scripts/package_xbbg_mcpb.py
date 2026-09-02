@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
+"""Stage the cross-platform xbbg MCPB bundle and launchers."""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import sys
-from pathlib import Path
 
 UNSUPPORTED_PLATFORM_MESSAGE = (
     "MCPB supports macOS arm64, Linux amd64, and Windows amd64; use GitHub release assets "
     "or build from source for this platform"
 )
-MISSING_REAL_BINARY_MESSAGE = (
-    "could not locate the real xbbg-mcp binary. Reinstall it or set XBBG_MCP_REAL_BIN."
-)
+MISSING_REAL_BINARY_MESSAGE = "could not locate the real xbbg-mcp binary. Reinstall it or set XBBG_MCP_REAL_BIN."
 MISSING_RUNTIME_MESSAGE = (
     "could not locate the Bloomberg runtime library. Set XBBG_MCP_LIB_DIR, BLPAPI_LIB_DIR, "
     "or BLPAPI_ROOT, or install Bloomberg's blpapi package."
@@ -29,7 +29,7 @@ Version: {version}
 
 This MCPB bundles the xbbg MCP launchers and prebuilt xbbg MCP binaries for macOS arm64, Linux amd64, and Windows amd64. It does not bundle Bloomberg SDK files, Bloomberg runtime libraries, Bloomberg credentials, or market data. You must provide Bloomberg runtime access locally through your own Bloomberg agreements and entitlements.
 
-The macOS/Linux launcher searches for Bloomberg runtime libraries through `XBBG_MCP_LIB_DIR`, `BLPAPI_LIB_DIR`, `BLPAPI_ROOT`, a vendored authorized SDK layout, or the official Python `blpapi` package. The Windows launcher uses the same precedence, also scans `PATH` (where a Bloomberg Terminal install places `C:\\blp\\DAPI`), skips any `blpapi3_64.dll` too old to export the entry points `xbbg-mcp.exe` imports (the minimum version is recorded in the launcher at packaging time), and prepends the resolved directory to `PATH` before launching `xbbg-mcp.exe`.
+The macOS/Linux launcher searches for Bloomberg runtime libraries through `XBBG_MCP_LIB_DIR`, `BLPAPI_LIB_DIR`, `BLPAPI_ROOT`, a vendored authorized SDK layout, or the official Python `blpapi` package. The Windows launcher uses the same precedence, also scans `PATH` (where a Bloomberg Terminal install places `C:\\blp\\DAPI`), skips runtimes whose version cannot be verified or is too old to export the entry points `xbbg-mcp.exe` imports, and runs the child from the validated runtime directory while rejecting higher-priority shadow DLLs.
 
 Documentation: https://github.com/xbbg-org/xbbg/tree/main/apps/xbbg-mcp
 Privacy policy: https://github.com/xbbg-org/xbbg/tree/main/apps/xbbg-mcp#privacy-policy
@@ -110,19 +110,21 @@ function Get-DllVersion($dll) {
     return New-Object System.Version($info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart)
 }
 
-# Returns the directory when it holds a usable 64-bit runtime, otherwise $null. A runtime that
-# is present but too old is recorded so the final error can name it.
+# Returns the directory when it holds a verifiable, new-enough 64-bit runtime, otherwise $null.
+# Rejected candidates are recorded so the final error can explain each one.
 function Select-LibDir($dir, $source) {
     $dll = Get-BlpapiDll $dir
     if (-not $dll) {
         return $null
     }
-    if ($requiredBlpapiVersion) {
-        $version = Get-DllVersion $dll
-        if ($version -and $version -lt $requiredBlpapiVersion) {
-            $rejectedCandidates.Add("$dll is Bloomberg API $version, older than the $requiredBlpapiVersion this build needs ($source)")
-            return $null
-        }
+    $version = Get-DllVersion $dll
+    if (-not $version) {
+        $rejectedCandidates.Add("$dll has no readable Bloomberg API file version ($source)")
+        return $null
+    }
+    if ($version -lt $requiredBlpapiVersion) {
+        $rejectedCandidates.Add("$dll is Bloomberg API $version, older than the $requiredBlpapiVersion this build needs ($source)")
+        return $null
     }
     return $dir
 }
@@ -286,6 +288,31 @@ function Find-RuntimeLibDir() {
     return $null
 }
 
+function Assert-ValidatedDllWins($realBin, $libDir) {
+    $selectedDll = [System.IO.Path]::GetFullPath((Join-Path $libDir $dllName))
+    $higherPriorityDirs = New-Object System.Collections.Generic.List[string]
+    $higherPriorityDirs.Add((Split-Path -Parent $realBin))
+    $higherPriorityDirs.Add([Environment]::SystemDirectory)
+    if ($env:WINDIR) {
+        $higherPriorityDirs.Add((Join-Path $env:WINDIR "System"))
+        $higherPriorityDirs.Add($env:WINDIR)
+    }
+
+    foreach ($dir in ($higherPriorityDirs | Select-Object -Unique)) {
+        if (-not $dir) {
+            continue
+        }
+        $candidate = Join-Path $dir $dllName
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
+        }
+        $candidate = [System.IO.Path]::GetFullPath($candidate)
+        if (-not [string]::Equals($candidate, $selectedDll, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Die "$candidate would shadow the validated Bloomberg runtime $selectedDll in the Windows DLL search order; remove the shadowing copy"
+        }
+    }
+}
+
 # Quote one argument the way the Microsoft C runtime parses argv (CommandLineToArgvW rules).
 function Format-Argument($arg) {
     if ($arg -eq "") {
@@ -316,44 +343,62 @@ if (-not $libDir) {
     }
     Die "@MISSING_RUNTIME_MESSAGE@"
 }
-
-$env:PATH = "$libDir;$env:PATH"
+$libDir = (Resolve-Path -LiteralPath $libDir).Path
+Assert-ValidatedDllWins $realBin $libDir
 
 $startInfo = New-Object System.Diagnostics.ProcessStartInfo
 $startInfo.FileName = $realBin
 $startInfo.Arguments = (@($args | ForEach-Object { Format-Argument $_ }) -join ' ')
 $startInfo.UseShellExecute = $false
+# The current directory precedes PATH in the Windows DLL search order. Point both at the
+# validated runtime so an arbitrary MCP host working directory cannot shadow it.
+$startInfo.WorkingDirectory = $libDir
+$startInfo.EnvironmentVariables["PATH"] = "$libDir;$env:PATH"
 # No redirection: the child inherits this process's stdin, stdout, and stderr handles, so the
 # MCP host talks to xbbg-mcp.exe directly and PowerShell never touches the byte stream.
 $process = [System.Diagnostics.Process]::Start($startInfo)
 $process.WaitForExit()
 $exitCode = $process.ExitCode
 
-# The loader reports an unusable runtime by exit status alone; translate the common ones.
+# The loader reports an unusable dependency by exit status alone; translate the common ones
+# without claiming which direct or transitive module caused the failure.
 $dllVersion = Get-DllVersion (Join-Path $libDir $dllName)
 switch ($exitCode) {
-    -1073741515 { Warn "xbbg-mcp.exe exited with STATUS_DLL_NOT_FOUND: a DLL it depends on was not found. Runtime directory: $libDir" }
-    -1073741511 { Warn "xbbg-mcp.exe exited with STATUS_ENTRYPOINT_NOT_FOUND: $libDir\$dllName (Bloomberg API $dllVersion) lacks entry points this build needs; install a newer Bloomberg API runtime or point XBBG_MCP_LIB_DIR at one" }
-    -1073741701 { Warn "xbbg-mcp.exe exited with STATUS_INVALID_IMAGE_FORMAT: $libDir\$dllName is not a 64-bit library" }
+    -1073741515 { Warn "xbbg-mcp.exe exited with STATUS_DLL_NOT_FOUND: a direct or transitive DLL dependency was not found. Selected Bloomberg runtime: $libDir\$dllName (Bloomberg API $dllVersion)" }
+    -1073741511 { Warn "xbbg-mcp.exe exited with STATUS_ENTRYPOINT_NOT_FOUND: a loaded dependency lacks an entry point this build needs. Selected Bloomberg runtime: $libDir\$dllName (Bloomberg API $dllVersion)" }
+    -1073741701 { Warn "xbbg-mcp.exe exited with STATUS_INVALID_IMAGE_FORMAT: a loaded dependency has the wrong architecture or an invalid image. Selected Bloomberg runtime: $libDir\$dllName (Bloomberg API $dllVersion)" }
 }
 exit $exitCode
 """
 
 
-def render_windows_launcher(required_blpapi_version: str | None) -> str:
-    version_literal = f'[Version]"{required_blpapi_version}"' if required_blpapi_version else "$null"
+BLPAPI_RUNTIME_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
+BLPAPI_SYMBOL_VERSION = re.compile(rb"BLPAPI_(\d+)\.(\d+)\.(\d+)")
+MAX_VERSION_PART = 65_535
+
+
+def parse_blpapi_version(value: str) -> str:
+    """Validate and canonicalize a three- or four-part Bloomberg runtime version."""
+    match = BLPAPI_RUNTIME_VERSION.fullmatch(value)
+    if not match:
+        raise argparse.ArgumentTypeError("expected three or four numeric components, for example 3.20.0 or 3.26.4.2")
+    parts = tuple(int(part) for part in match.groups() if part is not None)
+    if any(part > MAX_VERSION_PART for part in parts):
+        raise argparse.ArgumentTypeError(f"each Bloomberg runtime version component must be <= {MAX_VERSION_PART}")
+    return ".".join(str(part) for part in parts)
+
+
+def render_windows_launcher(required_blpapi_version: str) -> str:
+    canonical_version = parse_blpapi_version(required_blpapi_version)
     return (
-        WINDOWS_LAUNCHER_TEMPLATE.replace("@REQUIRED_BLPAPI_VERSION@", version_literal)
+        WINDOWS_LAUNCHER_TEMPLATE.replace("@REQUIRED_BLPAPI_VERSION@", f'[Version]"{canonical_version}"')
         .replace("@UNSUPPORTED_PLATFORM_MESSAGE@", UNSUPPORTED_PLATFORM_MESSAGE)
         .replace("@MISSING_REAL_BINARY_MESSAGE@", MISSING_REAL_BINARY_MESSAGE)
         .replace("@MISSING_RUNTIME_MESSAGE@", MISSING_RUNTIME_MESSAGE)
     )
 
 
-BLPAPI_SYMBOL_VERSION = re.compile(rb"BLPAPI_(\d+)\.(\d+)\.(\d+)")
-
-
-def minimum_blpapi_version(linux_bin: Path) -> str | None:
+def minimum_blpapi_version(linux_bin: Path) -> str:
     """Oldest Bloomberg API runtime that exports every entry point the binaries import.
 
     libblpapi3.so tags each exported function with the release that introduced it
@@ -365,15 +410,10 @@ def minimum_blpapi_version(linux_bin: Path) -> str | None:
     any 3.20.0 or newer DLL, and gating on 3.26.7 would refuse current runtimes.
     """
     versions = {
-        tuple(int(part) for part in match.groups())
-        for match in BLPAPI_SYMBOL_VERSION.finditer(linux_bin.read_bytes())
+        tuple(int(part) for part in match.groups()) for match in BLPAPI_SYMBOL_VERSION.finditer(linux_bin.read_bytes())
     }
     if not versions:
-        print(
-            f"warning: no BLPAPI symbol versions found in {linux_bin}; the Windows launcher will not gate on runtime version",
-            file=sys.stderr,
-        )
-        return None
+        raise SystemExit(f"no BLPAPI symbol versions found in {linux_bin}; pass --min-blpapi-version explicitly")
     return ".".join(str(part) for part in max(versions))
 
 
@@ -387,6 +427,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-blpapi-version",
         default=None,
+        type=parse_blpapi_version,
         help="Oldest Bloomberg API runtime the Windows launcher accepts; derived from the Linux binary's symbol versions when omitted",
     )
     return parser.parse_args()

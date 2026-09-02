@@ -831,13 +831,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Without a subscriber a transport failure ends the process silently with status 0.
     xbbg_log::init();
     let server = XbbgMcpServer::new_from_env()?;
+    let (stdin, stdin_monitor) = stdin::stdin()?;
     let quit_reason = server
-        .serve((stdin::stdin(), tokio::io::stdout()))
+        .serve((stdin, tokio::io::stdout()))
         .await?
         .waiting()
         .await?;
-    if !matches!(quit_reason, rmcp::service::QuitReason::Closed) {
-        eprintln!("xbbg-mcp: server stopped: {quit_reason:?}");
+    match quit_reason {
+        rmcp::service::QuitReason::Closed => stdin_monitor.ensure_clean_shutdown()?,
+        rmcp::service::QuitReason::Cancelled => {
+            return Err(std::io::Error::other("MCP service was cancelled").into());
+        }
+        rmcp::service::QuitReason::JoinError(err) => return Err(err.into()),
+        reason => {
+            return Err(std::io::Error::other(format!(
+                "MCP service stopped unexpectedly: {reason:?}"
+            ))
+            .into());
+        }
     }
     Ok(())
 }
