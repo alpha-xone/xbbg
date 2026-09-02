@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [1.4.11] - 2026-09-02
+
 ### Fixed
 
 - **`xbbg-mcp` no longer mistakes a failed stdin worker or abnormal service stop for clean EOF.** Stderr diagnostics are now best-effort instead of using `eprintln!`, whose panic on a closed host log pipe could kill the detached reader and recreate the silent exit from #348. The reader reports its terminal state out of band before closing the transport; read failures, worker panics, unexpected transport closure, task failures, cancellation, and reader-thread spawn failures now reach `main` as errors and return a nonzero process status.
@@ -1603,7 +1605,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ---
 
-[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.10...HEAD
+[Unreleased]: https://github.com/xbbg-org/xbbg/compare/v1.4.11...HEAD
+[1.4.11]: https://github.com/xbbg-org/xbbg/compare/v1.4.10...v1.4.11
 [1.4.10]: https://github.com/xbbg-org/xbbg/compare/v1.4.9...v1.4.10
 [1.4.9]: https://github.com/xbbg-org/xbbg/compare/v1.4.8...v1.4.9
 [1.4.8]: https://github.com/xbbg-org/xbbg/compare/v1.4.7...v1.4.8
