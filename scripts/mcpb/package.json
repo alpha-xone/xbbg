@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@anthropic-ai/mcpb": "2.1.2",
-    "fflate": "0.8.2"
+    "fflate": "0.8.3"
   },
   "overrides": {
     "tmp": "0.2.7"
