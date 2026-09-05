@@ -349,7 +349,16 @@ fn write_results(config: &BenchConfig, timestamp: u64, results: &[IterationResul
         .min()
         .unwrap_or_default() as f64;
     let p50_elapsed_us = percentile_elapsed_us(results, 50.0);
-    let build_mode = xbbg_bench::build_mode();
+    let input_descriptor = format!(
+        "rows={};flush_threshold={};iterations={};warmup={};requested_fields={};late_fields={}",
+        config.rows,
+        config.flush_threshold,
+        config.iterations,
+        config.warmup_iterations,
+        REQUESTED_FIELDS.len(),
+        LATE_FIELDS.len(),
+    );
+    let provenance = xbbg_bench::benchmark_provenance_json(&input_descriptor);
 
     let iterations_json = results
         .iter()
@@ -378,11 +387,16 @@ fn write_results(config: &BenchConfig, timestamp: u64, results: &[IterationResul
 
     let json = format!(
         r#"{{
+  "schema_version": 2,
   "timestamp": {},
   "crate": "xbbg-async",
   "benchmark_type": "synthetic_subscription_replay",
   "offline": true,
   "uses_bloomberg_session": false,
+  "coverage": "synthetic Arrow builder state only; no bounded transport queue, Bloomberg SDK event, or network coverage",
+  "timing_scope": "warm uninstrumented row append and RecordBatch finalization",
+  "percentile_policy": "p50 reported; p95 requires at least 20 samples and p99 at least 100",
+  "provenance": {},
   "config": {{
     "rows": {},
     "flush_threshold": {},
@@ -391,9 +405,8 @@ fn write_results(config: &BenchConfig, timestamp: u64, results: &[IterationResul
     "requested_fields": {},
     "late_fields": {}
   }},
-  "target_cpu": {{ "native": {} }},
-  "debug_build": {},
   "summary": {{
+    "sample_count": {},
     "mean_elapsed_us": {:.2},
     "min_elapsed_us": {:.2},
     "p50_elapsed_us": {:.2},
@@ -405,14 +418,14 @@ fn write_results(config: &BenchConfig, timestamp: u64, results: &[IterationResul
   ]
 }}"#,
         timestamp,
+        provenance,
         config.rows,
         config.flush_threshold,
         config.iterations,
         config.warmup_iterations,
         REQUESTED_FIELDS.len(),
         LATE_FIELDS.len(),
-        build_mode.target_cpu_native,
-        build_mode.debug_build,
+        results.len(),
         mean_elapsed_us,
         min_elapsed_us,
         p50_elapsed_us,

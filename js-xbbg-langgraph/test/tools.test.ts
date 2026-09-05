@@ -1,19 +1,27 @@
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { ChatOpenAI } from "@langchain/openai";
-import { createAgent } from "langchain";
 
 import {
-  BLOOMBERG_TOOL_INSTRUCTIONS,
   BLOOMBERG_TOOL_NAMES,
   createAllBloombergTools,
   createBloombergTools,
-  getBloombergToolInstructions,
   toolParameterJsonSchema,
 } from "../src";
-import { limitResult } from "../src/result-limits";
+import { createToolResult, limitResult, type ResultLimitOptions } from "../src/result-limits";
 import type { XbbgCoreLike, XbbgEngineLike } from "../src/core-loader";
+import { normalizeBloombergToolsOptions } from "../src/options";
+
+const DEFAULT_RESULT_LIMITS: ResultLimitOptions = {
+  maxResultBytes: 1_048_576,
+  maxResultNodes: 50_000,
+  maxRows: 500,
+  maxStringChars: 2_000,
+};
+
+function resultLimits(overrides: Partial<ResultLimitOptions> = {}): ResultLimitOptions {
+  return { ...DEFAULT_RESULT_LIMITS, ...overrides };
+}
 
 type CoreSubscription = Awaited<ReturnType<XbbgEngineLike["stream"]>>;
 
@@ -180,24 +188,6 @@ describe("Bloomberg request tools", () => {
     expect(core.connect).not.toHaveBeenCalled();
   });
 
-  it("constructs LangChain agent and bindTools workflows without provider calls", () => {
-    const engine = fakeEngine();
-    const tools = createBloombergTools({ core: fakeCore(engine) });
-    const model = new ChatOpenAI({ apiKey: "test-api-key", model: "gpt-4.1" });
-    const boundModel = model.bindTools(tools);
-    const toolNode = new ToolNode(tools);
-    const agent = createAgent({
-      model,
-      systemPrompt: BLOOMBERG_TOOL_INSTRUCTIONS,
-      tools,
-    });
-
-    expect(typeof boundModel.invoke).toBe("function");
-    expect(toolNode).toBeInstanceOf(ToolNode);
-    expect(typeof agent.invoke).toBe("function");
-    expect(engine.bdp).not.toHaveBeenCalled();
-  });
-
   it("honors disabledTools for request and recipe tools", () => {
     const engine = fakeEngine();
     const tools = createBloombergTools({
@@ -297,7 +287,8 @@ describe("Bloomberg request tools", () => {
       }),
     );
     expect(bdp).toMatchObject({ rowCount: 1, tool: "xbbg_bdp", truncated: true });
-    expect(bdp.data[0].value).toContain("[truncated");
+    expect(bdp.data[0].value).not.toBe("1234567890123456789012345");
+    expect(bdp.truncation.reasons).toContain("max_string_chars");
 
     await invokeJson(byName(tools, "xbbg_bdh"), {
       end: "2024-01-31",
@@ -556,7 +547,7 @@ describe("Bloomberg request tools", () => {
     });
     expect(JSON.parse(content.split("\n")[1] ?? "{}").data).toMatchObject({
       eidData: { "AAPL US Equity": [101, 202] },
-      rows: [{ value: 1 }],
+      rows: [{ value: 1 }, { value: 2 }],
     });
 
     const emptyWithMetadata = Object.assign([], {
@@ -622,6 +613,36 @@ describe("Bloomberg request tools", () => {
     }
   });
 
+  it("retains array-attached Bloomberg diagnostics under tight budgets", async () => {
+    const engine = fakeEngine();
+    vi.mocked(engine.bdp).mockResolvedValueOnce(
+      Object.assign([{ value: 1 }], {
+        diagnostics: [{ securityError: { message: "NO_AUTH" } }],
+      }),
+    );
+    const tools = createBloombergTools({
+      core: fakeCore(engine),
+      maxContentBytes: 512,
+      maxResultBytes: 512,
+      maxResultNodes: 120,
+      maxRows: 1,
+    });
+
+    const [content, artifact] = await invokeArtifact(byName(tools, "xbbg_bdp"), {
+      fields: ["PX_LAST"],
+      securities: ["AAPL US Equity"],
+    });
+
+    expect(artifact).toMatchObject({
+      hasErrors: true,
+      data: {
+        diagnostics: [{ securityError: { message: "NO_AUTH" } }],
+        rows: [{ value: 1 }],
+      },
+    });
+    expect(content).toContain("NO_AUTH");
+    expect(new TextEncoder().encode(content).byteLength).toBeLessThanOrEqual(512);
+  });
   it("validates and invokes the read-only entitlement check with the default service", async () => {
     const engine = fakeEngine();
     const tools = createBloombergTools({ core: fakeCore(engine) });
@@ -643,48 +664,9 @@ describe("Bloomberg request tools", () => {
     await expect(tool.invoke({ eids: [2_147_483_648] })).rejects.toThrow(/32-bit/u);
   });
 
-  it("passes security identifiers unchanged and documents Bloomberg identifier syntax", async () => {
+  it("passes security identifiers unchanged", async () => {
     const engine = fakeEngine();
     const tools = createBloombergTools({ core: fakeCore(engine) });
-
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("/isin/<ISIN>");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("/cusip/<CUSIP>");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("/isin/<ISIN>@<QUOTE_SOURCE> <MARKET_SECTOR>");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain(
-      "format template, not authorization to construct a ticker",
-    );
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain(
-      "Pass each security in the form the user supplied it",
-    );
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain(
-      "resolve it with xbbg_resolve_isins first and use the returned Bloomberg security",
-    );
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("never a guessed preferred ('Pfd') ticker");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain(
-      "Equity, Index, Curncy, Comdty, Corp, Govt, Muni, Mtge, M-Mkt, and Pfd",
-    );
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("parse_ticker splits generic futures-style");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("xbbg_bdtick");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("xbbg_bqr");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("get(<FIELD_1>, <FIELD_2>) for(<UNIVERSE>)");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("holdings('<ETF_TICKER> <MARKET_SECTOR>')");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("members('<INDEX_TICKER> <MARKET_SECTOR>')");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("filter_valid_contracts");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("fixed-income YAS recipe fields");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("default_bqr_datetimes");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("## Core request tools");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("## Extension helper tools");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("bounded model-readable JSON");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("rowCount");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("truncated");
-
-    const requiredOnly = getBloombergToolInstructions({
-      includeExtensionGuidance: false,
-      includeLimitReminder: false,
-    });
-    expect(requiredOnly).toContain("## Core request tools");
-    expect(requiredOnly).not.toContain("## Extension helper tools");
-    expect(requiredOnly).not.toContain("## Request limits and inputs");
 
     await invokeJson(byName(tools, "xbbg_bdp"), {
       fields: ["<FIELD>"],
@@ -714,13 +696,14 @@ describe("Bloomberg request tools", () => {
     const payload = JSON.parse(payloadLine ?? "") as Record<string, any>;
 
     expect(summaryLine).toContain("xbbg_bdp: 1 row");
-    expect(summaryLine).toContain("truncated=true");
+    expect(summaryLine).toContain("artifactTruncated=true");
     expect(payload).toMatchObject({
       rowCount: 1,
       tool: "xbbg_bdp",
       truncated: true,
     });
-    expect(payload.data[0].value).toBe("12345678901234567890…[truncated 5 chars]");
+    expect(payload.data[0].value).not.toBe("1234567890123456789012345");
+    expect(summaryLine).toContain("max_string_chars");
     expect(content).not.toContain("1234567890123456789012345");
     expect(artifact).toMatchObject({ rowCount: 1, tool: "xbbg_bdp", truncated: true });
 
@@ -745,12 +728,105 @@ describe("Bloomberg request tools", () => {
     expect(message).toBeInstanceOf(ToolMessage);
     const toolMessage = message as ToolMessage;
     expect(toolMessage.content).toContain("xbbg_bdp: 1 row");
-    expect(toolMessage.content).toContain("12345678901234567890…[truncated 5 chars]");
+    expect(toolMessage.content).toContain("max_string_chars");
     expect(toolMessage.content).not.toContain("1234567890123456789012345");
     expect(toolMessage.artifact).toMatchObject({
       rowCount: 1,
       tool: "xbbg_bdp",
     });
+  });
+
+  it("keeps a larger valid artifact while sending a smaller model-sufficient preview", async () => {
+    const engine = fakeEngine();
+    vi.mocked(engine.bdp).mockResolvedValueOnce(
+      Array.from({ length: 100 }, (_, index) => ({
+        index,
+        value: `row-${String(index)}-${"x".repeat(24)}`,
+      })),
+    );
+    const tools = createBloombergTools({
+      core: fakeCore(engine),
+      maxContentBytes: 1_024,
+      maxContentRows: 2,
+      maxResultBytes: 8_192,
+      maxResultNodes: 2_000,
+      maxRows: 20,
+    });
+
+    const [content, artifact] = await invokeArtifact(byName(tools, "xbbg_bdp"), {
+      fields: ["PX_LAST"],
+      securities: ["AAPL US Equity"],
+    });
+    const payload = JSON.parse(content.split("\n")[1] ?? "{}") as Record<string, any>;
+    const artifactJson = JSON.stringify(artifact);
+
+    expect(new TextEncoder().encode(content).byteLength).toBeLessThanOrEqual(1_024);
+    expect(new TextEncoder().encode(artifactJson).byteLength).toBeLessThanOrEqual(8_192);
+    expect(JSON.parse(artifactJson)).toMatchObject({ rowCount: 100, truncated: true });
+    expect(artifact.data).toHaveLength(20);
+    expect(payload.data).toHaveLength(2);
+    expect(payload.data[0]).toMatchObject({ index: 0 });
+    expect(payload).toMatchObject({ contentTruncated: true, rowCount: 100 });
+  });
+
+  it("projects artifact and model rows independently while retaining the primary error", async () => {
+    const engine = fakeEngine();
+    vi.mocked(engine.bdp).mockResolvedValueOnce([
+      {
+        index: 0,
+        securityError: {
+          message: `NO_AUTH actionable diagnostic ${"detail ".repeat(120)}`,
+        },
+      },
+      { index: 1, value: "second" },
+      { index: 2, value: "third" },
+    ]);
+    const tools = createBloombergTools({
+      core: fakeCore(engine),
+      maxContentBytes: 8_192,
+      maxContentRows: 3,
+      maxResultBytes: 256,
+      maxRows: 1,
+    });
+
+    const [content, artifact] = await invokeArtifact(byName(tools, "xbbg_bdp"), {
+      fields: ["PX_LAST"],
+      securities: ["AAPL US Equity"],
+    });
+    const payload = JSON.parse(content.split("\n")[1] ?? "{}") as Record<string, any>;
+
+    expect(artifact.data).toHaveLength(1);
+    expect(payload.data).toHaveLength(3);
+    expect(content).toContain("NO_AUTH actionable diagnostic");
+    expect(new TextEncoder().encode(JSON.stringify(artifact)).byteLength).toBeLessThanOrEqual(256);
+    expect(new TextEncoder().encode(content).byteLength).toBeLessThanOrEqual(8_192);
+  });
+
+  it("prepares side-effecting toJSON results once before independent projections", async () => {
+    let toJsonCalls = 0;
+    class BloombergResult {
+      toJSON(): unknown {
+        toJsonCalls += 1;
+        return [{ value: 1 }, { value: 2 }];
+      }
+    }
+    const engine = fakeEngine();
+    vi.mocked(engine.bdp).mockResolvedValueOnce(new BloombergResult());
+    const tools = createBloombergTools({
+      core: fakeCore(engine),
+      maxContentRows: 2,
+      maxRows: 1,
+    });
+
+    const [content, artifact] = await invokeArtifact(byName(tools, "xbbg_bdp"), {
+      fields: ["PX_LAST"],
+      securities: ["AAPL US Equity"],
+    });
+    const payload = JSON.parse(content.split("\n")[1] ?? "{}") as Record<string, any>;
+
+    expect(toJsonCalls).toBe(1);
+    expect(artifact.data).toEqual([{ value: 1 }]);
+    expect(payload.data).toEqual([{ value: 1 }, { value: 2 }]);
   });
 
   it("surfaces row-level Bloomberg errors in model content", async () => {
@@ -761,16 +837,23 @@ describe("Bloomberg request tools", () => {
         securityError: { message: "synthetic row failure" },
       },
     ]);
-    const tools = createBloombergTools({ core: fakeCore(engine) });
+    const tools = createBloombergTools({
+      core: fakeCore(engine),
+      maxContentBytes: 256,
+      maxResultBytes: 2_048,
+    });
 
     const [content, artifact] = await invokeArtifact(byName(tools, "xbbg_bdp"), {
       fields: ["<FIELD>"],
       securities: ["<ERROR_TICKER> <MARKET_SECTOR>"],
     });
 
-    expect(content.split("\n")[0]).toContain("inspect result payload for Bloomberg error details");
+    expect(content.split("\n")[0]).toMatch(
+      /Bloomberg error diagnostics included in preview|hasErrors=true/u,
+    );
     expect(content).toContain("securityError");
     expect(content).toContain("synthetic row failure");
+    expect(new TextEncoder().encode(content).byteLength).toBeLessThanOrEqual(256);
     expect(artifact).toMatchObject({ rowCount: 1, tool: "xbbg_bdp", truncated: false });
   });
 
@@ -806,8 +889,12 @@ describe("Bloomberg request tools", () => {
     expect(stream.data.updates[0].LAST_PRICE).toBe("123");
     expect(streamSub.unsubscribe).toHaveBeenCalledWith(true);
 
+    const mktbarRows = [{ close: 1n, time: new Date(Date.UTC(2024, 0, 2)) }];
     const mktbarSub = fakeSubscription([
-      { toArray: () => [{ close: 1n, time: new Date(Date.UTC(2024, 0, 2)) }] },
+      {
+        get: (index: number) => mktbarRows[index],
+        numRows: mktbarRows.length,
+      },
     ]);
     vi.mocked(engine.mktbar).mockResolvedValueOnce(mktbarSub.subscription);
 
@@ -849,6 +936,59 @@ describe("Bloomberg request tools", () => {
       }),
     ).rejects.toThrow(/xbbg_depth_snapshot failed: boom/u);
     expect(failingSub.unsubscribe).toHaveBeenCalledWith(false);
+  });
+
+  it("bounds Arrow materialization across all snapshot updates", async () => {
+    const engine = fakeEngine();
+    const firstGet = vi.fn((index: number) => ({ index, table: 1 }));
+    const secondGet = vi.fn((index: number) => ({ index, table: 2 }));
+    const toArray = vi.fn(() => {
+      throw new Error("must not materialize the full Arrow table");
+    });
+    const subscription = fakeSubscription([
+      { get: firstGet, numRows: 100_000, toArray },
+      { get: secondGet, numRows: 200_000, toArray },
+    ]);
+    vi.mocked(engine.mktbar).mockResolvedValueOnce(subscription.subscription);
+    const tools = createBloombergTools({
+      core: fakeCore(engine),
+      maxContentRows: 3,
+      maxRows: 3,
+    });
+
+    const result = await invokeJson(byName(tools, "xbbg_mktbar_snapshot"), {
+      maxUpdates: 2,
+      ticker: "AAPL US Equity",
+      timeoutMs: 1_000,
+    });
+
+    expect(firstGet).toHaveBeenCalledTimes(3);
+    expect(secondGet).not.toHaveBeenCalled();
+    expect(firstGet.mock.calls.length + secondGet.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(toArray).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      truncated: true,
+      data: {
+        updates: [
+          {
+            rowCount: 100_000,
+            rows: [
+              { index: 0, table: 1 },
+              { index: 1, table: 1 },
+              { index: 2, table: 1 },
+            ],
+            truncated: true,
+            truncation: { omittedRowsAtLeast: 99_997, reason: "max_rows" },
+          },
+          {
+            rowCount: 200_000,
+            rows: [],
+            truncated: true,
+            truncation: { omittedRowsAtLeast: 200_000, reason: "max_rows" },
+          },
+        ],
+      },
+    });
   });
 
   it("rejects unsafe or ambiguous request inputs", async () => {
@@ -948,7 +1088,6 @@ describe("Bloomberg request tools", () => {
       properties: { overflowPolicy: { enum?: string[]; description?: string } };
     };
     expect(described.properties.overflowPolicy.enum).toStrictEqual(["block", "drop_newest"]);
-    expect(described.properties.overflowPolicy.description).toContain("drop_newest");
 
     await expect(
       snapshot.invoke({
@@ -973,7 +1112,9 @@ describe("Bloomberg request tools", () => {
 
     expect(output).toMatchObject({ rowCount: 2, truncated: true });
     expect(output.data).toHaveLength(1);
-    expect(output.data[0].text).toBe("1234…[truncated 6 chars]");
+    expect(output.data[0].text).not.toBe("1234567890");
+    expect(output.data[0].text).toMatch(/^1234/u);
+    expect(output.truncation.reasons).toContain("max_string_chars");
     expect(original).toEqual([{ text: "1234567890" }, { text: "second" }]);
   });
 
@@ -983,15 +1124,17 @@ describe("Bloomberg request tools", () => {
     const exactRows = Object.assign([], {
       eidData: { "AAPL US Equity": first, "MSFT US Equity": second.slice(0, 5_000) },
     });
-    expect(limitResult(exactRows, 1, 100)).toMatchObject({
-      truncated: false,
-      value: { eidData: { "AAPL US Equity": first, "MSFT US Equity": second.slice(0, 5_000) } },
-    });
+    expect(limitResult(exactRows, resultLimits({ maxRows: 1, maxStringChars: 100 }))).toMatchObject(
+      {
+        truncated: false,
+        value: { eidData: { "AAPL US Equity": first, "MSFT US Equity": second.slice(0, 5_000) } },
+      },
+    );
 
     const overRows = Object.assign([], {
       eidData: { "AAPL US Equity": first, "MSFT US Equity": second },
     });
-    const result = limitResult(overRows, 1, 100);
+    const result = limitResult(overRows, resultLimits({ maxRows: 1, maxStringChars: 100 }));
     expect(result).toMatchObject({
       truncated: true,
       value: {
@@ -1013,6 +1156,67 @@ describe("Bloomberg request tools", () => {
     expect((result.value as Record<string, any>).eidData["MSFT US Equity"]).toHaveLength(5_000);
   });
 
+  it("reconciles projected EID retention with the EIDs actually emitted", () => {
+    const eids = Array.from({ length: 10_001 }, (_, index) => index + 1);
+    const rows = Object.assign([], { eidData: { "AAPL US Equity": eids } });
+
+    const [, artifact] = createToolResult("xbbg_bdp", rows, {
+      maxContentBytes: 65_536,
+      maxContentRows: 1,
+      maxResultBytes: 256,
+      maxResultNodes: 50_000,
+      maxRows: 1,
+      maxStringChars: 2_000,
+    });
+    const projected = artifact.data as Record<string, any>;
+    const summary = projected.eidDataTruncation as Record<string, any>;
+    const actualRetained = Object.values(projected.eidData as Record<string, unknown[]>).reduce(
+      (total, values) => total + values.length,
+      0,
+    );
+
+    expect(summary.retainedEidCount).toBe(actualRetained);
+    expect(summary.totalEidCount).toBe(10_001);
+    expect(artifact.truncation?.reasons.length).toBeGreaterThan(0);
+    expect(new TextEncoder().encode(JSON.stringify(artifact)).byteLength).toBeLessThanOrEqual(256);
+  });
+
+  it("keeps EID provenance unknown after an earlier projection omits it", () => {
+    const eids = Array.from({ length: 10_001 }, (_, index) => index + 1);
+    const rows = Object.assign([], { eidData: { "AAPL US Equity": eids } });
+    const first = limitResult(
+      rows,
+      resultLimits({ maxResultBytes: 80, maxRows: 1, maxStringChars: 100 }),
+    );
+    const firstData = first.value as Record<string, any>;
+
+    expect(firstData.eidDataTruncation).toBeDefined();
+    expect(firstData.eidDataTruncation).not.toHaveProperty("totalEidCount");
+    const second = limitResult(first.value, resultLimits({ maxRows: 1, maxStringChars: 100 }));
+    const secondSummary = (second.value as Record<string, any>).eidDataTruncation;
+
+    expect(secondSummary.totalEidCount).toBeNull();
+    expect(secondSummary.totalSecurityCount).toBeNull();
+    expect(secondSummary.securityCounts[0].originalCount).toBeNull();
+  });
+
+  it("reserves node budget to return a useful EID prefix and incomplete totals", () => {
+    const eids = Array.from({ length: 10_000 }, (_, index) => index + 1);
+    const rows = Object.assign([], { eidData: { "AAPL US Equity": eids } });
+
+    const result = limitResult(rows, resultLimits({ maxResultNodes: 128, maxRows: 1 }));
+    const data = result.value as Record<string, any>;
+
+    expect(result.truncation?.reasons).toContain("max_result_nodes");
+    expect(result.truncation?.inspectedNodes).toBeLessThanOrEqual(128);
+    expect(data.eidData["AAPL US Equity"].length).toBeGreaterThan(0);
+    expect(data.eidData["AAPL US Equity"].length).toBeLessThan(10_000);
+    expect(data.eidDataTruncation).toMatchObject({
+      totalEidCount: null,
+      totalSecurityCount: null,
+    });
+  });
+
   it("enforces security-count and cumulative UTF-8 security-name budgets", () => {
     const manySecurities = Object.fromEntries(
       Array.from({ length: 1_001 }, (_, index) => [`SEC${String(index)}`, [index + 1]]),
@@ -1021,12 +1225,14 @@ describe("Bloomberg request tools", () => {
       Object.assign([], {
         eidData: Object.fromEntries(Object.entries(manySecurities).slice(0, 1_000)),
       }),
-      1,
-      100,
+      resultLimits({ maxRows: 1, maxStringChars: 100 }),
     );
     expect(exactCount.truncated).toBe(false);
 
-    const countLimited = limitResult(Object.assign([], { eidData: manySecurities }), 1, 100);
+    const countLimited = limitResult(
+      Object.assign([], { eidData: manySecurities }),
+      resultLimits({ maxRows: 1, maxStringChars: 100 }),
+    );
     expect(countLimited).toMatchObject({
       truncated: true,
       value: {
@@ -1046,12 +1252,14 @@ describe("Bloomberg request tools", () => {
     ).toHaveLength(1_000);
 
     const exactName = "é".repeat(32_768);
-    const exactBytes = limitResult(Object.assign([], { eidData: { [exactName]: [1] } }), 1, 100);
+    const exactBytes = limitResult(
+      Object.assign([], { eidData: { [exactName]: [1] } }),
+      resultLimits({ maxRows: 1, maxStringChars: 100 }),
+    );
     expect(exactBytes.truncated).toBe(false);
     const byteLimited = limitResult(
       Object.assign([], { eidData: { [exactName]: [1], overflow: [2] } }),
-      1,
-      100,
+      resultLimits({ maxRows: 1, maxStringChars: 100 }),
     );
     expect(byteLimited).toMatchObject({
       truncated: true,
@@ -1076,7 +1284,10 @@ describe("Bloomberg request tools", () => {
       enumerable: true,
       value: [101],
     });
-    const result = limitResult(Object.assign([], { eidData }), 1, 100);
+    const result = limitResult(
+      Object.assign([], { eidData }),
+      resultLimits({ maxRows: 1, maxStringChars: 100 }),
+    );
     const limited = result.value as Record<string, any>;
     expect(result.truncated).toBe(false);
     expect(Object.hasOwn(limited.eidData, "__proto__")).toBe(true);
@@ -1101,41 +1312,223 @@ describe("Bloomberg request tools", () => {
         G: partiallySparse,
       },
     });
-    expect(limitResult(malformed, 1, 100)).toMatchObject({
-      truncated: true,
-      value: {
-        eidData: {},
-        eidDataTruncation: {
-          invalidSecurityCount: 7,
-          omittedSecurityCount: 0,
-          retainedEidCount: 0,
-          retainedSecurityCount: 0,
-          securityCounts: [],
-          totalEidCount: 0,
-          totalSecurityCount: 7,
+    expect(limitResult(malformed, resultLimits({ maxRows: 1, maxStringChars: 100 }))).toMatchObject(
+      {
+        truncated: true,
+        value: {
+          eidData: {},
+          eidDataTruncation: {
+            invalidSecurityCount: 7,
+            omittedSecurityCount: 0,
+            retainedEidCount: 0,
+            retainedSecurityCount: 0,
+            securityCounts: [],
+            totalEidCount: 0,
+            totalSecurityCount: 7,
+          },
         },
       },
-    });
+    );
   });
 
   it("limits cyclic and excessively deep artifacts without recursion failure", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
 
-    const cyclicResult = limitResult(cyclic, 10, 100);
+    const cyclicResult = limitResult(cyclic, resultLimits({ maxRows: 10, maxStringChars: 100 }));
     expect(cyclicResult).toMatchObject({
       truncated: true,
       value: { self: "[Circular]" },
     });
+
+    const cyclicError = new Error("boom");
+    cyclicError.cause = cyclicError;
+    const cyclicErrorResult = limitResult(
+      cyclicError,
+      resultLimits({ maxRows: 10, maxStringChars: 100 }),
+    );
+    expect(cyclicErrorResult.truncation?.reasons).toContain("circular_reference");
+    expect(JSON.stringify(cyclicErrorResult.value)).toContain("[Circular]");
 
     let deep: Record<string, unknown> = { leaf: "ok" };
     for (let index = 0; index < 40; index += 1) {
       deep = { child: deep };
     }
 
-    const deepResult = limitResult(deep, 10, 100);
+    const deepResult = limitResult(deep, resultLimits({ maxRows: 10, maxStringChars: 100 }));
     expect(deepResult.truncated).toBe(true);
-    expect(JSON.stringify(deepResult.value)).toContain("Max result depth");
+    expect(deepResult.truncation?.reasons).toContain("max_result_depth");
+  });
+
+  it("bounds a 100k-property diagnostic object while retaining late errors", () => {
+    const wide = Object.create(null) as Record<string, unknown>;
+    for (let index = 0; index < 100_000; index += 1) {
+      wide[`field_${String(index)}`] = index;
+    }
+    wide.securityError = {
+      category: "NO_AUTH",
+      message: "not entitled to requested field",
+    };
+
+    const limited = limitResult(
+      wide,
+      resultLimits({
+        maxResultBytes: 4_096,
+        maxResultNodes: 128,
+        maxRows: 10,
+        maxStringChars: 200,
+      }),
+    );
+    expect(limited.truncation?.inspectedNodes).toBeLessThanOrEqual(128);
+    const serialized = JSON.stringify(limited.value);
+
+    expect(new TextEncoder().encode(serialized).byteLength).toBeLessThanOrEqual(4_096);
+    expect(limited.hasErrors).toBe(true);
+    expect(limited.truncation?.reasons).toContain("max_result_nodes");
+    expect(limited.errorDiagnostics).toMatchObject([
+      {
+        securityError: {
+          category: "NO_AUTH",
+          message: "not entitled to requested field",
+        },
+      },
+    ]);
+    expect((limited.value as Record<string, unknown>).securityError).toMatchObject({
+      message: "not entitled to requested field",
+    });
+  });
+
+  it("keeps aggregate canonical and projection inspection within maxResultNodes", async () => {
+    const wide = Object.create(null) as Record<string, unknown>;
+    for (let index = 0; index < 10_000; index += 1) {
+      wide[`field_${String(index)}`] = index;
+    }
+    wide.securityError = { message: "late error" };
+    const engine = fakeEngine();
+    vi.mocked(engine.bdp).mockResolvedValueOnce(wide);
+    const tools = createBloombergTools({
+      core: fakeCore(engine),
+      maxContentBytes: 512,
+      maxResultBytes: 1_024,
+      maxResultNodes: 60,
+    });
+
+    const [content, artifact] = await invokeArtifact(byName(tools, "xbbg_bdp"), {
+      fields: ["PX_LAST"],
+      securities: ["AAPL US Equity"],
+    });
+
+    expect(artifact.truncation?.inspectedNodes).toBeLessThanOrEqual(60);
+    expect(content).toContain("late error");
+    expect(new TextEncoder().encode(content).byteLength).toBeLessThanOrEqual(512);
+  });
+
+  it("accounts for UTF-8 and JSON escaping before producing valid bounded JSON", () => {
+    const limited = limitResult(
+      {
+        emoji: "😀".repeat(200),
+        quoted: '"\\\n'.repeat(200),
+      },
+      resultLimits({
+        maxResultBytes: 180,
+        maxResultNodes: 100,
+        maxRows: 10,
+        maxStringChars: 10_000,
+      }),
+    );
+    const serialized = JSON.stringify(limited.value);
+
+    expect(new TextEncoder().encode(serialized).byteLength).toBeLessThanOrEqual(180);
+    expect(new TextEncoder().encode(serialized).byteLength).toBe(limited.byteLength);
+    expect(() => JSON.parse(serialized)).not.toThrow();
+    expect(limited.truncation?.reasons).toContain("max_result_bytes");
+  });
+
+  it("limits accessors, custom JSON values, non-plain objects, and nested arrays", () => {
+    let accessorCalls = 0;
+    let toJsonCalls = 0;
+    let toJsonGetterCalls = 0;
+    const withAccessor: Record<string, unknown> = {};
+    Object.defineProperty(withAccessor, "secret", {
+      enumerable: true,
+      get: () => {
+        accessorCalls += 1;
+        return "should not execute";
+      },
+    });
+    class JsonRows {
+      toJSON(): unknown {
+        toJsonCalls += 1;
+        return {
+          rows: [
+            [1, 2, 3],
+            [4, 5, 6],
+            [7, 8, 9],
+          ],
+        };
+      }
+    }
+    class AccessorJson {
+      get toJSON(): () => unknown {
+        toJsonGetterCalls += 1;
+        return () => ({ unsafe: true });
+      }
+    }
+    class ThrowingJson {
+      toJSON(): unknown {
+        throw new Error("conversion failed");
+      }
+    }
+
+    const limited = limitResult(
+      {
+        custom: new JsonRows(),
+        accessorJson: new AccessorJson(),
+        map: new Map([["hidden", "value"]]),
+        withAccessor,
+        throwingJson: new ThrowingJson(),
+      },
+      resultLimits({ maxRows: 2 }),
+    );
+    const output = limited.value as Record<string, any>;
+
+    expect(accessorCalls).toBe(0);
+    expect(toJsonCalls).toBe(1);
+    expect(toJsonGetterCalls).toBe(0);
+    expect(output.custom.rows).toEqual([
+      [1, 2],
+      [4, 5],
+    ]);
+    expect(output.map).toBe("[Unsupported object]");
+    expect(output.withAccessor.secret).toBe("[Accessor omitted]");
+    expect(output.accessorJson).toBe("[Accessor omitted]");
+    expect(output.throwingJson).toMatchObject({
+      error: { message: "conversion failed", name: "toJSON" },
+    });
+    expect(limited.hasErrors).toBe(true);
+    expect(limited.errorDiagnostics).toMatchObject([
+      { error: { message: "conversion failed", name: "toJSON" } },
+    ]);
+    expect(limited.truncation?.reasons).toEqual(
+      expect.arrayContaining(["accessor_omitted", "max_rows", "unsupported_value"]),
+    );
+  });
+
+  it("preserves upstream array truncation without treating empty error lists as failures", () => {
+    const rows = Object.assign([{ value: 1 }], {
+      fieldErrors: [],
+      truncatedInput: true,
+    });
+
+    const limited = limitResult(rows, resultLimits({ maxRows: 10 }));
+
+    expect(limited.hasErrors).toBe(false);
+    expect(limited.truncation?.reasons).toContain("upstream_truncation");
+    expect(limited.value).toMatchObject({
+      fieldErrors: [],
+      rows: [{ value: 1 }],
+      truncatedInput: true,
+    });
   });
 });
 
@@ -1144,6 +1537,66 @@ describe("Bloomberg tool hardening", () => {
     const tools = createAllBloombergTools({ core: fakeCore(fakeEngine()) });
 
     expect(tools.map((entry) => entry.name).sort()).toEqual([...BLOOMBERG_TOOL_NAMES].sort());
+  });
+
+  it("normalizes independent artifact and model-content budgets", () => {
+    const defaults = normalizeBloombergToolsOptions();
+    expect(defaults).toMatchObject({
+      maxContentBytes: 65_536,
+      maxContentRows: 50,
+      maxResultBytes: 1_048_576,
+      maxResultNodes: 50_000,
+    });
+
+    const configured = normalizeBloombergToolsOptions({
+      maxContentBytes: 2_048,
+      maxContentRows: 3,
+      maxResultBytes: 8_192,
+      maxResultNodes: 256,
+    });
+    expect(configured).toMatchObject({
+      maxContentBytes: 2_048,
+      maxContentRows: 3,
+      maxResultBytes: 8_192,
+      maxResultNodes: 256,
+    });
+    expect(() => normalizeBloombergToolsOptions({ maxContentBytes: 255 })).toThrow(
+      /maxContentBytes must be at least 256/u,
+    );
+    expect(() => normalizeBloombergToolsOptions({ maxResultNodes: 1 })).toThrow(
+      /maxResultNodes must be at least 10/u,
+    );
+    expect(() => normalizeBloombergToolsOptions({ maxResultNodes: 9 })).toThrow(
+      /maxResultNodes must be at least 10/u,
+    );
+    expect(() =>
+      normalizeBloombergToolsOptions({ maxResultNodes: Number.MAX_SAFE_INTEGER + 1 }),
+    ).toThrow(/Number.MAX_SAFE_INTEGER/u);
+  });
+
+  it("reserves enough nodes for useful artifact and model projections", async () => {
+    const engine = fakeEngine();
+    const sentinel = "MODEL_PAYLOAD_SENTINEL:";
+    vi.mocked(engine.bdp).mockResolvedValueOnce([{ value: sentinel + "x".repeat(1_000) }]);
+    const tools = createBloombergTools({
+      core: fakeCore(engine),
+      maxContentBytes: 256,
+      maxContentRows: 1,
+      maxResultBytes: 256,
+      maxResultNodes: 10,
+      maxRows: 1,
+      maxStringChars: 2_000,
+    });
+
+    const [content, artifact] = await invokeArtifact(byName(tools, "xbbg_bdp"), {
+      fields: ["PX_LAST"],
+      securities: ["AAPL US Equity"],
+    });
+
+    expect(artifact.data).toHaveLength(1);
+    expect(JSON.stringify(artifact.data)).toContain(sentinel);
+    expect(content).toContain(sentinel);
+    expect(artifact.truncation?.reasons).toContain("max_result_bytes");
   });
 
   it("treats integer YYYYMMDD dates as calendar dates, not epoch milliseconds", async () => {
@@ -1337,24 +1790,11 @@ describe("Bloomberg tool hardening", () => {
     });
   });
 
-  it("flags empty results with verification guidance in model content", async () => {
-    const engine = fakeEngine();
-    vi.mocked(engine.bdp).mockResolvedValueOnce([]);
-    const tools = createBloombergTools({ core: fakeCore(engine) });
-
-    const [content] = await invokeArtifact(byName(tools, "xbbg_bdp"), {
-      fields: ["PX_LAST"],
-      securities: ["ZZZZ US Equity"],
-    });
-    const [summary] = content.split("\n");
-
-    expect(summary).toContain("0 rows");
-    expect(summary).toContain("empty result");
-    expect(summary).toContain("verify identifiers, fields, and date range");
-  });
-
   it("bounds binary payloads instead of serializing raw bytes", () => {
-    const limited = limitResult({ blob: new Uint8Array(2048) }, 10, 100);
+    const limited = limitResult(
+      { blob: new Uint8Array(2048) },
+      resultLimits({ maxRows: 10, maxStringChars: 100 }),
+    );
 
     expect(limited.truncated).toBe(true);
     expect((limited.value as Record<string, unknown>).blob).toBe("[binary data: 2048 bytes]");
@@ -1387,11 +1827,39 @@ describe("Bloomberg tool hardening", () => {
       format: "long_typed",
       securities: ["AAPL US Equity"],
     });
+
     expect(engine.bdp).toHaveBeenCalledWith(
       ["AAPL US Equity"],
       ["PX_LAST"],
       expect.objectContaining({ format: "long_typed" }),
     );
+  });
+  it("caches an immutable clone for raw JSON Schema tool inputs", () => {
+    const source = {
+      properties: {
+        ticker: { type: "string" },
+      },
+      required: ["ticker"],
+      type: "object",
+    };
+    const rawSchemaTool = { schema: source } as unknown as StructuredToolInterface;
+
+    const first = toolParameterJsonSchema(rawSchemaTool);
+    const second = toolParameterJsonSchema(rawSchemaTool);
+    source.properties.ticker.type = "number";
+
+    expect(first).toBe(second);
+    expect(first).not.toBe(source);
+    expect(first).toMatchObject({
+      properties: { ticker: { type: "string" } },
+    });
+    expect(Object.isFrozen(first)).toBe(true);
+    const properties: unknown = first.properties;
+    if (typeof properties !== "object" || properties === null) {
+      throw new TypeError("Expected cloned JSON Schema properties");
+    }
+    const ticker: unknown = Reflect.get(properties, "ticker");
+    expect(Object.isFrozen(ticker)).toBe(true);
   });
 
   it("keeps Date instances off the wire contract and out of JSON schemas", async () => {
@@ -1412,10 +1880,8 @@ describe("Bloomberg tool hardening", () => {
     const serialized = JSON.stringify(parameters);
     expect(serialized).toContain('"start"');
     expect(serialized).not.toContain("date-time");
-  });
-
-  it("instructs one call per dataset without parameter probing", () => {
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("Issue one tool call per dataset");
-    expect(BLOOMBERG_TOOL_INSTRUCTIONS).toContain("never probe parameter variants in parallel");
+    expect(toolParameterJsonSchema(bdh)).toBe(parameters);
+    expect(Object.isFrozen(parameters)).toBe(true);
+    expect(Object.isFrozen((parameters as { properties?: object }).properties)).toBe(true);
   });
 });

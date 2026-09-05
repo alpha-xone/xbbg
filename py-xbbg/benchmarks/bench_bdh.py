@@ -7,9 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-import statistics
-import time
-import tracemalloc
 
 logger = logging.getLogger(__name__)
 
@@ -23,100 +20,31 @@ from config import (
     TICKERS_SINGLE,
     WARMUP_ITERATIONS,
 )
+from benchmark_contracts import LiveMeasurement, measure_live_call, reused_pdblp_connection
 
 
 @dataclass
-class BenchmarkResult:
-    """Result from a benchmark run."""
-
+class BenchmarkResult(LiveMeasurement):
     package: str
     operation: str
-    cold_start_ms: float
-    warm_mean_ms: float
-    warm_median_ms: float
-    warm_p95_ms: float
-    warm_p99_ms: float
-    warm_std_ms: float
-    memory_peak_mb: float
-    data_shape: tuple
     iterations: int
 
 
 def benchmark_bdh(package_name: str, bdh_func, tickers, fields, start_date, end_date) -> BenchmarkResult | None:
-    """Benchmark BDH operation.
-
-    Args:
-        package_name: Name of package being benchmarked
-        bdh_func: Function to call for bdh(tickers, fields, start, end)
-        tickers: List of tickers or single ticker
-        fields: List of fields or single field
-        start_date: Start date
-        end_date: End date
-
-    Returns:
-        BenchmarkResult with timing and memory stats
-    """
-    times = []
-    result = None
-
-    # Start memory tracking
-    tracemalloc.start()
-
-    # Warmup (discarded). A None result means the package is not installed
-    # (or errored) - skip the lane instead of timing a no-op.
-    for _ in range(WARMUP_ITERATIONS):
-        if bdh_func(tickers, fields, start_date, end_date) is None:
-            tracemalloc.stop()
-            return None
-
-    # Measured iterations
-    for _i in range(ITERATIONS):
-        start = time.perf_counter()
-        result = bdh_func(tickers, fields, start_date, end_date)
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        times.append(elapsed_ms)
-
-    # Get memory usage
-    _current, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    memory_mb = peak / 1024 / 1024
-
-    # Get result shape
-    if hasattr(result, "shape"):
-        shape = result.shape
-    elif hasattr(result, "__len__"):
-        shape = (len(result),)
-    else:
-        shape = (1,)
-
-    # Calculate statistics
-    cold_start = times[0]
-    warm_times = times[1:] if len(times) > 1 else times
-    warm_mean = statistics.mean(warm_times)
-    warm_median = statistics.median(warm_times)
-    warm_std = statistics.stdev(warm_times) if len(warm_times) > 1 else 0
-
-    # Percentiles
-    sorted_times = sorted(warm_times)
-    p95_idx = int(len(sorted_times) * 0.95)
-    p99_idx = int(len(sorted_times) * 0.99)
-    warm_p95 = sorted_times[p95_idx] if sorted_times else warm_mean
-    warm_p99 = sorted_times[p99_idx] if sorted_times else warm_mean
-
-    num_tickers = len(tickers) if isinstance(tickers, list) else 1
-    num_fields = len(fields) if isinstance(fields, list) else 1
-
+    measurement = measure_live_call(
+        bdh_func,
+        (tickers, fields, start_date, end_date),
+        iterations=ITERATIONS,
+        warmup_iterations=WARMUP_ITERATIONS,
+    )
+    if measurement is None:
+        return None
+    ticker_count = len(tickers) if isinstance(tickers, list) else 1
+    field_count = len(fields) if isinstance(fields, list) else 1
     return BenchmarkResult(
+        **vars(measurement),
         package=package_name,
-        operation=f"bdh({num_tickers}t, {num_fields}f, {start_date} to {end_date})",
-        cold_start_ms=cold_start,
-        warm_mean_ms=warm_mean,
-        warm_median_ms=warm_median,
-        warm_p95_ms=warm_p95,
-        warm_p99_ms=warm_p99,
-        warm_std_ms=warm_std,
-        memory_peak_mb=memory_mb,
-        data_shape=shape,
+        operation=f"bdh({ticker_count}t, {field_count}f, {start_date} to {end_date})",
         iterations=ITERATIONS,
     )
 
@@ -140,35 +68,14 @@ def run_xbbg_legacy(tickers, fields, start_date, end_date):
 
 
 def run_pdblp(tickers, fields, start_date, end_date):
-    """Benchmark pdblp."""
     try:
-        import pdblp
-
-        con = pdblp.BCon(debug=False, timeout=5000)
-        con.start()
-
+        con = reused_pdblp_connection()
         ticker_list = tickers if isinstance(tickers, list) else [tickers]
         field_list = fields if isinstance(fields, list) else [fields]
-
-        result = con.bdh(ticker_list, field_list, start_date, end_date)
-        con.stop()
-        return result
+        return con.bdh(ticker_list, field_list, start_date, end_date)
     except ImportError:
         logger.warning("pdblp not installed")
         return None
-
-
-def run_bbg_fetch(tickers, fields, start_date, end_date):
-    """Benchmark bbg-fetch."""
-    try:
-        import bbg_fetch  # noqa: F401
-
-        # bbg-fetch API needs adaptation
-        logger.warning("bbg-fetch wrapper not implemented yet")
-        return
-    except ImportError:
-        logger.warning("bbg-fetch not installed")
-        return
 
 
 def main():
@@ -193,7 +100,7 @@ def main():
             if result:
                 results.append(result)
                 logger.info(
-                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB, shape={result.data_shape}"
+                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB, shape={result.data_shape}"
                 )
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
@@ -207,7 +114,7 @@ def main():
             if result:
                 results.append(result)
                 logger.info(
-                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB, shape={result.data_shape}"
+                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB, shape={result.data_shape}"
                 )
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
@@ -219,7 +126,7 @@ def main():
             if result:
                 results.append(result)
                 logger.info(
-                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB, shape={result.data_shape}"
+                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB, shape={result.data_shape}"
                 )
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
@@ -235,7 +142,7 @@ def main():
             if result:
                 results.append(result)
                 logger.info(
-                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB, shape={result.data_shape}"
+                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB, shape={result.data_shape}"
                 )
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
@@ -247,7 +154,7 @@ def main():
             if result:
                 results.append(result)
                 logger.info(
-                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB, shape={result.data_shape}"
+                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB, shape={result.data_shape}"
                 )
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
@@ -259,7 +166,7 @@ def main():
             if result:
                 results.append(result)
                 logger.info(
-                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB, shape={result.data_shape}"
+                    f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB, shape={result.data_shape}"
                 )
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
@@ -271,10 +178,13 @@ def main():
 
     for result in results:
         logger.info(f"\n{result.package} - {result.operation}")
-        logger.info(f"  Cold start: {result.cold_start_ms:.2f}ms")
+        logger.info(
+            f"  Fresh-process first result: {result.fresh_process_first_result_ms:.2f}ms "
+            f"({result.fresh_process_sample_count} sample)"
+        )
         logger.info(f"  Warm mean:  {result.warm_mean_ms:.2f}ms ± {result.warm_std_ms:.2f}ms")
-        logger.info(f"  Warm p95:   {result.warm_p95_ms:.2f}ms")
-        logger.info(f"  Memory:     {result.memory_peak_mb:.2f}MB")
+        logger.info(f"  Warm max:   {result.warm_max_ms:.2f}ms ({result.warm_sample_count} samples)")
+        logger.info(f"  CPython tracemalloc peak (untimed call): {result.python_tracemalloc_peak_mb:.2f}MB")
         logger.info(f"  Shape:      {result.data_shape}")
 
     # Calculate speedups

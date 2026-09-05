@@ -43,7 +43,7 @@ use exchange_cache::ExchangeCache;
 pub use crate::services::ExtractorType;
 
 pub(crate) use request_plan::{PlannedRequestShape, PreparedRequest, PreparedRequestBuilder};
-pub use request_pool::RequestWorkerPool;
+pub use request_pool::{RequestStream, RequestWorkerPool};
 use state::typed_builder::{ArrowType, TypedBuilder};
 use state::SubscriptionMetrics;
 pub use state::{
@@ -186,9 +186,9 @@ pub enum OverflowPolicy {
     /// Drop the newest data when buffer is full (default, non-blocking)
     #[default]
     DropNewest,
-    /// Bounded producer-side backoff for full buffers. Bloomberg delivers
-    /// subscription data on an SDK callback thread, so this policy retries only
-    /// for a short fixed window before recording a slow-consumer drop.
+    /// Wait up to a short fixed window on a bounded forwarding task before
+    /// recording a slow-consumer drop. The Bloomberg SDK callback only enqueues
+    /// and never waits on the downstream consumer.
     Block,
 }
 
@@ -413,6 +413,7 @@ pub struct SubscriptionStatusState {
     topics: Vec<String>,
     topic_to_key: HashMap<String, SlabKey>,
     key_to_topic: HashMap<SlabKey, String>,
+    pending_key_to_topic: HashMap<SlabKey, String>,
     metrics: HashMap<SlabKey, Arc<SubscriptionMetrics>>,
     failures: Vec<SubscriptionFailureInfo>,
     topic_states: HashMap<String, TopicStatusInfo>,
@@ -446,8 +447,11 @@ impl SubscriptionStatusHandle {
     }
 
     pub fn store(&self, next: Arc<SubscriptionStatusState>) {
-        let _guard = self.mutation_lock.lock();
-        self.snapshot.store(next);
+        let previous = {
+            let _guard = self.mutation_lock.lock();
+            self.snapshot.swap(next)
+        };
+        drop(previous);
     }
 
     pub fn update(&self, mutate: impl FnOnce(&mut SubscriptionStatusState)) {
@@ -457,11 +461,15 @@ impl SubscriptionStatusHandle {
     }
 
     pub fn update_with<R>(&self, mutate: impl FnOnce(&mut SubscriptionStatusState) -> R) -> R {
-        let _guard = self.mutation_lock.lock();
-        let current = self.snapshot.load();
-        let mut next = (**current).clone();
-        let result = mutate(&mut next);
-        self.snapshot.store(Arc::new(next));
+        let (result, previous) = {
+            let _guard = self.mutation_lock.lock();
+            let current = self.snapshot.load_full();
+            let mut next = (*current).clone();
+            let result = mutate(&mut next);
+            let previous = self.snapshot.swap(Arc::new(next));
+            (result, previous)
+        };
+        drop(previous);
         result
     }
 }
@@ -477,6 +485,7 @@ impl SubscriptionStatusState {
             topics,
             topic_to_key: HashMap::new(),
             key_to_topic: HashMap::new(),
+            pending_key_to_topic: HashMap::new(),
             metrics,
             failures: Vec::new(),
             topic_states: HashMap::new(),
@@ -515,8 +524,13 @@ impl SubscriptionStatusState {
         metrics: Vec<Arc<SubscriptionMetrics>>,
     ) {
         let now = timestamp_now_us();
+        if self.keys.is_empty() {
+            self.session.state = SessionLifecycleState::Up;
+            self.session.last_change_us = now;
+        }
         for ((topic, key), metric) in topics.iter().zip(keys.iter()).zip(metrics) {
             self.topic_to_key.insert(topic.clone(), *key);
+            self.pending_key_to_topic.remove(key);
             self.key_to_topic.insert(*key, topic.clone());
             self.topics.push(topic.clone());
             self.keys.push(*key);
@@ -549,7 +563,14 @@ impl SubscriptionStatusState {
     /// terminal path can report a final lifecycle state), this also drops the
     /// `topic_states` entry so the topic disappears from [`Self::topic_statuses`].
     pub fn drop_topic(&mut self, topic: &str) -> Option<SlabKey> {
-        let key = self.remove_topic(topic);
+        let key = self.remove_topic(topic).or_else(|| {
+            let key = self
+                .pending_key_to_topic
+                .iter()
+                .find_map(|(key, pending)| (pending == topic).then_some(*key))?;
+            self.pending_key_to_topic.remove(&key);
+            Some(key)
+        });
         self.topic_states.remove(topic);
         key
     }
@@ -579,7 +600,10 @@ impl SubscriptionStatusState {
     }
 
     fn finalize_key(&mut self, key: SlabKey) -> Option<String> {
-        let topic = self.key_to_topic.remove(&key)?;
+        let topic = self
+            .key_to_topic
+            .remove(&key)
+            .or_else(|| self.pending_key_to_topic.remove(&key))?;
         self.topic_to_key.remove(&topic);
         self.topics.retain(|existing| existing != &topic);
         self.keys.retain(|existing| *existing != key);
@@ -651,8 +675,12 @@ impl SubscriptionStatusState {
     }
 
     pub fn mark_topic_unsubscribing(&mut self, key: SlabKey) -> Option<String> {
-        let topic = self.topic_for_key(key)?.to_string();
-        let _ = self.remove_topic(&topic);
+        let topic = self.key_to_topic.remove(&key)?;
+        self.topic_to_key.remove(&topic);
+        self.topics.retain(|existing| existing != &topic);
+        self.keys.retain(|existing| *existing != key);
+        self.metrics.remove(&key);
+        self.pending_key_to_topic.insert(key, topic.clone());
         self.update_topic_state(&topic, TopicLifecycleState::Unsubscribing);
         Some(topic)
     }
@@ -1157,8 +1185,13 @@ pub struct EngineConfig {
     pub overflow_policy: OverflowPolicy,
     /// Number of request workers (default: 2)
     pub request_pool_size: usize,
-    /// Number of subscription sessions (default: 4)
+    /// Number of Tokio runtime worker threads used by the engine (default: 2).
+    pub runtime_worker_threads: usize,
+    /// Number of pre-warmed subscription sessions (default: 1)
     pub subscription_pool_size: usize,
+    /// Maximum live subscription sessions, including checked-out sessions
+    /// (default: 32). `subscription_pool_size` is only the pre-warm count.
+    pub max_subscription_sessions: usize,
     /// Enable request sharding for eligible multi-security reference/history requests.
     /// Default: false (opt-in).
     pub shard_requests: bool,
@@ -1227,6 +1260,31 @@ pub struct EngineConfig {
 
 impl EngineConfig {
     pub fn validate(&self) -> Result<(), BlpAsyncError> {
+        if self.request_pool_size == 0 {
+            return Err(BlpAsyncError::ConfigError {
+                detail: "request_pool_size must be greater than zero".to_string(),
+            });
+        }
+        if self.runtime_worker_threads == 0 {
+            return Err(BlpAsyncError::ConfigError {
+                detail: "runtime_worker_threads must be greater than zero".to_string(),
+            });
+        }
+        if self.max_subscription_sessions == 0 {
+            return Err(BlpAsyncError::ConfigError {
+                detail: "max_subscription_sessions must be greater than zero".to_string(),
+            });
+        }
+        if self.subscription_pool_size > self.max_subscription_sessions {
+            return Err(BlpAsyncError::ConfigError {
+                detail: "max_subscription_sessions must be greater than or equal to subscription_pool_size".to_string(),
+            });
+        }
+        if self.command_queue_size == 0 {
+            return Err(BlpAsyncError::ConfigError {
+                detail: "command_queue_size must be greater than zero".to_string(),
+            });
+        }
         if self.subscription_stream_capacity == 0 {
             return Err(BlpAsyncError::ConfigError {
                 detail: "subscription_stream_capacity must be greater than zero".to_string(),
@@ -1262,7 +1320,9 @@ impl Default for EngineConfig {
             subscription_stream_capacity: 256,
             overflow_policy: OverflowPolicy::default(),
             request_pool_size: 2,
+            runtime_worker_threads: 2,
             subscription_pool_size: 1,
+            max_subscription_sessions: 32,
             shard_requests: false,
             shard_threshold: 20,
             shard_chunk_size: 16,
@@ -1338,8 +1398,7 @@ fn push_security_override_shard(
     }
     let merged_overrides =
         merge_override_pairs(prepared.params().overrides.as_ref(), security_overrides);
-    shards
-        .push(prepared.with_securities_and_overrides(std::mem::take(securities), merged_overrides));
+    shards.push(prepared.for_security_shard(std::mem::take(securities), merged_overrides));
 }
 
 fn security_override_shards(
@@ -1441,7 +1500,9 @@ fn sharded_requests(
     Some(
         chunks
             .into_iter()
-            .map(|securities| prepared.with_securities(securities))
+            .map(|securities| {
+                prepared.for_security_shard(securities, prepared.params().overrides.clone())
+            })
             .collect(),
     )
 }
@@ -1587,6 +1648,8 @@ impl Engine {
         xbbg_log::info!(
             request_pool_size = config.request_pool_size,
             subscription_pool_size = config.subscription_pool_size,
+            max_subscription_sessions = config.max_subscription_sessions,
+            runtime_worker_threads = config.runtime_worker_threads,
             "starting Engine with worker pools"
         );
 
@@ -1616,10 +1679,12 @@ impl Engine {
         // connection behind an unrelated runtime message.
         let rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(config.runtime_worker_threads)
                 .enable_all()
                 .build()
                 .map_err(|e| BlpAsyncError::Internal(format!("tokio runtime: {e}")))?,
         );
+        subscription_pool.attach_runtime(rt.handle().clone());
 
         let (shutdown_signal, _) = watch::channel(false);
 
@@ -1704,19 +1769,20 @@ impl Engine {
     }
 
     /// Streaming generic request - dispatches to worker pool.
+    ///
+    /// The returned [`RequestStream`] owns cancellation of the Bloomberg
+    /// request. Dropping or closing it cancels unfinished work.
     pub async fn request_stream(
         &self,
         params: RequestParams,
-    ) -> Result<mpsc::Receiver<Result<RecordBatch, BlpError>>, BlpAsyncError> {
+    ) -> Result<RequestStream, BlpAsyncError> {
         let mut builder = self.prepare_request_builder(params)?;
         self.apply_intraday_request_timezone(&mut builder).await?;
         let out_iana = intraday_timezone::resolve_output_tz_iana(self, builder.params()).await?;
         let prepared = builder.finalize()?;
         self.maybe_validate_request_fields(&prepared).await?;
-        let rx = self.request_pool.request_stream(prepared).await?;
-        Ok(intraday_timezone::wrap_batch_stream_with_output_tz(
-            rx, out_iana,
-        ))
+        let stream = self.request_pool.request_stream(prepared).await?;
+        Ok(stream.with_output_timezone(out_iana))
     }
 
     /// Resolve defaults, validate, schema-route kwargs, and apply field-cache hints.
@@ -1896,24 +1962,15 @@ impl Engine {
             SubscriptionStatusState::default(),
         ));
 
-        // Claim a session from the pool (uses Arc-based claim for 'static
-        // lifetime). Run on the blocking pool: when the pool is exhausted,
-        // claim() spawns a fresh worker and blocks on a full Bloomberg session
-        // startup (seconds), which must not occupy an async executor thread.
-        let pool = Arc::clone(&self.subscription_pool);
-        let mut claim = tokio::task::spawn_blocking(move || pool.claim())
-            .await
-            .map_err(|join_error| {
-                BlpAsyncError::BlpError(BlpError::Internal {
-                    detail: format!("subscription pool claim task failed: {join_error}"),
-                })
-            })??;
+        // Admission waits without consuming a runtime worker. Session startup
+        // itself moves to the blocking pool after a bounded permit is acquired.
+        let mut claim = self.subscription_pool.claim().await?;
 
         // Start the subscription
-        let (keys, raw_metrics) = claim
+        claim
             .subscribe(
                 service.clone(),
-                topics.clone(),
+                topics,
                 fields.clone(),
                 all_fields,
                 options.clone(),
@@ -1923,13 +1980,6 @@ impl Engine {
                 status.clone(),
             )
             .await?;
-
-        let metrics = keys.iter().cloned().zip(raw_metrics).collect();
-        status.store(Arc::new(SubscriptionStatusState::from_active(
-            topics.clone(),
-            keys,
-            metrics,
-        )));
         claim.set_cleanup_status(status.clone());
 
         let stream = SubscriptionStream {
@@ -1994,20 +2044,29 @@ impl Engine {
                 Ok(batch) => {
                     resolver.insert_from_response(&batch);
 
+                    let (_, cache_path) = resolver.stats();
                     let resolver_clone = resolver.clone();
-                    self.runtime().spawn(async move {
-                        match tokio::task::spawn_blocking(move || resolver_clone.save_to_disk())
-                            .await
-                        {
-                            Ok(Ok(())) => {}
-                            Ok(Err(e)) => {
-                                xbbg_log::warn!(error = %e, "Failed to save field cache");
-                            }
-                            Err(e) => {
-                                xbbg_log::warn!(error = %e, "field cache save task failed");
-                            }
+                    match self
+                        .runtime()
+                        .spawn_blocking(move || resolver_clone.save_to_disk())
+                        .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            xbbg_log::warn!(
+                                path = %cache_path.display(),
+                                error = %error,
+                                "failed to persist field cache"
+                            );
                         }
-                    });
+                        Err(error) => {
+                            xbbg_log::warn!(
+                                path = %cache_path.display(),
+                                error = %error,
+                                "field cache save task failed"
+                            );
+                        }
+                    }
                 }
                 Err(e) => {
                     xbbg_log::warn!(error = %e, "Failed to query field types, using defaults");
@@ -2030,8 +2089,8 @@ impl Engine {
     }
 
     /// Clear the field type cache.
-    pub fn clear_field_cache(&self) {
-        crate::field_cache::global_resolver().clear();
+    pub fn clear_field_cache(&self) -> Result<(), String> {
+        crate::field_cache::global_resolver().clear()
     }
 
     /// Save the field type cache to disk.
@@ -2117,53 +2176,65 @@ impl Engine {
         if let Some(schema) = self.schema_cache.get_memory(service) {
             return Ok(schema);
         }
+        let _load_guard = self.schema_cache.lock_load().await;
+        if let Some(schema) = self.schema_cache.get_memory(service) {
+            return Ok(schema);
+        }
 
-        let cache_dir = self.schema_cache.cache_dir();
+        let cache_for_load = self.schema_cache.clone();
         let service_for_load = service.to_string();
         match self
             .runtime()
-            .spawn_blocking(move || {
-                crate::schema::SchemaCache::with_cache_dir(cache_dir).get(&service_for_load)
-            })
+            .spawn_blocking(move || cache_for_load.get(&service_for_load))
             .await
         {
-            Ok(Some(schema)) => {
-                return Ok(self.schema_cache.insert_memory(service, (*schema).clone()));
-            }
+            Ok(Some(schema)) => return Ok(schema),
             Ok(None) => {}
-            Err(e) => {
-                xbbg_log::warn!(service, error = %e, "schema cache load task failed");
+            Err(error) => {
+                xbbg_log::warn!(service, error = %error, "schema cache load task failed");
             }
         }
 
-        // Introspect via worker
         let schema = self
             .request_pool
             .introspect_schema(service.to_string())
             .await?;
 
-        let schema = self.schema_cache.insert_memory(service, schema);
         let cache_dir = self.schema_cache.cache_dir();
-        let service_for_disk = service.to_string();
-        let service_for_log = service_for_disk.clone();
-        let schema_for_disk = schema.clone();
-        self.runtime().spawn(async move {
-            match tokio::task::spawn_blocking(move || {
-                let cache = crate::schema::SchemaCache::with_cache_dir(cache_dir);
-                cache.persist(&service_for_disk, &schema_for_disk)
-            })
+        let cache_for_insert = self.schema_cache.clone();
+        let service_for_insert = service.to_string();
+        let schema_for_insert = schema.clone();
+        match self
+            .runtime()
+            .spawn_blocking(move || cache_for_insert.insert(&service_for_insert, schema_for_insert))
             .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    xbbg_log::warn!(service = %service_for_log, error = %e, "Failed to persist schema to disk");
-                }
-                Err(e) => {
-                    xbbg_log::warn!(service = %service_for_log, error = %e, "schema cache persist task failed");
-                }
+        {
+            Ok(Ok(schema)) => Ok(schema),
+            Ok(Err(error)) => {
+                xbbg_log::warn!(
+                    service,
+                    path = %cache_dir.display(),
+                    error = %error,
+                    "failed to persist schema cache"
+                );
+                Ok(self
+                    .schema_cache
+                    .get_memory(service)
+                    .unwrap_or_else(|| Arc::new(schema)))
             }
-        });
-        Ok(schema)
+            Err(error) => {
+                xbbg_log::warn!(
+                    service,
+                    path = %cache_dir.display(),
+                    error = %error,
+                    "schema cache insert task failed"
+                );
+                Ok(self
+                    .schema_cache
+                    .get_memory(service)
+                    .unwrap_or_else(|| self.schema_cache.insert_memory(service, schema)))
+            }
+        }
     }
 
     /// Get a specific operation's schema from a service.
@@ -2202,13 +2273,13 @@ impl Engine {
     }
 
     /// Invalidate a cached schema (removes from memory and disk).
-    pub fn invalidate_schema(&self, service: &str) {
-        self.schema_cache.invalidate(service);
+    pub fn invalidate_schema(&self, service: &str) -> Result<(), String> {
+        self.schema_cache.invalidate(service)
     }
 
     /// Clear all cached schemas.
-    pub fn clear_schema_cache(&self) {
-        self.schema_cache.clear();
+    pub fn clear_schema_cache(&self) -> Result<(), String> {
+        self.schema_cache.clear()
     }
 
     /// List all cached service URIs.
@@ -2416,6 +2487,27 @@ mod release_runtime_tests {
     }
 }
 
+async fn collect_subscription_updates_until_drained(
+    rx: &mut mpsc::Receiver<Result<SubscriptionUpdate, BlpError>>,
+    barrier: impl std::future::Future<Output = Result<(), BlpAsyncError>>,
+    remaining: &mut Vec<SubscriptionUpdate>,
+) -> Result<(), BlpAsyncError> {
+    tokio::pin!(barrier);
+    loop {
+        tokio::select! {
+            biased;
+            item = rx.recv() => {
+                match item {
+                    Some(Ok(update)) => remaining.push(update),
+                    Some(Err(_)) => {}
+                    None => return barrier.await,
+                }
+            }
+            result = &mut barrier => return result,
+        }
+    }
+}
+
 /// Stream for receiving real-time market data with dynamic subscription control.
 ///
 /// Provides async iteration over incoming data and methods to dynamically
@@ -2510,10 +2602,10 @@ impl SubscriptionStream {
         xbbg_log::debug!(topics = ?new_topics, "adding topics to subscription");
 
         // Add new topics using the same stream sender
-        let (new_keys, new_metrics) = command
+        command
             .add_topics(
                 self.service.clone(),
-                new_topics.clone(),
+                new_topics,
                 self.fields.clone(),
                 self.all_fields,
                 self.options.clone(),
@@ -2523,9 +2615,6 @@ impl SubscriptionStream {
                 self.status.clone(),
             )
             .await?;
-
-        self.status
-            .update(|next| next.add_active(&new_topics, &new_keys, new_metrics.clone()));
 
         Ok(())
     }
@@ -2594,22 +2683,33 @@ impl SubscriptionStream {
     ) -> Result<Vec<SubscriptionUpdate>, BlpAsyncError> {
         let mut remaining = Vec::new();
 
+        if let Some(claim) = self.claim.take() {
+            let keys = self.status.load().keys().to_vec();
+            if !keys.is_empty() {
+                claim.unsubscribe(keys).await?;
+            }
+            if drain {
+                // Consume the receiver while the ordered forwarding barrier
+                // advances. Otherwise a full receiver makes every already-
+                // accepted Block-policy update wait for its timeout before the
+                // barrier can run. The barrier bounds this to callback-side
+                // queue entries accepted before unsubscribe closed the topics.
+                collect_subscription_updates_until_drained(
+                    &mut self.rx,
+                    claim.drain_forwarder(),
+                    &mut remaining,
+                )
+                .await?;
+            }
+        }
+
         if drain {
-            // Drain any remaining batches (skip errors)
             while let Ok(item) = self.rx.try_recv() {
                 if let Ok(batch) = item {
                     remaining.push(batch);
                 }
             }
         }
-
-        if let Some(claim) = self.claim.take() {
-            let keys = self.status.load().keys().to_vec();
-            if !keys.is_empty() {
-                claim.unsubscribe(keys).await?;
-            }
-        }
-
         self.status.update(|next| next.clear_active());
 
         Ok(remaining)
@@ -2818,12 +2918,15 @@ mod tests {
     }
 
     #[test]
-    fn engine_config_defaults_include_auth_defaults() {
+    fn engine_config_defaults_include_auth_and_resource_defaults() {
         let config = EngineConfig::default();
 
         assert_eq!(config.auth, None);
         assert_eq!(config.num_start_attempts, 3);
         assert!(config.auto_restart_on_disconnection);
+        assert_eq!(config.runtime_worker_threads, 2);
+        assert_eq!(config.max_subscription_sessions, 32);
+        assert!(config.max_subscription_sessions >= config.subscription_pool_size);
     }
 
     #[test]
@@ -2835,6 +2938,53 @@ mod tests {
 
         let err = config.validate().unwrap_err().to_string();
         assert!(err.contains("subscription_stream_capacity must be greater than zero"));
+    }
+
+    #[test]
+    fn engine_config_rejects_invalid_resource_bounds() {
+        for (config, expected) in [
+            (
+                EngineConfig {
+                    request_pool_size: 0,
+                    ..Default::default()
+                },
+                "request_pool_size must be greater than zero",
+            ),
+            (
+                EngineConfig {
+                    runtime_worker_threads: 0,
+                    ..Default::default()
+                },
+                "runtime_worker_threads must be greater than zero",
+            ),
+            (
+                EngineConfig {
+                    max_subscription_sessions: 0,
+                    ..Default::default()
+                },
+                "max_subscription_sessions must be greater than zero",
+            ),
+            (
+                EngineConfig {
+                    subscription_pool_size: 3,
+                    max_subscription_sessions: 2,
+                    ..Default::default()
+                },
+                "max_subscription_sessions must be greater than or equal to subscription_pool_size",
+            ),
+            (
+                EngineConfig {
+                    command_queue_size: 0,
+                    ..Default::default()
+                },
+                "command_queue_size must be greater than zero",
+            ),
+        ] {
+            assert_eq!(
+                config_error_detail(config.validate().unwrap_err()),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -3504,5 +3654,78 @@ mod tests {
         assert!(!status.topic_statuses().contains_key("IBM US Equity"));
         // The surviving topic is untouched.
         assert!(status.topic_statuses().contains_key("SPY US Equity"));
+    }
+
+    #[test]
+    fn subscription_status_completes_pending_unsubscribe_with_topic() {
+        let metric = Arc::new(SubscriptionMetrics {
+            messages_received: Arc::new(AtomicU64::new(0)),
+            dropped_batches: Arc::new(AtomicU64::new(0)),
+            batches_sent: Arc::new(AtomicU64::new(0)),
+            slow_consumer: Arc::new(AtomicBool::new(false)),
+            data_loss_events: Arc::new(AtomicU64::new(0)),
+            last_message_us: Arc::new(AtomicU64::new(0)),
+            last_data_loss_us: Arc::new(AtomicU64::new(0)),
+        });
+        let mut status = SubscriptionStatusState::from_active(
+            vec!["IBM US Equity".to_string()],
+            vec![11],
+            HashMap::from([(11, metric)]),
+        );
+
+        assert_eq!(
+            status.mark_topic_unsubscribing(11).as_deref(),
+            Some("IBM US Equity")
+        );
+        assert!(status.keys().is_empty());
+        assert_eq!(
+            status.mark_topic_unsubscribed(11).as_deref(),
+            Some("IBM US Equity")
+        );
+        assert_eq!(
+            status.topic_statuses()["IBM US Equity"].state,
+            TopicLifecycleState::Unsubscribed
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_barrier_consumes_receiver_while_forwarding_is_blocked() {
+        let update = |topic_id| SubscriptionUpdate {
+            timestamp_us: topic_id as i64,
+            topic_id,
+            topic: Arc::from("TEST"),
+            layout: Arc::new(state::FieldLayout::new(1, Vec::new())),
+            values: Default::default(),
+        };
+        let first = update(1);
+        let second = update(2);
+        let (tx, mut rx) = mpsc::channel(1);
+        let barrier = async move {
+            tx.send(Ok(first))
+                .await
+                .map_err(|_| BlpAsyncError::ChannelClosed)?;
+            tx.send(Ok(second))
+                .await
+                .map_err(|_| BlpAsyncError::ChannelClosed)?;
+            Ok(())
+        };
+        let mut remaining = Vec::new();
+
+        collect_subscription_updates_until_drained(&mut rx, barrier, &mut remaining)
+            .await
+            .expect("forwarding barrier");
+        while let Ok(item) = rx.try_recv() {
+            if let Ok(update) = item {
+                remaining.push(update);
+            }
+        }
+
+        assert_eq!(
+            remaining
+                .iter()
+                .map(|update| update.topic_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
     }
 }

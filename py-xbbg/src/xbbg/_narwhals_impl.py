@@ -1,18 +1,21 @@
 """Narwhals plugin implementation for xbbg native Arrow objects.
 
-This module intentionally delegates dataframe operations to ``xbbg.ArrowTable``
-methods instead of materializing through pandas, Polars, Apache Arrow Python bindings, or arro3.
+Eager dataframe operations delegate to ``xbbg.ArrowTable`` instead of
+materializing through another dataframe library. Lazy conversion deliberately
+crosses into Polars, the supported deferred-execution backend.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+import operator
+import re
 from types import ModuleType
-from typing import Any
+from typing import Any, Literal, overload
 
 from narwhals._utils import Implementation, Version
 
-from xbbg.backend import Backend, _import_backend_module, check_backend, is_backend_available
+from xbbg.backend import Backend, _import_backend_module, _to_polars_frame
 
 
 def _arrow_table_class() -> type[Any]:
@@ -49,9 +52,75 @@ def _native_namespace() -> ModuleType:
     return xbbg
 
 
-def _unknown_schema(table: Any, version: Version) -> dict[str, Any]:
-    unknown = version.dtypes.Unknown
-    return {name: unknown() for name in table.column_names}
+_SIMPLE_NATIVE_DTYPES = {
+    "Boolean": "Boolean",
+    "Int8": "Int8",
+    "Int16": "Int16",
+    "Int32": "Int32",
+    "Int64": "Int64",
+    "UInt8": "UInt8",
+    "UInt16": "UInt16",
+    "UInt32": "UInt32",
+    "UInt64": "UInt64",
+    "Float16": "Float16",
+    "Float32": "Float32",
+    "Float64": "Float64",
+    "Utf8": "String",
+    "LargeUtf8": "String",
+    "Utf8View": "String",
+    "Binary": "Binary",
+    "LargeBinary": "Binary",
+    "BinaryView": "Binary",
+}
+_TIME_UNITS: dict[str, Literal["s", "ms", "us", "ns"]] = {
+    "s": "s",
+    "ms": "ms",
+    "µs": "us",
+    "ns": "ns",
+}
+
+
+def _native_dtype(data_type: str, version: Version) -> Any:
+    dtypes = version.dtypes
+    dtype_name = _SIMPLE_NATIVE_DTYPES.get(data_type)
+    if dtype_name is not None:
+        return getattr(dtypes, dtype_name)()
+    if data_type in {"Date32", "Date64"}:
+        return dtypes.Date()
+    if data_type.startswith(("Time32(", "Time64(")):
+        return dtypes.Time()
+
+    match = re.fullmatch(
+        r'Timestamp\((s|ms|µs|ns)(?:, "(.*)")?\)',
+        data_type,
+    )
+    if match is not None:
+        return dtypes.Datetime(_TIME_UNITS[match.group(1)], match.group(2))
+
+    match = re.fullmatch(
+        r"Duration\((s|ms|µs|ns)\)",
+        data_type,
+    )
+    if match is not None:
+        return dtypes.Duration(_TIME_UNITS[match.group(1)])
+
+    match = re.fullmatch(r"Decimal128\((\d+), (-?\d+)\)", data_type)
+    if match is not None and int(match.group(2)) >= 0:
+        return dtypes.Decimal(precision=int(match.group(1)), scale=int(match.group(2)))
+
+    raise TypeError(f"unsupported native Arrow dtype {data_type!r}")
+
+
+def _native_schema(table: Any, version: Version = Version.V1) -> dict[str, Any]:
+    schema: dict[str, Any] = {}
+    for field in table.schema.fields:
+        try:
+            schema[field.name] = _native_dtype(field.data_type, version)
+        except TypeError as exc:
+            raise TypeError(
+                f"cannot convert native Arrow column {field.name!r} with dtype {field.data_type!r} without PyArrow"
+            ) from exc
+    return schema
 
 
 def _flatten_columns(columns: Sequence[str] | Sequence[Iterable[str]]) -> list[str]:
@@ -140,7 +209,7 @@ class XbbgDataFrame:
         return type(self)(self.native, version=version)
 
     def collect_schema(self) -> Mapping[str, Any]:
-        return _unknown_schema(self.native, self._version)
+        return _native_schema(self.native, self._version)
 
     def clone(self) -> XbbgDataFrame:
         return self._with_native(self.native)
@@ -165,19 +234,35 @@ class XbbgDataFrame:
         return self._with_native(self.native.rename_columns(dict(mapping)))
 
     def head(self, n: int) -> XbbgDataFrame:
-        return self._with_native(self.native.head(max(n, 0)))
+        length = n if n >= 0 else max(len(self) + n, 0)
+        return self._with_native(self.native.head(length))
 
     def sort(self, *by: str, descending: bool | Sequence[bool], nulls_last: bool) -> XbbgDataFrame:
-        del nulls_last
         if isinstance(descending, bool):
             directions = ["descending" if descending else "ascending"] * len(by)
         else:
+            if len(descending) != len(by):
+                raise ValueError(
+                    "descending must contain one value per sort column: "
+                    f"got {len(descending)} values for {len(by)} columns"
+                )
             directions = ["descending" if value else "ascending" for value in descending]
-        return self._with_native(self.native.sort_by(list(zip(by, directions, strict=False))))
+        return self._with_native(
+            self.native.sort_by(
+                list(zip(by, directions, strict=True)),
+                nulls_last=nulls_last,
+            )
+        )
 
-    def lazy(self, backend: Any = None, *, session: Any = None) -> XbbgLazyFrame:
-        del backend, session
-        return XbbgLazyFrame(self.native, version=self._version)
+    def lazy(self, backend: Any = None, *, session: Any = None) -> Any:
+        if backend is not None and backend is not Implementation.POLARS:
+            raise NotImplementedError("xbbg native frames can only become lazy through Polars")
+        if session is not None:
+            raise ValueError("session is not supported when making an xbbg native frame lazy")
+        native = _to_polars_frame(self.native, feature="XbbgDataFrame.lazy()").lazy()
+        from narwhals._polars.dataframe import PolarsLazyFrame
+
+        return PolarsLazyFrame(native, version=self._version, validate_backend_version=True)
 
     def to_pandas(self) -> Any:
         pd = _import_backend_module(Backend.PANDAS, feature="XbbgDataFrame.to_pandas()")
@@ -196,13 +281,7 @@ class XbbgDataFrame:
         return pa.table(self.native)
 
     def to_polars(self) -> Any:
-        pl = _import_backend_module(Backend.POLARS, feature="XbbgDataFrame.to_polars()")
-
-        if is_backend_available(Backend.PYARROW) and check_backend(Backend.PYARROW, raise_on_error=False):
-            pa = _import_backend_module(Backend.PYARROW)
-            return pl.from_arrow(pa.table(self.native))
-
-        return pl.DataFrame(self.native.to_pylist(), schema=self.columns)
+        return _to_polars_frame(self.native, feature="XbbgDataFrame.to_polars()")
 
     def to_dict(self, *, as_series: bool) -> dict[str, Any]:
         if as_series:
@@ -212,102 +291,49 @@ class XbbgDataFrame:
     def rows(self, *, named: bool) -> Sequence[tuple[Any, ...]] | Sequence[Mapping[str, Any]]:
         if named:
             return self.native.to_pylist()
-        names = self.columns
-        return [tuple(row.get(name) for name in names) for row in self.native.to_pylist()]
+        return list(self.iter_rows(named=False, buffer_size=512))
+
+    @overload
+    def iter_rows(self, *, named: Literal[False], buffer_size: int) -> Iterator[tuple[Any, ...]]: ...
+
+    @overload
+    def iter_rows(self, *, named: Literal[True], buffer_size: int) -> Iterator[Mapping[str, Any]]: ...
+
+    @overload
+    def iter_rows(
+        self, *, named: bool, buffer_size: int
+    ) -> Iterator[tuple[Any, ...]] | Iterator[Mapping[str, Any]]: ...
 
     def iter_rows(self, *, named: bool, buffer_size: int) -> Iterator[tuple[Any, ...]] | Iterator[Mapping[str, Any]]:
-        del buffer_size
-        return iter(self.rows(named=named))
+        if buffer_size <= 0:
+            raise ValueError("buffer_size must be positive")
+        names = self.columns
+        columns = [self.native.column(name) for name in names]
+        num_rows = len(self)
+        if not names:
+            for _ in range(num_rows):
+                yield {} if named else ()
+            return
+        for offset in range(0, num_rows, buffer_size):
+            length = min(buffer_size, num_rows - offset)
+            buffers = [column.slice(offset, length).to_pylist() for column in columns]
+            for values in zip(*buffers, strict=True):
+                yield dict(zip(names, values, strict=True)) if named else values
 
     def row(self, index: int) -> tuple[Any, ...]:
-        rows = self.rows(named=False)
-        return rows[index]
+        names = self.columns
+        if not names:
+            range(len(self))[operator.index(index)]
+            return ()
+        return tuple(self.native.column(name)[index] for name in names)
 
     def item(self, row: int | None, column: int | str | None) -> Any:
-        row_idx = 0 if row is None else row
-        if isinstance(column, str):
-            return self.native.column(column)[row_idx]
-        col_idx = 0 if column is None else column
-        return self.row(row_idx)[col_idx]
-
-
-class XbbgLazyFrame:
-    """Narwhals-compliant lazy frame backed by xbbg Arrow operations.
-
-    The current implementation stores the native Arrow table and applies supported
-    operations eagerly to that table; ``collect`` returns an xbbg-backed eager
-    Narwhals frame without crossing into third-party dataframe libraries.
-    """
-
-    _implementation = Implementation.UNKNOWN
-
-    def __init__(self, table: Any, *, version: Version) -> None:
-        self._native_frame = _ensure_table(table)
-        self._version = version
-
-    def __narwhals_lazyframe__(self) -> XbbgLazyFrame:
-        return self
-
-    def __narwhals_namespace__(self) -> XbbgNamespace:
-        return XbbgNamespace(version=self._version)
-
-    def __native_namespace__(self) -> ModuleType:
-        return _native_namespace()
-
-    @property
-    def native(self) -> Any:
-        return self._native_frame
-
-    @property
-    def columns(self) -> list[str]:
-        return list(self.native.column_names)
-
-    @property
-    def schema(self) -> Mapping[str, Any]:
-        return self.collect_schema()
-
-    def _with_native(self, table: Any) -> XbbgLazyFrame:
-        return type(self)(_ensure_table(table), version=self._version)
-
-    def _with_version(self, version: Version) -> XbbgLazyFrame:
-        return type(self)(self.native, version=version)
-
-    def collect_schema(self) -> Mapping[str, Any]:
-        return _unknown_schema(self.native, self._version)
-
-    def collect(self, backend: Any = None, **kwargs: Any) -> XbbgDataFrame:
-        del backend, kwargs
-        return XbbgDataFrame(self.native, version=self._version)
-
-    def simple_select(self, *column_names: str) -> XbbgLazyFrame:
-        return self._with_native(self.native.select_columns(list(column_names)))
-
-    def select(self, *exprs: Any) -> XbbgLazyFrame:
-        if all(isinstance(expr, str) for expr in exprs):
-            return self.simple_select(*(str(expr) for expr in exprs))
-        raise NotImplementedError("xbbg Narwhals plugin supports direct string column selection only")
-
-    def drop(self, columns: Sequence[str] | Sequence[Iterable[str]], *, strict: bool) -> XbbgLazyFrame:
-        names = _flatten_columns(columns)
-        if strict:
-            missing = [name for name in names if name not in self.columns]
-            if missing:
-                raise KeyError(f"unknown columns: {missing}")
-        return self._with_native(self.native.drop_columns(names))
-
-    def rename(self, mapping: Mapping[str, str]) -> XbbgLazyFrame:
-        return self._with_native(self.native.rename_columns(dict(mapping)))
-
-    def head(self, n: int) -> XbbgLazyFrame:
-        return self._with_native(self.native.head(max(n, 0)))
-
-    def sort(self, *by: str, descending: bool | Sequence[bool], nulls_last: bool) -> XbbgLazyFrame:
-        del nulls_last
-        if isinstance(descending, bool):
-            directions = ["descending" if descending else "ascending"] * len(by)
-        else:
-            directions = ["descending" if value else "ascending" for value in descending]
-        return self._with_native(self.native.sort_by(list(zip(by, directions, strict=False))))
-
-    def lazy(self) -> XbbgLazyFrame:
-        return self
+        if row is None and column is None:
+            if self.shape != (1, 1):
+                raise ValueError(f"item() without row and column requires a 1x1 dataframe, got shape {self.shape}")
+            row = 0
+            column = 0
+        elif row is None or column is None:
+            raise ValueError("item() requires both row and column when either is provided")
+        name = column if isinstance(column, str) else self.columns[column]
+        return self.native.column(name)[row]

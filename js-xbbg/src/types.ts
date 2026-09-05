@@ -93,6 +93,10 @@ export interface EngineConfig {
   zfpRemote?: '8194' | '8196';
   requestPoolSize?: number;
   subscriptionPoolSize?: number;
+  /** Tokio runtime worker threads shared by the engine. Default 2; must be nonzero. */
+  runtimeWorkerThreads?: number;
+  /** Maximum live subscription sessions. Default 32; must be at least subscriptionPoolSize. */
+  maxSubscriptionSessions?: number;
   /** Enable request sharding for eligible multi-security bdp/bdh requests. Default false. */
   shardRequests?: boolean;
   /** Minimum securities before request sharding applies. Default 20. */
@@ -133,6 +137,14 @@ export interface EngineConfig {
   /** Verbosity of the Bloomberg C SDK's own logging. Default `'off'`. */
   sdkLogLevel?: SdkLogLevel;
   socks5?: Socks5Config;
+}
+
+export interface SubscriptionReadOptions {
+  /**
+   * Cancelling closes the subscription, then rejects with the abort reason.
+   * Cleanup failure produces an AggregateError containing both errors.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface RequestInput {

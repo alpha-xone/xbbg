@@ -309,7 +309,13 @@ The engine uses separate worker pools for request/response calls and subscriptio
 - subscription sessions are isolated from request workers, so live streams do not share a single blocking session with batch requests
 - field validation, field-type caching, SDK logging, retry policy, keep-alive, slow-consumer thresholds, TLS, SOCKS5, and failover servers are configuration options rather than per-call ad hoc code
 
+`runtime_worker_threads` defaults to **2** (minimum **1**) and controls the engine's shared Tokio runtime, not the total process thread count. `subscription_pool_size` is the pre-warm count (default **1**, minimum **0**); `max_subscription_sessions` caps concurrent subscription sessions (default **32**, minimum **1**, and at least `subscription_pool_size`). Native subscription admission waits for capacity instead of allocating unbounded sessions. Node uses the corresponding `runtimeWorkerThreads`, `subscriptionPoolSize`, and `maxSubscriptionSessions` fields.
+
 Use `Engine(...)` when an application needs a scoped engine with its own connection settings instead of mutating global configuration.
+
+Engine shutdown closes subscription admission and signals both idle and checked-out sessions, waking pending operations so termination and errors can reach callers. Close subscriptions explicitly before releasing their engine; do not rely on interpreter teardown for application cleanup.
+
+Field-cache snapshots are published atomically. On Windows this uses `FileRenameInfoEx` with POSIX rename semantics, requiring Windows 10 1607+ and a supporting filesystem. Existing readers can finish with the old snapshot while new opens see the complete replacement. Unsupported filesystems report persistence errors and retain the prior snapshot; there is no unsafe replacement fallback.
 
 ## Common API surface
 
@@ -383,6 +389,11 @@ as_duckdb = blp.bdh("SPX Index", "PX_LAST", "2024-01-01", "2024-12-31", backend=
 
 Output shape is controlled with `format=`, including `long`, `long_typed`, `long_metadata`, and `semi_long`.
 
+- Native `ArrowTable`, `ArrowRecordBatch`, and `ArrowColumn` slices can retain their source allocations. Use `.compact()` when retaining a small result should release that backing storage: it returns an independent copy of the logical values with right-sized buffers, preserving schema, nulls, and physical batch/chunk boundaries. Native zero-column tables retain their row count.
+- Polars conversion preserves Arrow chunks rather than implicitly rechunking. The supported floor is **Polars >=0.20.4**; older supported versions use PyArrow when available or schema-aware per-batch materialization, while capsule-capable versions consume the native Arrow stream. Install `xbbg[polars]` to include the timezone data required on Windows.
+- `backend="polars_lazy"` returns a Polars `LazyFrame`; `backend="narwhals_lazy"` returns a genuine Narwhals lazy frame backed by Polars and requires Polars. Bloomberg retrieval and Arrow-to-Polars conversion have already happened: only subsequent local dataframe operations are deferred, with no Bloomberg query pushdown.
+- DuckDB results use isolated per-relation connections to one shared process-local in-memory database, not a new database per conversion. A retained relation keeps its connection and registered Arrow input alive; releasing one relation does not invalidate another. The shared database anchor is closed at process exit. If this backend was initialized before a fork, xbbg refuses inherited backend use or explicit close in the child; use multiprocessing `spawn` or fork before initializing the DuckDB backend.
+
 ## Async usage
 
 Use async helpers directly in async applications:
@@ -405,7 +416,7 @@ In Jupyter, VS Code Interactive, and marimo, one-shot sync calls such as `blp.bd
 
 ## Subscriptions: raw, tick mode, and all fields
 
-Use `asubscribe()` when you need dynamic add/remove, explicit unsubscribe, raw Arrow batches, or subscription health diagnostics. Use `stream()` when you only want the simple async-iterator wrapper.
+Use `asubscribe()` when you need dynamic add/remove, explicit unsubscribe, raw Arrow batches, or subscription health diagnostics. Use `astream()` for the simple async iterator, or `stream()` for synchronous iteration.
 
 ```python
 from xbbg import asubscribe
@@ -446,8 +457,11 @@ Key behaviors:
 - filtered mode keeps requested fields plus `MKTDATA_EVENT_TYPE` and `MKTDATA_EVENT_SUBTYPE`
 - `conflate=True` requests Bloomberg-conflated quote updates on `//blp/mktdata`; trades are still delivered as received
 - `sub.add(...)`, `sub.remove(...)`, `sub.status`, `sub.events`, `sub.failed_tickers`, and `sub.stats` expose runtime control and diagnostics
+- use `async with` on an acquired subscription or `try`/`finally` with `await sub.unsubscribe()` for deterministic cleanup; `unsubscribe(drain=True)` closes the subscription and returns remaining buffered native Arrow batches rather than discarding them
 
-In Node, pass `{ allFields: true }` to `stream()` / `subscribe()` helpers for the same top-level field expansion. JS subscriptions use a native zero-copy Arrow path for supported schemas and fail fast with column-level diagnostics when a schema cannot use that path.
+Python `stream()` producers share one managed background event-loop thread, not a thread per stream. Each sync bridge has a bounded queue (`stream_capacity`, default **256**, minimum **1**) and asynchronously waits for consumer space; native overflow policy remains separate. Active sync producers are admitted per global/scoped engine up to `max_subscription_sessions`; excess producers raise `RuntimeError` rather than creating more tasks. Callbacks run on the consuming thread. Close the generator explicitly when stopping early: close cancels and waits for producer cleanup, and a cleanup timeout is reported while the producer remains tracked against its admission limit. In async applications use `astream()` directly and close it explicitly when retaining the generator after an early exit.
+
+In Node, pass `{ allFields: true }` to `stream()` / `subscribe()` helpers for the same top-level field expansion. Default iteration yields scalar `Tick` objects; `sub.arrow()` constructs Arrow JS tables without IPC for supported schemas. Exposed mutable buffers are JS-owned snapshots: exclusive bounded allocations can be transferred, while shared/sliced/oversized storage is copied or canonicalized first. This is not a universal zero-copy Rust/JS boundary. Choose scalar or Arrow reads once per subscription; see the [Node lifecycle and benchmark contracts](js-xbbg/README.md).
 
 ## MCP server
 

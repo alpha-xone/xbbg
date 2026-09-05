@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::fs;
-use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -9,6 +7,8 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
 use xbbg_ext::{ExchangeInfo, ExchangeInfoSource};
+
+use crate::cache_io::{read_json_array_bounded, AtomicJsonPublisher, PublicationOutcome};
 
 /// Days an exchange cache entry stays valid. Exchange metadata (timezones,
 /// session hours) drifts rarely; a month bounds staleness without forcing
@@ -27,6 +27,7 @@ fn eviction_timestamp(info: &ExchangeInfo) -> DateTime<Utc> {
 }
 
 const DEFAULT_MAX_EXCHANGE_CACHE_ENTRIES: usize = 16_384;
+const MAX_EXCHANGE_CACHE_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// In-memory + disk cache for exchange metadata.
 ///
@@ -42,8 +43,9 @@ pub struct ExchangeCache {
     cache: ArcSwap<HashMap<String, ExchangeInfo>>,
     write_cache: Mutex<HashMap<String, ExchangeInfo>>,
     cache_path: PathBuf,
-    loaded: OnceLock<()>,
+    loaded: OnceLock<Result<(), String>>,
     max_entries: usize,
+    publisher: AtomicJsonPublisher,
 }
 
 impl ExchangeCache {
@@ -62,11 +64,12 @@ impl ExchangeCache {
             cache_path: path,
             loaded: OnceLock::new(),
             max_entries,
+            publisher: AtomicJsonPublisher::default(),
         }
     }
 
     pub fn get(&self, ticker: &str) -> Option<ExchangeInfo> {
-        self.ensure_loaded();
+        let _ = self.ensure_loaded();
         let key = ticker.trim();
         if key.is_empty() {
             return None;
@@ -88,111 +91,156 @@ impl ExchangeCache {
         I: IntoIterator<Item = (S, ExchangeInfo)>,
         S: AsRef<str>,
     {
-        self.ensure_loaded();
+        let _ = self.ensure_loaded();
 
-        let mut write_cache = self.write_cache.lock();
-        let mut changed = false;
-        for (ticker, mut info) in entries {
-            let key = ticker.as_ref().trim();
-            if key.is_empty() {
-                continue;
+        let (previous_snapshot, replaced, evicted) = {
+            let mut write_cache = self.write_cache.lock();
+            let mut replaced = Vec::new();
+            let mut changed = false;
+            for (ticker, mut info) in entries {
+                let key = ticker.as_ref().trim();
+                if key.is_empty() {
+                    continue;
+                }
+                info.cached_at = Some(Utc::now());
+                if info.source == ExchangeInfoSource::Fallback {
+                    info.source = ExchangeInfoSource::Bloomberg;
+                }
+                if let Some(previous) = write_cache.insert(key.to_string(), info) {
+                    replaced.push(previous);
+                }
+                changed = true;
             }
-            info.cached_at = Some(Utc::now());
-            if info.source == ExchangeInfoSource::Fallback {
-                info.source = ExchangeInfoSource::Bloomberg;
-            }
-            write_cache.insert(key.to_string(), info);
-            changed = true;
-        }
 
-        if changed {
-            Self::evict_oldest(&mut write_cache, self.max_entries);
-            self.publish_snapshot(&write_cache);
-        }
+            if !changed {
+                return;
+            }
+
+            let evicted = Self::evict_oldest(&mut write_cache, self.max_entries);
+            let previous_snapshot = self.swap_snapshot(&write_cache);
+            (previous_snapshot, replaced, evicted)
+        };
+
+        drop(previous_snapshot);
+        drop(evicted);
+        drop(replaced);
     }
 
-    pub fn invalidate(&self, ticker: Option<&str>) {
-        self.ensure_loaded();
-        let mut write_cache = self.write_cache.lock();
-        match ticker {
-            Some(t) if !t.trim().is_empty() => {
-                if write_cache.remove(t.trim()).is_some() {
-                    self.publish_snapshot(&write_cache);
-                }
-            }
-            _ => {
-                if !write_cache.is_empty() {
-                    write_cache.clear();
-                    self.publish_snapshot(&write_cache);
-                } else {
-                    self.cache.store(Arc::new(HashMap::new()));
-                }
-            }
+    pub fn invalidate(&self, ticker: Option<&str>) -> Result<(), String> {
+        let load_result = self.ensure_loaded();
+        if ticker.is_some_and(|ticker| !ticker.trim().is_empty()) {
+            load_result?;
         }
+        let (previous_snapshot, removed) = {
+            let mut write_cache = self.write_cache.lock();
+            match ticker {
+                Some(ticker) if !ticker.trim().is_empty() => {
+                    let key = ticker.trim();
+                    let mut next = write_cache.clone();
+                    let Some(removed) = next.remove_entry(key) else {
+                        return Ok(());
+                    };
+
+                    let publication = self.publisher.begin();
+                    let entries: Vec<ExchangeInfo> = next.values().cloned().collect();
+                    let outcome = publication.publish(&self.cache_path, &entries)?;
+                    debug_assert_eq!(outcome, PublicationOutcome::Published);
+
+                    let next_snapshot = Arc::new(next.clone());
+                    *write_cache = next;
+                    (self.cache.swap(next_snapshot), vec![removed])
+                }
+                _ => {
+                    let publication = self.publisher.begin();
+                    let outcome = publication.remove(&self.cache_path)?;
+                    debug_assert_eq!(outcome, PublicationOutcome::Published);
+
+                    let removed: Vec<(String, ExchangeInfo)> = write_cache.drain().collect();
+                    let previous_snapshot = self.cache.swap(Arc::new(HashMap::new()));
+                    (previous_snapshot, removed)
+                }
+            }
+        };
+
+        drop(previous_snapshot);
+        drop(removed);
+        Ok(())
     }
 
     pub fn save_to_disk(&self) -> Result<(), String> {
-        self.ensure_loaded();
+        let _ = self.ensure_loaded();
 
-        if let Some(parent) = self.cache_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("create cache dir failed: {e}"))?;
+        let (publication, snapshot) = {
+            let _write_cache = self.write_cache.lock();
+            (self.publisher.begin(), self.cache.load_full())
+        };
+        let entries: Vec<ExchangeInfo> = snapshot.values().cloned().collect();
+        match publication.publish(&self.cache_path, &entries)? {
+            PublicationOutcome::Published => Ok(()),
+            PublicationOutcome::Superseded => {
+                xbbg_log::debug!(path = %self.cache_path.display(), "skipped superseded exchange cache snapshot");
+                Ok(())
+            }
         }
-
-        let snapshot = self.cache.load();
-        let entries: Vec<&ExchangeInfo> = snapshot.values().collect();
-
-        let file = fs::File::create(&self.cache_path)
-            .map_err(|e| format!("create exchange cache file failed: {e}"))?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, &entries)
-            .map_err(|e| format!("write exchange cache JSON failed: {e}"))
     }
 
     /// Eagerly load the on-disk cache (idempotent).
     pub fn preload(&self) -> Result<(), String> {
-        self.ensure_loaded();
-        Ok(())
+        self.ensure_loaded()
     }
 
-    fn publish_snapshot(&self, write_cache: &HashMap<String, ExchangeInfo>) {
-        self.cache.store(Arc::new(write_cache.clone()));
+    fn swap_snapshot(
+        &self,
+        write_cache: &HashMap<String, ExchangeInfo>,
+    ) -> Arc<HashMap<String, ExchangeInfo>> {
+        self.cache.swap(Arc::new(write_cache.clone()))
     }
 
-    fn evict_oldest(cache: &mut HashMap<String, ExchangeInfo>, max_entries: usize) {
-        while cache.len() > max_entries {
-            let Some(key) = cache
-                .iter()
-                .min_by_key(|(key, info)| (eviction_timestamp(info), key.as_str()))
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            cache.remove(&key);
+    fn evict_oldest(
+        cache: &mut HashMap<String, ExchangeInfo>,
+        max_entries: usize,
+    ) -> Vec<(String, ExchangeInfo)> {
+        let excess = cache.len().saturating_sub(max_entries);
+        if excess == 0 {
+            return Vec::new();
         }
+
+        let mut oldest: Vec<(&str, DateTime<Utc>)> = cache
+            .iter()
+            .map(|(key, info)| (key.as_str(), eviction_timestamp(info)))
+            .collect();
+        if excess < oldest.len() {
+            oldest.select_nth_unstable_by(excess - 1, |left, right| {
+                left.1.cmp(&right.1).then_with(|| left.0.cmp(right.0))
+            });
+        }
+        let keys: Vec<String> = oldest[..excess]
+            .iter()
+            .map(|(key, _)| (*key).to_string())
+            .collect();
+
+        keys.into_iter()
+            .filter_map(|key| cache.remove_entry(&key))
+            .collect()
     }
-    fn ensure_loaded(&self) {
-        self.loaded.get_or_init(|| {
-            let _ = self.load_from_disk();
-        });
+
+    fn ensure_loaded(&self) -> Result<(), String> {
+        self.loaded.get_or_init(|| self.load_from_disk()).clone()
     }
 
     fn load_from_disk(&self) -> Result<(), String> {
         if !self.cache_path.exists() {
             return Ok(());
         }
-        let file = match fs::File::open(&self.cache_path) {
-            Ok(f) => f,
-            Err(e) => {
-                xbbg_log::warn!(error = %e, path = %self.cache_path.display(), "failed to open exchange cache");
-                return Ok(());
-            }
-        };
-        let reader = BufReader::new(file);
-        let entries: Vec<ExchangeInfo> = match serde_json::from_reader(reader) {
-            Ok(v) => v,
-            Err(e) => {
-                xbbg_log::warn!(error = %e, path = %self.cache_path.display(), "failed to parse exchange cache");
-                return Ok(());
+        let entries: Vec<ExchangeInfo> = match read_json_array_bounded(
+            &self.cache_path,
+            MAX_EXCHANGE_CACHE_FILE_BYTES,
+            self.max_entries,
+        ) {
+            Ok(entries) => entries,
+            Err(error) => {
+                xbbg_log::warn!(error = %error, path = %self.cache_path.display(), "failed to load exchange cache");
+                return Err(error);
             }
         };
 
@@ -208,10 +256,15 @@ impl ExchangeCache {
             .collect();
 
         if !pairs.is_empty() {
-            let mut write_cache = self.write_cache.lock();
-            write_cache.extend(pairs);
-            Self::evict_oldest(&mut write_cache, self.max_entries);
-            self.publish_snapshot(&write_cache);
+            let (previous_snapshot, evicted) = {
+                let mut write_cache = self.write_cache.lock();
+                write_cache.extend(pairs);
+                let evicted = Self::evict_oldest(&mut write_cache, self.max_entries);
+                let previous_snapshot = self.swap_snapshot(&write_cache);
+                (previous_snapshot, evicted)
+            };
+            drop(previous_snapshot);
+            drop(evicted);
         }
 
         Ok(())
@@ -240,6 +293,7 @@ impl Default for ExchangeCache {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use std::fs;
 
     fn info(ticker: &str, cached_at: Option<chrono::DateTime<Utc>>) -> ExchangeInfo {
         ExchangeInfo {
@@ -339,5 +393,103 @@ mod tests {
         assert!(cache.get("FRESH US Equity").is_some());
         assert!(cache.get("STALE US Equity").is_none());
         let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn saved_snapshot_round_trips_through_atomic_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("exchanges.json");
+        let cache = ExchangeCache::with_cache_path(path.clone());
+        cache.put("AAPL US Equity", info("AAPL US Equity", None));
+
+        cache.save_to_disk().unwrap();
+
+        let reloaded = ExchangeCache::with_cache_path(path);
+        assert!(reloaded.get("AAPL US Equity").is_some());
+    }
+
+    #[test]
+    fn replacement_failure_surfaces_from_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("exchanges.json");
+        fs::create_dir(&path).unwrap();
+        let cache = ExchangeCache::with_cache_path(path);
+        cache.put("AAPL US Equity", info("AAPL US Equity", None));
+
+        let error = cache.save_to_disk().unwrap_err();
+
+        assert!(error.contains("cannot replace cache file"));
+    }
+
+    #[test]
+    fn invalidation_updates_the_persisted_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("exchanges.json");
+        let cache = ExchangeCache::with_cache_path(path.clone());
+        cache.put("AAPL US Equity", info("AAPL US Equity", None));
+        cache.save_to_disk().unwrap();
+
+        cache.invalidate(Some("AAPL US Equity")).unwrap();
+
+        let reloaded = ExchangeCache::with_cache_path(path);
+        assert!(reloaded.get("AAPL US Equity").is_none());
+    }
+
+    #[test]
+    fn failed_invalidation_keeps_memory_state_intact() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("exchanges.json");
+        let cache = ExchangeCache::with_cache_path(path.clone());
+        cache.put("AAPL US Equity", info("AAPL US Equity", None));
+        fs::create_dir(&path).unwrap();
+
+        let error = cache.invalidate(Some("AAPL US Equity")).unwrap_err();
+
+        assert!(error.contains("cannot replace cache file"));
+        assert!(cache.get("AAPL US Equity").is_some());
+    }
+
+    #[test]
+    fn targeted_invalidation_propagates_a_cold_load_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("exchanges.json");
+        let invalid = b"not json";
+        fs::write(&path, invalid).unwrap();
+        let cache = ExchangeCache::with_cache_path(path.clone());
+
+        let error = cache.invalidate(Some("AAPL US Equity")).unwrap_err();
+
+        assert!(error.contains("cannot parse cache file"));
+        assert_eq!(fs::read(path).unwrap(), invalid);
+    }
+
+    #[test]
+    fn preload_reports_corrupt_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("exchanges.json");
+        fs::write(&path, b"not json").unwrap();
+        let cache = ExchangeCache::with_cache_path(path);
+
+        let error = cache.preload().unwrap_err();
+
+        assert!(error.contains("cannot parse cache file"));
+        assert!(cache.get("AAPL US Equity").is_none());
+    }
+
+    #[test]
+    fn preload_rejects_more_than_configured_entry_bound() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("exchanges.json");
+        let entries = vec![
+            info("A US Equity", Some(Utc::now())),
+            info("B US Equity", Some(Utc::now())),
+            info("C US Equity", Some(Utc::now())),
+        ];
+        fs::write(&path, serde_json::to_vec(&entries).unwrap()).unwrap();
+        let cache = ExchangeCache::with_cache_path_and_max_entries(path, 2);
+
+        let error = cache.preload().unwrap_err();
+
+        assert!(error.contains("2-entry limit"));
+        assert!(cache.get("A US Equity").is_none());
     }
 }

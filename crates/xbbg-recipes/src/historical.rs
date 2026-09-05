@@ -346,12 +346,21 @@ pub(crate) fn build_dividend_yield_rows(
     events: &[DividendEvent],
     prices: &HashMap<(String, NaiveDate), f64>,
 ) -> Vec<DividendYieldRow> {
-    let mut events_by_ticker: HashMap<&str, Vec<&DividendEvent>> = HashMap::new();
-    for event in events {
+    // Sort references rather than cloning events. The ordinal keeps the prior
+    // input order for same-day events, which defines the representative event.
+    let mut events_by_ticker: HashMap<&str, Vec<(usize, &DividendEvent)>> = HashMap::new();
+    for (ordinal, event) in events.iter().enumerate() {
         events_by_ticker
             .entry(event.ticker.as_str())
             .or_default()
-            .push(event);
+            .push((ordinal, event));
+    }
+    for ticker_events in events_by_ticker.values_mut() {
+        ticker_events.sort_by(|(left_ordinal, left), (right_ordinal, right)| {
+            left.ex_date
+                .cmp(&right.ex_date)
+                .then(left_ordinal.cmp(right_ordinal))
+        });
     }
 
     // Pre-group prices once: scanning every (ticker, date) price key per
@@ -369,8 +378,8 @@ pub(crate) fn build_dividend_yield_rows(
     for ticker in tickers {
         let ticker_events = events_by_ticker
             .get(ticker.as_str())
-            .cloned()
-            .unwrap_or_default();
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let ticker_prices = prices_by_ticker.get(ticker.as_str());
         let mut dates = BTreeSet::new();
         if let Some(ticker_prices) = ticker_prices {
@@ -380,32 +389,70 @@ pub(crate) fn build_dividend_yield_rows(
                 }
             }
         }
-        for event in &ticker_events {
+        for (_, event) in ticker_events {
             if event.ex_date >= start && event.ex_date <= end {
                 dates.insert(event.ex_date);
             }
         }
 
+        let mut window_start = 0;
+        let mut window_end = 0;
+        let mut window_amount_count = 0usize;
+        let mut window_total = 0.0;
+        let mut same_day_start = 0;
+
         for date in dates {
-            let same_day_events = ticker_events
-                .iter()
-                .copied()
-                .filter(|event| event.ex_date == date)
-                .collect::<Vec<_>>();
-            let dividend_amount =
-                sum_optional(same_day_events.iter().filter_map(|event| event.amount));
+            while window_end < ticker_events.len() && ticker_events[window_end].1.ex_date <= date {
+                if let Some(amount) = ticker_events[window_end].1.amount {
+                    window_total += amount;
+                    window_amount_count += 1;
+                }
+                window_end += 1;
+            }
+
             let trailing_start = date - Duration::days(window_days as i64);
-            let trailing_dividend_amount = sum_optional(ticker_events.iter().filter_map(|event| {
-                (event.ex_date > trailing_start && event.ex_date <= date)
-                    .then_some(event.amount)
-                    .flatten()
-            }));
+            let previous_window_start = window_start;
+            while window_start < window_end
+                && ticker_events[window_start].1.ex_date <= trailing_start
+            {
+                window_start += 1;
+            }
+
+            // Floating-point subtraction cannot undo an earlier rounded add
+            // (and cannot recover after NaN/infinity expires). Re-fold only
+            // when the left edge moves; dates without expiries stay O(1).
+            if window_start != previous_window_start {
+                window_amount_count = 0;
+                window_total = 0.0;
+                for (_, event) in &ticker_events[window_start..window_end] {
+                    if let Some(amount) = event.amount {
+                        window_total += amount;
+                        window_amount_count += 1;
+                    }
+                }
+            }
+
+            while same_day_start < ticker_events.len()
+                && ticker_events[same_day_start].1.ex_date < date
+            {
+                same_day_start += 1;
+            }
+            let mut same_day_end = same_day_start;
+            while same_day_end < ticker_events.len()
+                && ticker_events[same_day_end].1.ex_date == date
+            {
+                same_day_end += 1;
+            }
+            let same_day_events = &ticker_events[same_day_start..same_day_end];
+            let dividend_amount =
+                sum_optional(same_day_events.iter().filter_map(|(_, event)| event.amount));
+            let trailing_dividend_amount = (window_amount_count != 0).then_some(window_total);
             let price = ticker_prices.and_then(|prices| prices.get(&date)).copied();
             let dividend_yield = match (trailing_dividend_amount, price) {
                 (Some(amount), Some(price)) if price != 0.0 => Some(amount / price),
                 _ => None,
             };
-            let representative = same_day_events.first().copied();
+            let representative = same_day_events.first().map(|(_, event)| *event);
 
             rows.push(DividendYieldRow {
                 ticker: ticker.clone(),
@@ -1414,5 +1461,151 @@ mod tests {
         );
         assert_eq!(rows[0].price, None);
         assert_eq!(rows[0].dividend_yield, None);
+    }
+
+    #[test]
+    fn test_dividend_yield_rolling_window_matches_date_predicate_boundaries() {
+        let ticker = "AAPL US Equity".to_string();
+        let boundary = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let inside = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+        let evaluation = NaiveDate::from_ymd_opt(2024, 1, 11).unwrap();
+        let after = NaiveDate::from_ymd_opt(2024, 1, 12).unwrap();
+        let representative_declared = NaiveDate::from_ymd_opt(2024, 1, 5).unwrap();
+        let events = vec![
+            DividendEvent {
+                ticker: ticker.clone(),
+                ex_date: evaluation,
+                declared_date: Some(representative_declared),
+                record_date: None,
+                payable_date: None,
+                dividend_type: Some("Special Cash".to_string()),
+                amount: None,
+            },
+            DividendEvent {
+                ticker: ticker.clone(),
+                ex_date: boundary,
+                declared_date: None,
+                record_date: None,
+                payable_date: None,
+                dividend_type: Some("Old".to_string()),
+                amount: Some(10.0),
+            },
+            DividendEvent {
+                ticker: ticker.clone(),
+                ex_date: evaluation,
+                declared_date: None,
+                record_date: None,
+                payable_date: None,
+                dividend_type: Some("Regular Cash".to_string()),
+                amount: Some(2.0),
+            },
+            DividendEvent {
+                ticker: ticker.clone(),
+                ex_date: inside,
+                declared_date: None,
+                record_date: None,
+                payable_date: None,
+                dividend_type: Some("Regular Cash".to_string()),
+                amount: Some(1.0),
+            },
+        ];
+        let prices = HashMap::from([
+            ((ticker.clone(), evaluation), 0.0),
+            ((ticker.clone(), after), 100.0),
+        ]);
+
+        let rows = build_dividend_yield_rows(
+            std::slice::from_ref(&ticker),
+            boundary,
+            after,
+            10,
+            &events,
+            &prices,
+        );
+        assert_eq!(rows.len(), 4);
+
+        // Differential oracle for the previous definition: every date uses
+        // events in original order and the calendar predicate
+        // (date - window_days, date].
+        for row in &rows {
+            let same_day = events
+                .iter()
+                .filter(|event| event.ex_date == row.date)
+                .collect::<Vec<_>>();
+            let expected_amount = sum_optional(same_day.iter().filter_map(|event| event.amount));
+            let trailing_start = row.date - Duration::days(10);
+            let expected_trailing = sum_optional(events.iter().filter_map(|event| {
+                (event.ex_date > trailing_start && event.ex_date <= row.date)
+                    .then_some(event.amount)
+                    .flatten()
+            }));
+            let expected_price = prices.get(&(ticker.clone(), row.date)).copied();
+            let expected_yield = match (expected_trailing, expected_price) {
+                (Some(amount), Some(price)) if price != 0.0 => Some(amount / price),
+                _ => None,
+            };
+            let representative = same_day.first().copied();
+
+            assert_eq!(row.dividend_amount, expected_amount);
+            assert_eq!(row.trailing_dividend_amount, expected_trailing);
+            assert_eq!(row.price, expected_price);
+            assert_eq!(row.dividend_yield, expected_yield);
+            assert_eq!(
+                row.dividend_type,
+                representative.and_then(|event| event.dividend_type.clone())
+            );
+            assert_eq!(
+                row.declared_date,
+                representative.and_then(|event| event.declared_date)
+            );
+        }
+
+        let evaluation_row = rows.iter().find(|row| row.date == evaluation).unwrap();
+        assert_eq!(evaluation_row.trailing_dividend_amount, Some(3.0));
+        assert_eq!(evaluation_row.dividend_amount, Some(2.0));
+        assert_eq!(evaluation_row.dividend_yield, None);
+        assert_eq!(
+            evaluation_row.dividend_type.as_deref(),
+            Some("Special Cash")
+        );
+        assert_eq!(evaluation_row.declared_date, Some(representative_declared));
+
+        let after_row = rows.iter().find(|row| row.date == after).unwrap();
+        assert_eq!(after_row.trailing_dividend_amount, Some(2.0));
+        assert_eq!(after_row.dividend_yield, Some(0.02));
+    }
+
+    fn trailing_after_boundary_expiry(expiring_amount: f64) -> Option<f64> {
+        let ticker = "AAPL US Equity".to_string();
+        let boundary = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let retained = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+        let evaluation = NaiveDate::from_ymd_opt(2024, 1, 11).unwrap();
+        let event = |ex_date, amount| DividendEvent {
+            ticker: ticker.clone(),
+            ex_date,
+            declared_date: None,
+            record_date: None,
+            payable_date: None,
+            dividend_type: None,
+            amount: Some(amount),
+        };
+        let events = vec![event(boundary, expiring_amount), event(retained, 1.0)];
+        let prices = HashMap::from([((ticker.clone(), evaluation), 100.0)]);
+        let rows = build_dividend_yield_rows(&[ticker], boundary, evaluation, 10, &events, &prices);
+        rows.iter()
+            .find(|row| row.date == evaluation)
+            .and_then(|row| row.trailing_dividend_amount)
+    }
+
+    #[test]
+    fn test_dividend_yield_refolds_after_finite_cancellation_expires() {
+        assert_eq!(trailing_after_boundary_expiry(1.0e16), Some(1.0));
+    }
+
+    #[test]
+    fn test_dividend_yield_refolds_after_nonfinite_amount_expires() {
+        for expiring_amount in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(trailing_after_boundary_expiry(expiring_amount), Some(1.0));
+        }
     }
 }

@@ -2,7 +2,15 @@
 # ruff: noqa: F401
 
 from . import _core
+from ._core import (
+    ArrowField as ArrowField,
+    ArrowRecordBatch as ArrowRecordBatch,
+    ArrowSchema as ArrowSchema,
+    ArrowTable as ArrowTable,
+    PyEngineConfig as EngineConfig,
+)
 from .blp import (
+    Engine as Engine,
     abcurves as abcurves,
     abdh as abdh,
     abdib as abdib,
@@ -41,7 +49,16 @@ from .blp import (
     seat_type as seat_type,
 )
 
+__version__: str
+
 __all__ = [
+    "__version__",
+    "ArrowField",
+    "ArrowRecordBatch",
+    "ArrowSchema",
+    "ArrowTable",
+    "Engine",
+    "EngineConfig",
     "abcurves",
     "abdh",
     "abdib",

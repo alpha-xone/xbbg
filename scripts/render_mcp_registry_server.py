@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
+"""Render the MCP registry server descriptor for a release."""
+
 from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import re
 import sys
-from pathlib import Path
 
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
@@ -80,9 +82,49 @@ def build_server_metadata(version: str, mcpb_url: str, sha256: str) -> dict[str,
                         "isSecret": False,
                     },
                     {
+                        "name": "XBBG_MCP_MAX_CELLS",
+                        "description": "Maximum data cells across returned rows and columns. Defaults to 50000.",
+                        "default": "50000",
+                        "format": "number",
+                        "isRequired": False,
+                        "isSecret": False,
+                    },
+                    {
+                        "name": "XBBG_MCP_MAX_METADATA_PROPERTIES",
+                        "description": "Maximum metadata properties retained per response. Defaults to 50000.",
+                        "default": "50000",
+                        "format": "number",
+                        "isRequired": False,
+                        "isSecret": False,
+                    },
+                    {
+                        "name": "XBBG_MCP_MAX_METADATA_BYTES",
+                        "description": "Maximum metadata bytes parsed or returned per response. Defaults to 65536.",
+                        "default": "65536",
+                        "format": "number",
+                        "isRequired": False,
+                        "isSecret": False,
+                    },
+                    {
                         "name": "XBBG_MCP_MAX_STRING_CHARS",
                         "description": "Maximum characters per string value returned to the MCP client. Defaults to 2048.",
                         "default": "2048",
+                        "format": "number",
+                        "isRequired": False,
+                        "isSecret": False,
+                    },
+                    {
+                        "name": "XBBG_MCP_MAX_STRING_BYTES",
+                        "description": "Maximum UTF-8 bytes per string value, including a truncation marker. Defaults to 8192; minimum 3.",
+                        "default": "8192",
+                        "format": "number",
+                        "isRequired": False,
+                        "isSecret": False,
+                    },
+                    {
+                        "name": "XBBG_MCP_MAX_RESULT_BYTES",
+                        "description": "Maximum compact-JSON bytes in the structured result, including diagnostics. Defaults to 1048576; minimum 2048.",
+                        "default": "1048576",
                         "format": "number",
                         "isRequired": False,
                         "isSecret": False,

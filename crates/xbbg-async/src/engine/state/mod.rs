@@ -30,6 +30,7 @@ pub use intradaybar_stream::IntradayBarStreamState;
 pub use intradaytick::IntradayTickState;
 pub use intradaytick_stream::IntradayTickStreamState;
 pub use refdata::{LongMode, OutputFormat, RefDataState};
+pub(crate) use subscription::{subscription_forwarder_channel, SubscriptionForwarder};
 pub use subscription::{MessageOutcome, SubscriptionMetrics, SubscriptionState};
 pub use update::{
     FieldIndex, FieldKind, FieldLayout, FieldMeta, SubscriptionUpdate, TopicId, UpdateField,

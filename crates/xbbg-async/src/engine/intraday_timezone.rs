@@ -13,8 +13,6 @@ use arrow_schema::Field;
 use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
-use tokio::sync::mpsc;
-use xbbg_core::BlpError;
 
 use crate::errors::BlpAsyncError;
 use crate::services::Operation;
@@ -266,34 +264,6 @@ pub(crate) async fn resolve_output_tz_iana(
         return Ok(None);
     }
     Ok(Some(iana))
-}
-
-/// Map each streamed batch through [`apply_output_timezone_batch`] when `tz` is set.
-pub(crate) fn wrap_batch_stream_with_output_tz(
-    mut inner: mpsc::Receiver<Result<RecordBatch, BlpError>>,
-    tz: Option<String>,
-) -> mpsc::Receiver<Result<RecordBatch, BlpError>> {
-    let Some(tz) = tz else {
-        return inner;
-    };
-    let (tx, rx) = mpsc::channel(32);
-    tokio::spawn(async move {
-        while let Some(item) = inner.recv().await {
-            let mapped = match item {
-                Ok(batch) => match apply_output_timezone_batch(batch, &tz) {
-                    Ok(b) => Ok(b),
-                    Err(e) => Err(BlpError::Internal {
-                        detail: format!("intraday output timezone: {e}"),
-                    }),
-                },
-                Err(e) => Err(e),
-            };
-            if tx.send(mapped).await.is_err() {
-                break;
-            }
-        }
-    });
-    rx
 }
 
 #[cfg(test)]

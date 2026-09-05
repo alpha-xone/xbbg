@@ -13,7 +13,7 @@ use crate::schema::SchemaCache;
 use crate::services::{ExtractorType, Operation};
 
 use super::state::{LongMode, OutputFormat};
-use super::{RequestParams, SecurityOverridePairs};
+use super::{OverridePairs, RequestParams, SecurityOverridePairs};
 
 fn parse_operation(operation: &str) -> Operation {
     match Operation::from_str(operation) {
@@ -262,21 +262,54 @@ impl PreparedRequest {
     pub(crate) fn params(&self) -> &RequestParams {
         &self.params
     }
-    pub(crate) fn with_securities(&self, securities: Vec<String>) -> Self {
-        let mut cloned = self.clone();
-        cloned.params.securities = Some(securities);
-        cloned
-    }
-    pub(crate) fn with_securities_and_overrides(
+    /// Construct a shard without cloning the original full security vector.
+    ///
+    /// All immutable request semantics are copied directly from the prepared
+    /// request while the shard-owned security and override vectors are supplied
+    /// by the sharding pass.
+    pub(crate) fn for_security_shard(
         &self,
         securities: Vec<String>,
-        overrides: Option<Vec<(String, String)>>,
+        overrides: Option<OverridePairs>,
     ) -> Self {
-        let mut cloned = self.clone();
-        cloned.params.securities = Some(securities);
-        cloned.params.overrides = overrides;
-        cloned.params.security_overrides = None;
-        cloned
+        let params = &self.params;
+        Self {
+            params: RequestParams {
+                service: params.service.clone(),
+                operation: params.operation.clone(),
+                request_operation: params.request_operation.clone(),
+                request_id: params.request_id.clone(),
+                extractor: params.extractor,
+                extractor_set: params.extractor_set,
+                securities: Some(securities),
+                security: params.security.clone(),
+                fields: params.fields.clone(),
+                overrides,
+                security_overrides: None,
+                elements: params.elements.clone(),
+                kwargs: params.kwargs.clone(),
+                start_date: params.start_date.clone(),
+                end_date: params.end_date.clone(),
+                start_datetime: params.start_datetime.clone(),
+                end_datetime: params.end_datetime.clone(),
+                request_tz: params.request_tz.clone(),
+                output_tz: params.output_tz.clone(),
+                event_type: params.event_type.clone(),
+                event_types: params.event_types.clone(),
+                interval: params.interval,
+                options: params.options.clone(),
+                field_types: params.field_types.clone(),
+                include_security_errors: params.include_security_errors,
+                return_eids: params.return_eids,
+                validate_fields: params.validate_fields,
+                search_spec: params.search_spec.clone(),
+                field_ids: params.field_ids.clone(),
+                format: params.format.clone(),
+            },
+            shape: self.shape,
+            operation: self.operation.clone(),
+            raw: self.raw,
+        }
     }
 
     pub(crate) fn operation(&self) -> &Operation {

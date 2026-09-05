@@ -22,6 +22,17 @@ use xbbg_async::engine::{
     SubscriptionStatusState,
 };
 use xbbg_async::field_cache::{FieldInfo, FieldTypeResolver};
+fn print_provenance_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        println!(
+            "XBBG_BENCH_PROVENANCE {}",
+            xbbg_bench::benchmark_provenance_json(
+                "offline lock-free field-cache and subscription-status microbenchmarks; synthetic inputs; no Bloomberg SDK or network"
+            )
+        );
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,6 +86,7 @@ fn make_shared_status(n_topics: usize) -> SharedSubscriptionStatus {
 // ---------------------------------------------------------------------------
 
 fn bench_field_cache_get(c: &mut Criterion) {
+    print_provenance_once();
     let mut group = c.benchmark_group("field_cache_get");
     for size in [100, 5000] {
         let resolver = make_resolver(size);
@@ -90,6 +102,7 @@ fn bench_field_cache_get(c: &mut Criterion) {
 }
 
 fn bench_field_cache_insert(c: &mut Criterion) {
+    print_provenance_once();
     let mut group = c.benchmark_group("field_cache_insert");
     // Pre-populate 1000 entries; then measure per-insert RCU cost.
     group.bench_function("single_key_on_1000_entry_cache", |b| {
@@ -108,6 +121,7 @@ fn bench_field_cache_insert(c: &mut Criterion) {
 }
 
 fn bench_field_cache_bulk_insert(c: &mut Criterion) {
+    print_provenance_once();
     let mut group = c.benchmark_group("field_cache_bulk_insert");
     // Simulate insert_from_response: 100 entries in a single RCU via repeated insert()
     // calls (worst-case unbatched). Also bench a manual single-RCU equivalent.
@@ -150,6 +164,7 @@ fn bench_field_cache_bulk_insert(c: &mut Criterion) {
 }
 
 fn bench_field_cache_resolve_types(c: &mut Criterion) {
+    print_provenance_once();
     let mut group = c.benchmark_group("field_cache_resolve_types");
     let resolver = make_resolver(1000);
     // 50 fields, all present in the 1000-entry cache.
@@ -165,6 +180,7 @@ fn bench_field_cache_resolve_types(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_status_load_topic_for_key(c: &mut Criterion) {
+    print_provenance_once();
     let mut group = c.benchmark_group("subscription_status_read");
     for n_topics in [10, 50, 100] {
         let shared = make_shared_status(n_topics);
@@ -196,6 +212,7 @@ fn bench_status_load_topic_for_key(c: &mut Criterion) {
 }
 
 fn bench_status_rcu_record_subscription_event(c: &mut Criterion) {
+    print_provenance_once();
     let mut group = c.benchmark_group("subscription_status_rcu_subscription_event");
     for n_topics in [10, 100] {
         let shared = make_shared_status(n_topics);
@@ -221,6 +238,7 @@ fn bench_status_rcu_record_subscription_event(c: &mut Criterion) {
 }
 
 fn bench_status_rcu_record_service_state(c: &mut Criterion) {
+    print_provenance_once();
     let mut group = c.benchmark_group("subscription_status_rcu_service_state");
     for n_topics in [10, 100] {
         let shared = make_shared_status(n_topics);
@@ -246,6 +264,7 @@ fn bench_status_rcu_record_service_state(c: &mut Criterion) {
 }
 
 fn bench_status_rcu_mark_topic_streaming(c: &mut Criterion) {
+    print_provenance_once();
     let mut group = c.benchmark_group("subscription_status_rcu_mark_streaming");
     for n_topics in [10, 100] {
         let shared = make_shared_status(n_topics);
@@ -262,6 +281,7 @@ fn bench_status_rcu_mark_topic_streaming(c: &mut Criterion) {
 }
 
 fn bench_status_rcu_burst(c: &mut Criterion) {
+    print_provenance_once();
     let mut group = c.benchmark_group("subscription_status_burst_100_writes");
     let shared = make_shared_status(50);
     let topics: Vec<String> = (0..100u64)

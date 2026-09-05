@@ -98,7 +98,7 @@ ipykernel = "*"
 
 [feature.benchmark.dependencies]
 pandas = ">=2.0"
-polars = ">=0.20"
+polars = ">=0.20.4"
 
 [feature.benchmark.pypi-dependencies]
 pytest-benchmark = ">=4.0"

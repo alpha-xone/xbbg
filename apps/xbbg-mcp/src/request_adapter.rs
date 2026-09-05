@@ -4,8 +4,10 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use xbbg_async::engine::{RequestParams, RequestParamsInput};
+use xbbg_async::engine::{ExtractorType, RequestParams, RequestParamsInput};
 use xbbg_async::services::Operation;
+
+use crate::serialization::{bounded_error_display, ResultLimits};
 
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -214,9 +216,26 @@ pub(crate) struct CheckEntitlementsArgs {
 }
 
 fn build_request_params(input: RequestParamsInput) -> Result<RequestParams, ErrorData> {
-    input
-        .into_request_params()
-        .map_err(|err| ErrorData::invalid_params(err.to_string(), None))
+    if let Some(extractor) = input.extractor.as_deref() {
+        if ExtractorType::parse(extractor).is_none() {
+            let (message, truncated) = bounded_error_display(
+                &format_args!("invalid extractor type: {extractor}"),
+                &ResultLimits::default(),
+            );
+            return Err(ErrorData::invalid_params(
+                message,
+                truncated.then(|| serde_json::json!({"message_truncated": true})),
+            ));
+        }
+    }
+
+    input.into_request_params().map_err(|error| {
+        let (message, truncated) = bounded_error_display(&error, &ResultLimits::default());
+        ErrorData::invalid_params(
+            message,
+            truncated.then(|| serde_json::json!({"message_truncated": true})),
+        )
+    })
 }
 pub(crate) fn bdp_request_params(args: BdpArgs) -> Result<RequestParams, ErrorData> {
     build_request_params(RequestParamsInput {
@@ -521,7 +540,6 @@ fn map_to_hash_map(map: Option<BTreeMap<String, String>>) -> Option<HashMap<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xbbg_async::engine::ExtractorType;
     use xbbg_async::services::Service;
 
     fn params(values: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -780,5 +798,17 @@ mod tests {
             search_spec: Some("price".to_string()),
         })
         .is_err());
+    }
+    #[test]
+    fn request_parameter_errors_do_not_duplicate_unbounded_user_input() {
+        let mut args = empty_request_args("//blp/refdata", Some("ReferenceDataRequest"));
+        args.extractor = Some("x".repeat(100_000));
+
+        let error = generic_request_params(args).unwrap_err();
+        let limits = ResultLimits::default();
+
+        assert!(error.message.len() <= limits.max_string_bytes);
+        assert!(error.message.chars().count() <= limits.max_string_chars);
+        assert_eq!(error.data.unwrap()["message_truncated"], true);
     }
 }

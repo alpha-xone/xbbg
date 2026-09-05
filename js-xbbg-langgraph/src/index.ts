@@ -32,7 +32,11 @@ export {
   type BloombergToolsOptions,
   type NormalizedBloombergToolsOptions,
 } from "./options";
-export type { ToolEnvelope } from "./result-limits";
+export type {
+  ResultTruncationReason,
+  ResultTruncationSummary,
+  ToolEnvelope,
+} from "./result-limits";
 export type { ChartSpecOutput, ChartSpecSummary, VegaLiteSpec } from "./chart-spec";
 export type {
   BloombergChartSource,

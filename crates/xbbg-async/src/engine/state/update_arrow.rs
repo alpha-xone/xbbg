@@ -16,16 +16,24 @@ pub struct SubscriptionArrowBatcher {
     builders: Vec<SubscriptionColumnBuilder>,
     scratch: Vec<Option<usize>>,
     rows: usize,
+    capacity: usize,
 }
 
 impl SubscriptionArrowBatcher {
+    /// Create a batcher sized for the one-update adapter path.
     pub fn new() -> Self {
+        Self::with_capacity(1)
+    }
+
+    /// Create a batcher with a bounded expected row count per flush.
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             layout: None,
             schema: None,
             builders: Vec::new(),
             scratch: Vec::new(),
             rows: 0,
+            capacity,
         }
     }
 
@@ -50,7 +58,11 @@ impl SubscriptionArrowBatcher {
         self.rows == 0
     }
 
-    /// Build a batch from pending rows. Schema and builders are retained for reuse.
+    /// Build a batch from pending rows.
+    ///
+    /// Finishing transfers the builders' buffers to the returned arrays. The
+    /// schema and layout remain cached, while builders are recreated lazily
+    /// with the configured capacity before the next append.
     pub fn flush(&mut self) -> Option<RecordBatch> {
         if self.rows == 0 {
             return None;
@@ -66,6 +78,7 @@ impl SubscriptionArrowBatcher {
             .iter_mut()
             .map(SubscriptionColumnBuilder::finish)
             .collect();
+        self.builders.clear();
         self.rows = 0;
 
         Some(
@@ -76,7 +89,16 @@ impl SubscriptionArrowBatcher {
 
     fn matches_layout(&self, layout: &Arc<FieldLayout>) -> bool {
         self.layout.as_ref().is_some_and(|current| {
-            Arc::ptr_eq(current, layout) || current.version == layout.version
+            Arc::ptr_eq(current, layout)
+                || (current.version == layout.version
+                    && current.fields.len() == layout.fields.len()
+                    && current.fields.iter().zip(layout.fields.iter()).all(
+                        |(current_field, next_field)| {
+                            current_field.index == next_field.index
+                                && current_field.kind == next_field.kind
+                                && current_field.name == next_field.name
+                        },
+                    ))
         })
     }
 
@@ -95,17 +117,7 @@ impl SubscriptionArrowBatcher {
                 .map(|meta| Field::new(meta.name.as_ref(), arrow_datatype(meta.kind), true)),
         );
 
-        let mut builders = Vec::with_capacity(fields.len());
-        builders.push(SubscriptionColumnBuilder::Timestamp(
-            TimestampMicrosecondBuilder::new(),
-        ));
-        builders.push(SubscriptionColumnBuilder::Topic(StringBuilder::new()));
-        builders.extend(
-            layout
-                .fields
-                .iter()
-                .map(|meta| SubscriptionColumnBuilder::for_kind(meta.kind)),
-        );
+        let builders = subscription_builders(&layout, self.capacity);
 
         self.layout = Some(layout);
         self.schema = Some(Arc::new(Schema::new(fields)));
@@ -119,6 +131,10 @@ impl SubscriptionArrowBatcher {
             .as_ref()
             .expect("subscription arrow layout initialized")
             .clone();
+
+        if self.builders.is_empty() {
+            self.builders = subscription_builders(&layout, self.capacity);
+        }
 
         self.scratch.clear();
         self.scratch.resize(layout.fields.len(), None);
@@ -141,6 +157,23 @@ impl SubscriptionArrowBatcher {
 
         self.rows += 1;
     }
+}
+
+fn subscription_builders(layout: &FieldLayout, capacity: usize) -> Vec<SubscriptionColumnBuilder> {
+    let mut builders = Vec::with_capacity(layout.fields.len() + 2);
+    builders.push(SubscriptionColumnBuilder::Timestamp(
+        TimestampMicrosecondBuilder::with_capacity(capacity),
+    ));
+    builders.push(SubscriptionColumnBuilder::Topic(
+        StringBuilder::with_capacity(capacity, capacity),
+    ));
+    builders.extend(
+        layout
+            .fields
+            .iter()
+            .map(|meta| SubscriptionColumnBuilder::for_kind(meta.kind, capacity)),
+    );
+    builders
 }
 
 impl Default for SubscriptionArrowBatcher {
@@ -188,16 +221,22 @@ enum SubscriptionColumnBuilder {
 }
 
 impl SubscriptionColumnBuilder {
-    fn for_kind(kind: FieldKind) -> Self {
+    fn for_kind(kind: FieldKind, capacity: usize) -> Self {
         match kind {
-            FieldKind::Unknown | FieldKind::Str => Self::String(StringBuilder::new()),
-            FieldKind::Bool => Self::Bool(BooleanBuilder::new()),
-            FieldKind::I32 => Self::I32(Int32Builder::new()),
-            FieldKind::I64 => Self::I64(Int64Builder::new()),
-            FieldKind::F64 => Self::F64(Float64Builder::new()),
-            FieldKind::Date32 => Self::Date32(Date32Builder::new()),
-            FieldKind::Time64Micros => Self::Time64Micros(Time64MicrosecondBuilder::new()),
-            FieldKind::TimestampMicros => Self::TimestampMicros(TimestampMicrosecondBuilder::new()),
+            FieldKind::Unknown | FieldKind::Str => {
+                Self::String(StringBuilder::with_capacity(capacity, capacity))
+            }
+            FieldKind::Bool => Self::Bool(BooleanBuilder::with_capacity(capacity)),
+            FieldKind::I32 => Self::I32(Int32Builder::with_capacity(capacity)),
+            FieldKind::I64 => Self::I64(Int64Builder::with_capacity(capacity)),
+            FieldKind::F64 => Self::F64(Float64Builder::with_capacity(capacity)),
+            FieldKind::Date32 => Self::Date32(Date32Builder::with_capacity(capacity)),
+            FieldKind::Time64Micros => {
+                Self::Time64Micros(Time64MicrosecondBuilder::with_capacity(capacity))
+            }
+            FieldKind::TimestampMicros => {
+                Self::TimestampMicros(TimestampMicrosecondBuilder::with_capacity(capacity))
+            }
         }
     }
 
@@ -226,7 +265,6 @@ impl SubscriptionColumnBuilder {
             },
             Self::I32(builder) => match value {
                 Some(UpdateValue::I32(value)) => builder.append_value(*value),
-                Some(UpdateValue::I64(value)) => builder.append_value(*value as i32),
                 _ => builder.append_null(),
             },
             Self::I64(builder) => match value {
@@ -396,7 +434,7 @@ mod tests {
                 FieldMeta::new("STATUS", 2, FieldKind::Str),
             ],
         );
-        let mut batcher = SubscriptionArrowBatcher::new();
+        let mut batcher = SubscriptionArrowBatcher::with_capacity(2);
 
         assert!(batcher
             .append(&update(
@@ -508,7 +546,81 @@ mod tests {
     }
 
     #[test]
-    fn builders_are_reused_after_flush() {
+    fn same_version_different_topic_layout_flushes_without_type_corruption() {
+        let bid_layout = layout(2, vec![FieldMeta::new("BID", 0, FieldKind::F64)]);
+        let text_bid_layout = layout(2, vec![FieldMeta::new("BID", 0, FieldKind::Str)]);
+        let mut batcher = SubscriptionArrowBatcher::with_capacity(2);
+
+        assert!(batcher
+            .append(&update(
+                10,
+                "IBM US Equity",
+                bid_layout,
+                [update_field(0, UpdateValue::F64(1.25))],
+            ))
+            .is_none());
+        let bid_batch = batcher
+            .append(&update(
+                20,
+                "MSFT US Equity",
+                text_bid_layout,
+                [update_field(0, UpdateValue::Str(Arc::from("OPEN")))],
+            ))
+            .expect("a structurally different layout must flush pending rows");
+
+        assert_eq!(bid_batch.schema().field(2).name(), "BID");
+        assert_eq!(
+            bid_batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(0),
+            1.25
+        );
+
+        let status_batch = batcher.flush().unwrap();
+        assert_eq!(status_batch.schema().field(2).name(), "BID");
+        assert_eq!(status_batch.schema().field(2).data_type(), &DataType::Utf8);
+        assert_eq!(
+            status_batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            "OPEN"
+        );
+    }
+
+    #[test]
+    fn i64_values_do_not_wrap_into_i32_columns() {
+        let layout = layout(1, vec![FieldMeta::new("SIZE", 0, FieldKind::I32)]);
+        let mut batcher = SubscriptionArrowBatcher::with_capacity(2);
+        for value in [i64::from(i32::MAX) + 1, i64::from(i32::MIN) - 1] {
+            assert!(batcher
+                .append(&update(
+                    value,
+                    "IBM US Equity",
+                    layout.clone(),
+                    [update_field(0, UpdateValue::I64(value))],
+                ))
+                .is_none());
+        }
+
+        let batch = batcher.flush().unwrap();
+        let values = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(values.len(), 2);
+        assert!(values.is_null(0));
+        assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn appending_after_flush_recreates_capacity_bounded_builders() {
         let layout = layout(1, vec![FieldMeta::new("BID", 0, FieldKind::F64)]);
         let mut batcher = SubscriptionArrowBatcher::new();
 
@@ -548,6 +660,22 @@ mod tests {
                 .value(0),
             2.5
         );
+    }
+
+    #[test]
+    fn one_row_adapter_does_not_retain_bulk_builder_capacity() {
+        let layout = layout(1, vec![FieldMeta::new("BID", 0, FieldKind::F64)]);
+        let update = update(
+            10,
+            "IBM US Equity",
+            layout,
+            [update_field(0, UpdateValue::F64(1.25))],
+        );
+
+        let batch = subscription_update_to_record_batch(&update).unwrap();
+
+        assert!(batch.column(0).get_buffer_memory_size() < 1024);
+        assert!(batch.column(2).get_buffer_memory_size() < 1024);
     }
 
     #[test]

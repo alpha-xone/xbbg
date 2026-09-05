@@ -1,19 +1,12 @@
-"""Tests for streaming API enhancements (Tasks 3-12).
-
-These tests verify:
-1. New parameter signatures on asubscribe, astream, stream, subscribe
-2. Validation logic for config params (flush_threshold, stream_capacity, overflow_policy)
-3. Warning behavior for tick_mode + flush_threshold conflicts
-4. Subscription.stats property exists
-5. Backward compatibility (all new params have defaults)
-
-All tests run offline — no Bloomberg connection required.
-"""
+"""Offline behavioral coverage for the Python streaming APIs."""
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
+import queue
+import threading
 
 import pytest
 
@@ -109,6 +102,364 @@ class TestStreamSignature:
 
         assert "conflate" in params
         assert params["conflate"].default is False
+
+
+class TestSyncStreamLifecycle:
+    """Exercise the bounded sync bridge through the public generator."""
+
+    def test_capacity_backpressures_and_close_unsubscribes(self, monkeypatch):
+        from xbbg import blp as blp_module
+
+        produced: list[int] = []
+        reached_full_bridge = threading.Event()
+        producer_completed = threading.Event()
+        unsubscribed = threading.Event()
+
+        async def autonomous_stream(*_args, **_kwargs):
+            try:
+                for item in range(10_000):
+                    produced.append(item)
+                    if item == 5:
+                        reached_full_bridge.set()
+                    yield item
+                producer_completed.set()
+            finally:
+                unsubscribed.set()
+
+        monkeypatch.setattr(blp_module, "astream", autonomous_stream)
+        capacity = 4
+        batches = blp_module.stream("IBM US Equity", "LAST_PRICE", stream_capacity=capacity)
+
+        assert next(batches) == 0
+        assert reached_full_bridge.wait(timeout=1)
+        assert produced == list(range(len(produced)))
+        assert len(produced) <= capacity + 2  # one consumed batch and one producer-local batch
+        assert not producer_completed.is_set()
+
+        batches.close()
+
+        assert unsubscribed.wait(timeout=1)
+
+    def test_streams_share_one_managed_producer_thread_and_capture_context(self, monkeypatch):
+        from xbbg import blp as blp_module
+
+        unsubscribed: list[threading.Event] = []
+
+        async def autonomous_stream(*_args, **_kwargs):
+            closed = threading.Event()
+            unsubscribed.append(closed)
+            try:
+                yield threading.current_thread().ident, blp_module._get_engine()
+                await asyncio.Event().wait()
+            finally:
+                closed.set()
+
+        class ScopedEngine:
+            def __init__(self):
+                self._py_engine = object()
+
+        first_scope = ScopedEngine()
+        second_scope = ScopedEngine()
+        monkeypatch.setattr(blp_module, "astream", autonomous_stream)
+        first = blp_module.stream("IBM US Equity", "LAST_PRICE")
+        second = blp_module.stream("MSFT US Equity", "LAST_PRICE")
+
+        first_token = blp_module._active_engine.set(first_scope)
+        try:
+            first_thread, first_engine = next(first)
+        finally:
+            blp_module._active_engine.reset(first_token)
+
+        second_token = blp_module._active_engine.set(second_scope)
+        try:
+            second_thread, second_engine = next(second)
+        finally:
+            blp_module._active_engine.reset(second_token)
+
+        try:
+            assert first_thread == second_thread
+            assert first_engine is first_scope._py_engine
+            assert second_engine is second_scope._py_engine
+        finally:
+            first.close()
+            second.close()
+
+        assert len(unsubscribed) == 2
+        assert all(closed.is_set() for closed in unsubscribed)
+
+    def test_stream_producer_admission_is_scoped_per_engine(self, monkeypatch):
+        from xbbg import blp as blp_module
+
+        async def autonomous_stream(*_args, **_kwargs):
+            yield "first"
+            await asyncio.Event().wait()
+
+        class Config:
+            def __init__(self, limit):
+                self.max_subscription_sessions = limit
+
+        class ScopedEngine:
+            def __init__(self, limit):
+                self._config_snapshot = Config(limit)
+                self._py_engine = object()
+
+        def start_in_scope(generator, scope):
+            token = blp_module._active_engine.set(scope)
+            try:
+                return next(generator)
+            finally:
+                blp_module._active_engine.reset(token)
+
+        first_scope = ScopedEngine(2)
+        second_scope = ScopedEngine(1)
+        monkeypatch.setattr(blp_module, "astream", autonomous_stream)
+        first_a = blp_module.stream("IBM US Equity", "LAST_PRICE")
+        first_b = blp_module.stream("MSFT US Equity", "LAST_PRICE")
+        second_a = blp_module.stream("NVDA US Equity", "LAST_PRICE")
+
+        try:
+            assert start_in_scope(first_a, first_scope) == "first"
+            assert start_in_scope(first_b, second_scope) == "first"
+
+            rejected_b = blp_module.stream("AMZN US Equity", "LAST_PRICE")
+            with pytest.raises(RuntimeError, match="producer limit"):
+                start_in_scope(rejected_b, second_scope)
+
+            assert start_in_scope(second_a, first_scope) == "first"
+            rejected_a = blp_module.stream("META US Equity", "LAST_PRICE")
+            with pytest.raises(RuntimeError, match="producer limit"):
+                start_in_scope(rejected_a, first_scope)
+        finally:
+            first_a.close()
+            first_b.close()
+            second_a.close()
+
+    def test_consumer_exception_cancels_producer_waiting_for_tick(self, monkeypatch):
+        from xbbg import blp as blp_module
+
+        waiting_for_tick = threading.Event()
+        unsubscribed = threading.Event()
+
+        async def autonomous_stream(*_args, **_kwargs):
+            try:
+                yield "first"
+                waiting_for_tick.set()
+                await asyncio.Event().wait()
+            finally:
+                unsubscribed.set()
+
+        monkeypatch.setattr(blp_module, "astream", autonomous_stream)
+        batches = blp_module.stream("IBM US Equity", "LAST_PRICE")
+
+        assert next(batches) == "first"
+        assert waiting_for_tick.wait(timeout=1)
+
+        consumer_error = RuntimeError("consumer failed")
+        with pytest.raises(RuntimeError) as raised:
+            batches.throw(consumer_error)
+
+        assert raised.value is consumer_error
+        assert unsubscribed.wait(timeout=1)
+
+    def test_cleanup_error_is_reported_without_masking_consumer_error(self, monkeypatch, caplog):
+        from xbbg import blp as blp_module
+
+        reached_full_bridge = threading.Event()
+        cleanup_started = threading.Event()
+
+        class CleanupError(RuntimeError):
+            pass
+
+        cleanup_error = CleanupError("unsubscribe failed")
+
+        async def autonomous_stream(*_args, **_kwargs):
+            try:
+                for item in range(10_000):
+                    if item == 5:
+                        reached_full_bridge.set()
+                    yield item
+            finally:
+                cleanup_started.set()
+                raise cleanup_error
+
+        monkeypatch.setattr(blp_module, "astream", autonomous_stream)
+        batches = blp_module.stream("IBM US Equity", "LAST_PRICE", stream_capacity=4)
+
+        assert next(batches) == 0
+        assert reached_full_bridge.wait(timeout=1)
+
+        consumer_error = RuntimeError("consumer failed")
+        with caplog.at_level(logging.ERROR, logger="xbbg.blp"), pytest.raises(RuntimeError) as raised:
+            batches.throw(consumer_error)
+
+        assert raised.value is consumer_error
+        assert cleanup_started.wait(timeout=1)
+        assert any(record.exc_info and record.exc_info[1] is cleanup_error for record in caplog.records)
+
+    def test_close_timeout_fails_and_retains_bounded_producer_slot(self, monkeypatch):
+        from xbbg import blp as blp_module
+
+        cleanup_started = threading.Event()
+        cleanup_finished = threading.Event()
+        producer_released = threading.Event()
+        cleanup_gate: list[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = []
+        producer_calls = []
+
+        original_start = blp_module._notebook_sync_bridge.start
+
+        def capture_start(*args, **kwargs):
+            call = original_start(*args, **kwargs)
+            producer_calls.append(call)
+            return call
+
+        async def cancellation_resistant_stream(*_args, **_kwargs):
+            loop = asyncio.get_running_loop()
+            gate = loop.create_future()
+            cleanup_gate.append((loop, gate))
+            try:
+                yield "first"
+                await asyncio.Event().wait()
+            finally:
+                cleanup_started.set()
+                await gate
+                cleanup_finished.set()
+
+        monkeypatch.setattr(blp_module, "astream", cancellation_resistant_stream)
+        monkeypatch.setattr(blp_module._notebook_sync_bridge, "start", capture_start)
+        monkeypatch.setattr(blp_module, "_DEFAULT_MAX_SYNC_STREAM_PRODUCERS", 1)
+        monkeypatch.setattr(blp_module, "_SYNC_STREAM_CLOSE_TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr(blp_module, "_config", None)
+        batches = blp_module.stream("IBM US Equity", "LAST_PRICE")
+
+        assert next(batches) == "first"
+        try:
+            with pytest.raises(RuntimeError, match="close timeout"):
+                batches.close()
+            assert cleanup_started.wait(timeout=1)
+
+            blocked = blp_module.stream("MSFT US Equity", "LAST_PRICE")
+            with pytest.raises(RuntimeError, match="producer limit"):
+                next(blocked)
+        finally:
+            if cleanup_gate:
+                assert producer_calls
+                producer_calls[0].result.add_done_callback(lambda _result: producer_released.set())
+                loop, gate = cleanup_gate[0]
+                loop.call_soon_threadsafe(gate.set_result, None)
+
+        assert cleanup_finished.wait(timeout=1)
+        assert producer_calls
+        assert producer_released.wait(timeout=1)
+
+        async def completed_stream(*_args, **_kwargs):
+            yield "accepted"
+
+        monkeypatch.setattr(blp_module, "astream", completed_stream)
+        assert list(blp_module.stream("MSFT US Equity", "LAST_PRICE")) == ["accepted"]
+
+    def test_completion_drains_all_buffered_data(self, monkeypatch):
+        from xbbg import blp as blp_module
+
+        async def autonomous_stream(*_args, **_kwargs):
+            for item in range(20):
+                yield item
+
+        monkeypatch.setattr(blp_module, "astream", autonomous_stream)
+
+        assert list(blp_module.stream("IBM US Equity", "LAST_PRICE", stream_capacity=4)) == list(range(20))
+
+    def test_sync_callback_runs_on_consuming_thread(self, monkeypatch):
+        from xbbg import blp as blp_module
+
+        callback_threads = []
+
+        async def autonomous_stream(*_args, **_kwargs):
+            for item in range(3):
+                yield item
+
+        def callback(_batch):
+            callback_threads.append(threading.current_thread().ident)
+
+        monkeypatch.setattr(blp_module, "astream", autonomous_stream)
+        consuming_thread = threading.current_thread().ident
+
+        assert list(blp_module.stream("IBM US Equity", "LAST_PRICE", callback=callback)) == [0, 1, 2]
+        assert callback_threads == [consuming_thread, consuming_thread, consuming_thread]
+
+    def test_completion_race_rechecks_queue_after_producer_stops(self, monkeypatch):
+        from xbbg import blp as blp_module
+
+        source_waiting = threading.Event()
+        source_finished = threading.Event()
+        source_gate: list[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = []
+        producer_calls = []
+
+        original_start = blp_module._notebook_sync_bridge.start
+
+        def capture_start(*args, **kwargs):
+            call = original_start(*args, **kwargs)
+            producer_calls.append(call)
+            return call
+
+        async def autonomous_stream(*_args, **_kwargs):
+            loop = asyncio.get_running_loop()
+            gate = loop.create_future()
+            source_gate.append((loop, gate))
+            source_waiting.set()
+            await gate
+            yield "last"
+            source_finished.set()
+
+        boundary_forced = False
+
+        class CompletionBoundaryQueue(queue.Queue):
+            def get_nowait(self):
+                nonlocal boundary_forced
+                try:
+                    return super().get_nowait()
+                except queue.Empty:
+                    if boundary_forced:
+                        raise
+                    boundary_forced = True
+                    assert source_waiting.wait(timeout=1)
+                    assert producer_calls
+                    completion_acknowledged = threading.Event()
+                    producer_calls[0].result.add_done_callback(lambda _result: completion_acknowledged.set())
+                    loop, gate = source_gate[0]
+                    loop.call_soon_threadsafe(gate.set_result, None)
+                    assert source_finished.wait(timeout=1)
+                    assert completion_acknowledged.wait(timeout=1)
+                    raise
+
+        monkeypatch.setattr(blp_module, "astream", autonomous_stream)
+        monkeypatch.setattr(blp_module._notebook_sync_bridge, "start", capture_start)
+        monkeypatch.setattr(queue, "Queue", CompletionBoundaryQueue)
+
+        assert list(blp_module.stream("IBM US Equity", "LAST_PRICE", stream_capacity=4)) == ["last"]
+
+    def test_producer_error_follows_all_buffered_data(self, monkeypatch):
+        from xbbg import blp as blp_module
+
+        class ProducerError(RuntimeError):
+            pass
+
+        error = ProducerError("producer failed")
+
+        async def autonomous_stream(*_args, **_kwargs):
+            for item in range(20):
+                yield item
+            raise error
+
+        monkeypatch.setattr(blp_module, "astream", autonomous_stream)
+        batches = blp_module.stream("IBM US Equity", "LAST_PRICE", stream_capacity=4)
+        received = []
+
+        with pytest.raises(ProducerError) as raised:
+            while True:
+                received.append(next(batches))
+
+        assert raised.value is error
+        assert received == list(range(20))
 
 
 class TestStreamingServiceHelpersSignature:

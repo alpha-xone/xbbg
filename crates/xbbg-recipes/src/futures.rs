@@ -56,49 +56,11 @@ pub async fn recipe_fut_ticker(
 ) -> Result<RecordBatch> {
     let dt_parsed = parse_date(&dt)?;
     let idx = contract_index(&gen_ticker)?;
-
-    use std::str::FromStr;
-    let freq = freq
-        .as_deref()
-        .and_then(|s| RollFrequency::from_str(s).ok())
-        .unwrap_or(RollFrequency::Monthly);
-
-    let count = futures_candidate_count(&gen_ticker, idx)?;
-    let candidates = generate_futures_candidates(&gen_ticker, dt_parsed, freq, count)?;
-
-    if candidates.is_empty() {
-        return Err(RecipeError::Other(format!(
-            "no futures candidates generated for '{gen_ticker}'"
-        )));
-    }
-
-    let candidate_tickers: Vec<String> = candidates.into_iter().map(|c| c.ticker).collect();
-    let params = RequestParams {
-        service: Service::RefData.to_string(),
-        operation: Operation::ReferenceData.to_string(),
-        securities: Some(candidate_tickers),
-        fields: Some(vec!["LAST_TRADEABLE_DT".to_string()]),
-        ..Default::default()
-    };
-
-    let maturity_batch = engine.request(params).await?;
-    let mut valid_contracts = extract_refdata_date_values(&maturity_batch, "LAST_TRADEABLE_DT")?
-        .into_iter()
-        .filter(|(_, maturity)| *maturity > dt_parsed)
-        .collect::<Vec<_>>();
-
-    valid_contracts.sort_by_key(|(_, maturity)| *maturity);
-
-    let selected = valid_contracts
-        .get(idx)
-        .map(|(ticker, _)| ticker.clone())
-        .ok_or_else(|| {
-            RecipeError::Other(format!(
-                "unable to resolve futures contract for '{gen_ticker}' on {dt}: requested index {} but only {} valid maturities",
-                idx + 1,
-                valid_contracts.len()
-            ))
-        })?;
+    let freq = parse_roll_frequency(freq.as_deref());
+    let candidate_tickers = futures_candidate_tickers(&gen_ticker, dt_parsed, freq, idx)?;
+    let maturities = request_futures_maturities(engine, candidate_tickers).await?;
+    let valid_contracts = valid_futures_contracts(maturities, dt_parsed);
+    let (selected, _) = select_futures_contract(&valid_contracts, &gen_ticker, &dt, idx)?;
 
     build_single_ticker_batch(selected)
 }
@@ -109,9 +71,9 @@ pub async fn recipe_fut_ticker(
 /// 1. Validate generic ticker input and parse the reference date.
 /// 2. Query historical `FUT_CUR_GEN_TICKER` up to `dt` and return Bloomberg's
 ///    own generic mapping when available.
-/// 3. Otherwise build front/second generic contracts and resolve both via
-///    [`recipe_fut_ticker`].
-/// 4. Compare front maturity month vs `dt`.
+/// 3. Otherwise resolve front and second contracts from one shared candidate
+///    maturity request.
+/// 4. Compare the resolved front maturity month vs `dt`.
 /// 5. If near roll, query 10-day historical `VOLUME` and compare contracts.
 /// 6. Return the selected active ticker as a single-row `RecordBatch`.
 ///
@@ -138,34 +100,35 @@ pub async fn recipe_active_futures(
 
     let front_gen = with_generic_index(&gen_ticker, 1)?;
     let second_gen = with_generic_index(&gen_ticker, 2)?;
-
-    let front_ticker = {
-        let batch = recipe_fut_ticker(engine, front_gen, dt.clone(), freq.clone()).await?;
-        extract_single_ticker(&batch)?
+    let second_idx = contract_index(&second_gen)?;
+    let freq = parse_roll_frequency(freq.as_deref());
+    let front_candidate_count = futures_candidate_count(&front_gen, 0)?;
+    let candidate_tickers = futures_candidate_tickers(&front_gen, dt_parsed, freq, second_idx)?;
+    let front_candidate_tickers = candidate_tickers
+        .iter()
+        .take(front_candidate_count)
+        .cloned()
+        .collect::<Vec<_>>();
+    let maturities = request_futures_maturities(engine, candidate_tickers).await?;
+    let front_contracts =
+        valid_futures_contracts_for_candidates(&maturities, &front_candidate_tickers, dt_parsed);
+    let second_contracts = valid_futures_contracts(maturities, dt_parsed);
+    let ((front_ticker, front_maturity), second_contract) = select_active_futures_pair(
+        &front_contracts,
+        &second_contracts,
+        &front_gen,
+        &second_gen,
+        &dt,
+        second_idx,
+    )?;
+    let Some((second_ticker, _)) = second_contract else {
+        return build_single_ticker_batch(front_ticker);
     };
 
-    let second_ticker = match recipe_fut_ticker(engine, second_gen, dt.clone(), freq).await {
-        Ok(batch) => extract_single_ticker(&batch)?,
-        Err(_) => return build_single_ticker_batch(front_ticker),
-    };
-
-    let maturity_params = RequestParams {
-        service: Service::RefData.to_string(),
-        operation: Operation::ReferenceData.to_string(),
-        securities: Some(vec![front_ticker.clone(), second_ticker.clone()]),
-        fields: Some(vec!["LAST_TRADEABLE_DT".to_string()]),
-        ..Default::default()
-    };
-
-    let maturity_batch = engine.request(maturity_params).await?;
-    if let Some(front_maturity) =
-        extract_refdata_date_for_ticker(&maturity_batch, &front_ticker, "LAST_TRADEABLE_DT")?
-    {
-        let dt_month = (dt_parsed.year(), dt_parsed.month());
-        let maturity_month = (front_maturity.year(), front_maturity.month());
-        if dt_month < maturity_month {
-            return build_single_ticker_batch(front_ticker);
-        }
+    let dt_month = (dt_parsed.year(), dt_parsed.month());
+    let maturity_month = (front_maturity.year(), front_maturity.month());
+    if dt_month < maturity_month {
+        return build_single_ticker_batch(front_ticker);
     }
 
     let start_date = dt_parsed - Duration::days(10);
@@ -596,6 +559,104 @@ fn has_history_value(batch: &RecordBatch, ticker: &str, field: &str) -> Result<b
     Ok(latest_history_numeric_point(batch, ticker, field)?.is_some())
 }
 
+fn parse_roll_frequency(freq: Option<&str>) -> RollFrequency {
+    use std::str::FromStr;
+    freq.and_then(|value| RollFrequency::from_str(value).ok())
+        .unwrap_or(RollFrequency::Monthly)
+}
+
+fn futures_candidate_tickers(
+    gen_ticker: &str,
+    dt: NaiveDate,
+    freq: RollFrequency,
+    highest_index: usize,
+) -> Result<Vec<String>> {
+    let count = futures_candidate_count(gen_ticker, highest_index)?;
+    let candidates = generate_futures_candidates(gen_ticker, dt, freq, count)?;
+    if candidates.is_empty() {
+        return Err(RecipeError::Other(format!(
+            "no futures candidates generated for '{gen_ticker}'"
+        )));
+    }
+    Ok(candidates
+        .into_iter()
+        .map(|candidate| candidate.ticker)
+        .collect())
+}
+
+async fn request_futures_maturities(
+    engine: &Engine,
+    candidate_tickers: Vec<String>,
+) -> Result<Vec<(String, NaiveDate)>> {
+    let params = RequestParams {
+        service: Service::RefData.to_string(),
+        operation: Operation::ReferenceData.to_string(),
+        securities: Some(candidate_tickers),
+        fields: Some(vec!["LAST_TRADEABLE_DT".to_string()]),
+        ..Default::default()
+    };
+    let maturity_batch = engine.request(params).await?;
+    extract_refdata_date_values(&maturity_batch, "LAST_TRADEABLE_DT")
+}
+
+fn valid_futures_contracts(
+    mut contracts: Vec<(String, NaiveDate)>,
+    dt: NaiveDate,
+) -> Vec<(String, NaiveDate)> {
+    contracts.retain(|(_, maturity)| *maturity > dt);
+    contracts.sort_by_key(|(_, maturity)| *maturity);
+    contracts
+}
+
+fn valid_futures_contracts_for_candidates(
+    contracts: &[(String, NaiveDate)],
+    candidate_tickers: &[String],
+    dt: NaiveDate,
+) -> Vec<(String, NaiveDate)> {
+    let candidate_tickers = candidate_tickers
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    valid_futures_contracts(
+        contracts
+            .iter()
+            .filter(|(ticker, _)| candidate_tickers.contains(ticker.as_str()))
+            .cloned()
+            .collect(),
+        dt,
+    )
+}
+
+fn select_futures_contract(
+    valid_contracts: &[(String, NaiveDate)],
+    gen_ticker: &str,
+    dt: &str,
+    idx: usize,
+) -> Result<(String, NaiveDate)> {
+    valid_contracts.get(idx).cloned().ok_or_else(|| {
+        RecipeError::Other(format!(
+            "unable to resolve futures contract for '{gen_ticker}' on {dt}: requested index {} but only {} valid maturities",
+            idx + 1,
+            valid_contracts.len()
+        ))
+    })
+}
+
+type DatedFuturesContract = (String, NaiveDate);
+
+fn select_active_futures_pair(
+    front_contracts: &[DatedFuturesContract],
+    second_contracts: &[DatedFuturesContract],
+    front_gen: &str,
+    second_gen: &str,
+    dt: &str,
+    second_idx: usize,
+) -> Result<(DatedFuturesContract, Option<DatedFuturesContract>)> {
+    let front = select_futures_contract(front_contracts, front_gen, dt, 0)?;
+    let second = select_futures_contract(second_contracts, second_gen, dt, second_idx).ok();
+    Ok((front, second))
+}
+
 async fn bloomberg_current_generic_ticker(
     engine: &Engine,
     gen_ticker: &str,
@@ -968,23 +1029,6 @@ fn build_single_ticker_batch(ticker: String) -> Result<RecordBatch> {
     RecordBatch::try_new(schema, vec![Arc::new(ticker_array)]).map_err(Into::into)
 }
 
-fn extract_single_ticker(batch: &RecordBatch) -> Result<String> {
-    let ticker_col = batch
-        .column_by_name("ticker")
-        .ok_or_else(|| RecipeError::Other("missing 'ticker' column".to_string()))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| RecipeError::Other("'ticker' column must be Utf8".to_string()))?;
-
-    if ticker_col.is_empty() || ticker_col.is_null(0) {
-        return Err(RecipeError::Other(
-            "resolved ticker batch is empty or null".to_string(),
-        ));
-    }
-
-    Ok(ticker_col.value(0).to_string())
-}
-
 fn extract_refdata_string_for_ticker(
     batch: &RecordBatch,
     ticker: &str,
@@ -1212,6 +1256,82 @@ mod tests {
 
         assert_eq!(idx0, 3);
         assert_eq!(idx2, 6);
+    }
+
+    #[test]
+    fn test_active_futures_pair_uses_sorted_valid_maturities_and_front_fallback() {
+        let dt = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let valid = valid_futures_contracts(
+            vec![
+                (
+                    "ESM24 Index".to_string(),
+                    NaiveDate::from_ymd_opt(2024, 6, 21).unwrap(),
+                ),
+                (
+                    "ESF24 Index".to_string(),
+                    NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+                ),
+                (
+                    "ESH24 Index".to_string(),
+                    NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+                ),
+            ],
+            dt,
+        );
+
+        let (front, second) =
+            select_active_futures_pair(&valid, &valid, "ES1 Index", "ES2 Index", "20240115", 1)
+                .unwrap();
+        assert_eq!(front.0, "ESH24 Index");
+        assert_eq!(front.1, NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
+        assert_eq!(second.unwrap().0, "ESM24 Index");
+
+        let (front, second) = select_active_futures_pair(
+            &valid[..1],
+            &valid[..1],
+            "ES1 Index",
+            "ES2 Index",
+            "20240115",
+            1,
+        )
+        .unwrap();
+        assert_eq!(front.0, "ESH24 Index");
+        assert_eq!(second, None);
+
+        let error =
+            select_active_futures_pair(&[], &valid, "ES1 Index", "ES2 Index", "20240115", 1)
+                .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Recipe error: unable to resolve futures contract for 'ES1 Index' on 20240115: \
+             requested index 1 but only 0 valid maturities"
+        );
+    }
+
+    #[test]
+    fn test_shared_maturity_lookup_preserves_front_candidate_scope() {
+        let dt = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let maturities = vec![
+            (
+                "ESN24 Index".to_string(),
+                NaiveDate::from_ymd_opt(2024, 2, 15).unwrap(),
+            ),
+            (
+                "ESH24 Index".to_string(),
+                NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+            ),
+            (
+                "ESM24 Index".to_string(),
+                NaiveDate::from_ymd_opt(2024, 6, 21).unwrap(),
+            ),
+        ];
+        let front_candidates = vec!["ESH24 Index".to_string(), "ESM24 Index".to_string()];
+
+        let front = valid_futures_contracts_for_candidates(&maturities, &front_candidates, dt);
+        let second = valid_futures_contracts(maturities, dt);
+
+        assert_eq!(front[0].0, "ESH24 Index");
+        assert_eq!(second[0].0, "ESN24 Index");
     }
 
     #[test]
@@ -1592,13 +1712,6 @@ mod tests {
         assert_eq!(required_cdx_number(&batch, ticker, "VERSION").unwrap(), 2);
         assert!(required_cdx_number(&batch, ticker, "ROLLING_SERIES").is_err());
         assert_eq!(parse_series_number("0"), None);
-    }
-
-    #[test]
-    fn test_build_and_extract_single_ticker_batch() {
-        let batch = build_single_ticker_batch("CDX IG CDSI S45 5Y Corp".to_string()).unwrap();
-        let ticker = extract_single_ticker(&batch).unwrap();
-        assert_eq!(ticker, "CDX IG CDSI S45 5Y Corp");
     }
 
     #[test]

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Explicit resource limits and ownership controls.** Engines expose `runtime_worker_threads` / `runtimeWorkerThreads` (default 2) and `max_subscription_sessions` / `maxSubscriptionSessions` (default 32). Native Arrow carriers expose `compact()` to detach retained slices from larger backing allocations when the caller prefers a copy over retaining the parent.
+- **Independent application and model result budgets.** LangGraph tools bound application artifacts and model content separately, including aggregate node and streaming-materialization limits. MCP adds cell, UTF-8 string, metadata, and final-result byte budgets alongside its row limit; bounded envelopes retain primary diagnostics and report omissions rather than silently presenting partial data as complete.
+
+### Changed
+
+- **Streaming resources are bounded across the Python bridge, SDK sessions, and consumer queues.** Synchronous Python streams share a managed event loop with bounded per-stream buffering and producer admission. Subscription sessions use explicit leases and a hard cap; full consumer queues no longer make the SDK callback wait. Status changes are published in batches instead of cloning snapshots for each topic transition.
+- **Arrow conversion does less unnecessary allocation and materialization.** Small subscription batches use right-sized builders; logical slices and validity buffers are normalized before handoff. Node Arrow construction avoids IPC encoding/decoding while exposing exclusively JS-owned mutable buffer snapshots, rather than writable aliases of immutable Rust storage. BQL scalar deserialization no longer requires an intermediate JSON value tree.
+- **Optional dataframe backends preserve ownership and deferred work.** DuckDB relations share one process-local database while retaining independent connections and source lifetimes; an initialized database is explicitly rejected after `fork`. Polars conversion preserves Arrow chunk boundaries, and `narwhals_lazy` now uses a real Polars lazy plan for local dataframe operations. The supported Polars floor is `0.20.4`, with its timezone extra supplying Windows timezone data.
+- **Recipes avoid repeated work without changing financial results.** Futures metadata lookups are combined, independent ETF request legs can overlap, and dividend windows advance over active events while preserving boundary rules and floating-point results.
+- **Large MCP serialization uses bounded blocking work.** The MCP runtime uses two async workers and admits at most two offloaded serializations, keeping large result conversion off the async workers without creating an unbounded work queue.
+- **Benchmark results now describe the work actually measured.** Cold/setup, warm timing, consumption, and memory observation are separated; percentile output requires enough samples (20 for p95, 100 for p99). Replay loss accounting and comparison inputs are checked. Native build provenance comes from Cargo's actual artifact and compiler settings, includes the SDK link input and artifact hashes, and rejects mismatched or host-tuned artifacts during portable release staging.
+
+### Fixed
+
+- **Subscription shutdown preserves cancellation and errors across bindings.** Pending reads, iterator `return()` / early `for await` exit, abort signals, drain barriers, and shared scalar/Arrow views coordinate one native close. Failed closes—including an undefined JavaScript rejection reason—remain failures and release completed session claims. Ordinary engine shutdown is distinct from interpreter finalization, which suppresses unsafe Python completion callbacks.
+- **Configuration and caches no longer race their owners.** Scoped Python engines use context-local tokens; configuration replacement and field-cache generations are coordinated. Schema caches and readers are bounded, publications are ordered and atomic, service filenames are collision-free, and targeted invalidation reports failed persistence. Windows publication uses shared-handle POSIX rename semantics so concurrent readers retain complete snapshots; unsupported filesystems fail without an unsafe replacement fallback.
+- **Native Arrow edge cases preserve data.** Zero-column tables retain their row counts through construction, renaming, and Narwhals row access. Mixed numeric inference does not round inexact large integers through `float64`, and native temporal schemas retain their precision and timezone through Narwhals and legacy Polars conversion.
+
 ## [1.4.11] - 2026-09-02
 
 ### Fixed

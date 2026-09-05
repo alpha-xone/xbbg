@@ -7,7 +7,7 @@
 //!
 //! The async API releases the GIL during Bloomberg SDK operations:
 //! - `future_into_py` schedules work on tokio (no GIL held)
-//! - GIL is only acquired via `Python::try_attach()` for final Arrow conversion
+//! - GIL is only acquired via `Python::try_attach()` to attach finished Rust Arrow buffers
 //! - `py.detach()` releases GIL during blocking `Engine::start()`
 //!
 //! # Exception Mapping
@@ -41,10 +41,12 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 
+use arrow_array::RecordBatch;
 use chrono::{DateTime, Datelike, NaiveDate, Timelike};
 use pyo3::exceptions::{PyRuntimeError, PyStopAsyncIteration, PyValueError};
 use pyo3::prelude::*;
@@ -56,7 +58,7 @@ use tokio::sync::{watch, Mutex};
 use xbbg_log::{debug, info, warn};
 
 use xbbg_async::engine::state::{
-    subscription_update_to_record_batch, SubscriptionMetrics, SubscriptionUpdate, UpdateValue,
+    FieldLayout, SubscriptionArrowBatcher, SubscriptionMetrics, SubscriptionUpdate, UpdateValue,
 };
 use xbbg_async::engine::{
     AdminStatusInfo, Engine, EngineConfig, RetryPolicy, ServerAddr, ServiceStatusInfo,
@@ -79,8 +81,36 @@ type StreamBatchResult = Result<SubscriptionUpdate, BlpError>;
 type StreamSender = tokio::sync::mpsc::Sender<StreamBatchResult>;
 type StreamReceiver = tokio::sync::mpsc::Receiver<StreamBatchResult>;
 type SharedStreamReceiver = Arc<Mutex<Option<StreamReceiver>>>;
+type SharedPendingStreamItems = Arc<StdMutex<VecDeque<StreamBatchResult>>>;
 type SubscriptionMetricsMap = HashMap<usize, Arc<SubscriptionMetrics>>;
 type SubscriptionEventTuple = (i64, String, String, String, Option<String>, Option<String>);
+const MAX_SUBSCRIPTION_BATCH_CAPACITY_HINT: usize = 4096;
+
+static INTERPRETER_SHUTDOWN: LazyLock<watch::Sender<bool>> =
+    LazyLock::new(|| watch::channel(false).0);
+
+fn interpreter_shutdown_receiver() -> watch::Receiver<bool> {
+    INTERPRETER_SHUTDOWN.subscribe()
+}
+
+fn subscription_batch_capacity_hint(limit: usize) -> usize {
+    limit.clamp(1, MAX_SUBSCRIPTION_BATCH_CAPACITY_HINT)
+}
+
+fn subscription_layouts_match(current: &Arc<FieldLayout>, next: &Arc<FieldLayout>) -> bool {
+    Arc::ptr_eq(current, next)
+        || (current.version == next.version
+            && current.fields.len() == next.fields.len()
+            && current
+                .fields
+                .iter()
+                .zip(next.fields.iter())
+                .all(|(current_field, next_field)| {
+                    current_field.index == next_field.index
+                        && current_field.kind == next_field.kind
+                        && current_field.name == next_field.name
+                }))
+}
 
 async fn wait_for_subscription_close(close_rx: &mut watch::Receiver<bool>) {
     if *close_rx.borrow() {
@@ -94,38 +124,150 @@ async fn wait_for_subscription_close(close_rx: &mut watch::Receiver<bool>) {
     }
 }
 
-/// Shutdown-safe wrapper for [`future_into_py`].
-///
-/// Wraps any async future with interpreter-shutdown detection. If the engine
-/// signals shutdown before the future completes, or if the interpreter has been
-/// finalized by the time the future returns, the future suspends indefinitely
-/// instead of delivering a result. This prevents `future_into_py` from calling
-/// `Python::attach()` on a dead interpreter. (Issue #270)
-///
-/// Callers use `Python::attach()` naturally inside their closures — the guard
-/// is applied automatically at the boundary.
-fn shutdown_safe_future<'py, F>(
-    py: Python<'py>,
-    engine: &Arc<Engine>,
+async fn complete_unless_interpreter_finalizing<F>(
+    finalizing_rx: &mut watch::Receiver<bool>,
     fut: F,
-) -> PyResult<Bound<'py, PyAny>>
+) -> F::Output
 where
-    F: std::future::Future<Output = PyResult<Py<PyAny>>> + Send + 'static,
+    F: Future,
 {
-    let mut shutdown_rx = engine.shutdown_receiver();
-    future_into_py(py, async move {
+    if *finalizing_rx.borrow() {
+        return std::future::pending::<F::Output>().await;
+    }
+    tokio::select! {
+        biased;
+        _ = wait_for_subscription_close(finalizing_rx) => {
+            std::future::pending::<F::Output>().await
+        }
+        result = fut => result,
+    }
+}
+
+enum SubscriptionRead {
+    Updates(Vec<SubscriptionUpdate>),
+    Error(BlpError),
+    Ended,
+    Closed,
+}
+
+async fn receive_subscription_updates(
+    rx: &mut StreamReceiver,
+    pending: &StdMutex<VecDeque<StreamBatchResult>>,
+    close_rx: &mut watch::Receiver<bool>,
+    engine_shutdown_rx: &mut watch::Receiver<bool>,
+    limit: usize,
+) -> SubscriptionRead {
+    if *close_rx.borrow() || *engine_shutdown_rx.borrow() {
+        return SubscriptionRead::Closed;
+    }
+
+    let queued = pending
+        .lock()
+        .expect("subscription pending queue poisoned")
+        .pop_front();
+    let first = match queued {
+        Some(item) => Some(item),
+        None => {
+            tokio::select! {
+                biased;
+                _ = wait_for_subscription_close(close_rx) => return SubscriptionRead::Closed,
+                _ = wait_for_subscription_close(engine_shutdown_rx) => {
+                    return SubscriptionRead::Closed;
+                }
+                item = rx.recv() => item,
+            }
+        }
+    };
+
+    let Some(first) = first else {
+        return SubscriptionRead::Ended;
+    };
+    let first = match first {
+        Ok(update) => update,
+        Err(error) => return SubscriptionRead::Error(error),
+    };
+    let layout = first.layout.clone();
+    let mut updates = Vec::with_capacity(subscription_batch_capacity_hint(limit));
+    updates.push(first);
+
+    while updates.len() < limit {
+        let queued = pending
+            .lock()
+            .expect("subscription pending queue poisoned")
+            .pop_front();
+        let item = match queued {
+            Some(item) => Some(item),
+            None => rx.try_recv().ok(),
+        };
+        match item {
+            Some(Ok(update)) if subscription_layouts_match(&layout, &update.layout) => {
+                updates.push(update);
+            }
+            Some(item) => {
+                pending
+                    .lock()
+                    .expect("subscription pending queue poisoned")
+                    .push_front(item);
+                break;
+            }
+            None => break,
+        }
+    }
+
+    SubscriptionRead::Updates(updates)
+}
+
+async fn drain_forwarder_into_pending(
+    claim: &xbbg_async::engine::SessionClaim,
+    rx: &mut StreamReceiver,
+    pending: &StdMutex<VecDeque<StreamBatchResult>>,
+) -> Result<(), BlpAsyncError> {
+    let barrier = claim.drain_forwarder();
+    tokio::pin!(barrier);
+    let barrier_result = loop {
         tokio::select! {
-            result = fut => {
-                // Future completed. Verify interpreter is still alive before
-                // returning — returning triggers future_into_py's internal
-                // Python::attach() for result delivery.
-                if Python::try_attach(|_| ()).is_some() {
-                    result
-                } else {
-                    std::future::pending().await
+            biased;
+            item = rx.recv() => {
+                match item {
+                    Some(item) => pending
+                        .lock()
+                        .expect("subscription pending queue poisoned")
+                        .push_back(item),
+                    None => break barrier.await,
                 }
             }
-            _ = shutdown_rx.changed() => std::future::pending().await,
+            result = &mut barrier => break result,
+        }
+    };
+    barrier_result?;
+    while let Ok(item) = rx.try_recv() {
+        pending
+            .lock()
+            .expect("subscription pending queue poisoned")
+            .push_back(item);
+    }
+    Ok(())
+}
+
+/// Interpreter-finalization-safe wrapper for [`future_into_py`].
+///
+/// Ordinary engine shutdown is deliberately not a completion barrier: request
+/// errors, subscription termination, and buffered drains must still reach the
+/// caller. Only the distinct atexit finalization signal suppresses completion.
+/// The current value is checked before polling and the finalization branch is
+/// biased, while every completed result is also gated by [`Python::try_attach`].
+fn shutdown_safe_future<'py, F, T>(py: Python<'py>, fut: F) -> PyResult<Bound<'py, PyAny>>
+where
+    F: Future<Output = PyResult<T>> + Send + 'static,
+    T: for<'a> IntoPyObject<'a> + Send + 'static,
+{
+    let mut finalizing_rx = interpreter_shutdown_receiver();
+    future_into_py(py, async move {
+        let result = complete_unless_interpreter_finalizing(&mut finalizing_rx, fut).await;
+        if Python::try_attach(|_| ()).is_some() {
+            result
+        } else {
+            std::future::pending::<PyResult<T>>().await
         }
     })
 }
@@ -136,8 +278,8 @@ where
 /// finalized, suspends the future forever instead of panicking — the tokio
 /// runtime drops the suspended future during process exit.
 ///
-/// Used by `PySubscription` methods that cannot use [`shutdown_safe_future`]
-/// because they don't hold an `Arc<Engine>`.
+/// Payload conversions use this as defense in depth before returning to the
+/// common finalization-safe completion boundary.
 async fn try_attach_or_suspend<F, T>(f: F) -> PyResult<T>
 where
     F: FnOnce(Python<'_>) -> PyResult<T> + Send,
@@ -418,6 +560,12 @@ pub struct PyEngineConfig {
     /// Number of pre-warmed subscription sessions (default: 1)
     #[pyo3(get, set)]
     pub subscription_pool_size: usize,
+    /// Tokio worker threads used by this Engine (default: 2)
+    #[pyo3(get, set)]
+    pub runtime_worker_threads: usize,
+    /// Maximum concurrently allocated subscription sessions (default: 32)
+    #[pyo3(get, set)]
+    pub max_subscription_sessions: usize,
     /// Enable request sharding for eligible multi-security reference/history requests.
     #[pyo3(get, set)]
     pub shard_requests: bool,
@@ -551,6 +699,8 @@ impl PyEngineConfig {
             zfp_remote: None,
             request_pool_size: defaults.request_pool_size,
             subscription_pool_size: defaults.subscription_pool_size,
+            runtime_worker_threads: defaults.runtime_worker_threads,
+            max_subscription_sessions: defaults.max_subscription_sessions,
             shard_requests: defaults.shard_requests,
             shard_threshold: defaults.shard_threshold,
             shard_chunk_size: defaults.shard_chunk_size,
@@ -610,6 +760,12 @@ impl PyEngineConfig {
             }
             if let Some(v) = kw.get_item("subscription_pool_size")? {
                 config.subscription_pool_size = v.extract()?;
+            }
+            if let Some(v) = kw.get_item("runtime_worker_threads")? {
+                config.runtime_worker_threads = v.extract()?;
+            }
+            if let Some(v) = kw.get_item("max_subscription_sessions")? {
+                config.max_subscription_sessions = v.extract()?;
             }
             if let Some(v) = kw.get_item("shard_requests")? {
                 config.shard_requests = v.extract()?;
@@ -738,12 +894,15 @@ impl PyEngineConfig {
         let auth_method = self.auth_method.as_deref().unwrap_or("none");
         format!(
             "EngineConfig(host='{}', port={}, request_pool_size={}, subscription_pool_size={}, \
-             shard_requests={}, shard_threshold={}, shard_chunk_size={}, shard_max_concurrent={}, \
-             validation_mode='{}', overflow_policy='{}', auth_method='{}', field_cache_path='{}', warmup_services={:?})",
+             runtime_worker_threads={}, max_subscription_sessions={}, shard_requests={}, \
+             shard_threshold={}, shard_chunk_size={}, shard_max_concurrent={}, validation_mode='{}', \
+             overflow_policy='{}', auth_method='{}', field_cache_path='{}', warmup_services={:?})",
             self.host,
             self.port,
             self.request_pool_size,
             self.subscription_pool_size,
+            self.runtime_worker_threads,
+            self.max_subscription_sessions,
             self.shard_requests,
             self.shard_threshold,
             self.shard_chunk_size,
@@ -974,6 +1133,26 @@ impl TryFrom<&PyEngineConfig> for EngineConfig {
                 "subscription_stream_capacity must be greater than zero",
             ));
         }
+        if py_config.subscription_flush_threshold == 0 {
+            return Err(PyValueError::new_err(
+                "subscription_flush_threshold must be greater than zero",
+            ));
+        }
+        if py_config.runtime_worker_threads == 0 {
+            return Err(PyValueError::new_err(
+                "runtime_worker_threads must be greater than zero",
+            ));
+        }
+        if py_config.max_subscription_sessions == 0 {
+            return Err(PyValueError::new_err(
+                "max_subscription_sessions must be greater than zero",
+            ));
+        }
+        if py_config.max_subscription_sessions < py_config.subscription_pool_size {
+            return Err(PyValueError::new_err(
+                "max_subscription_sessions must be greater than or equal to subscription_pool_size",
+            ));
+        }
         require_non_negative_ms(
             py_config.keep_alive_inactivity_ms,
             "keep_alive_inactivity_ms",
@@ -1001,6 +1180,8 @@ impl TryFrom<&PyEngineConfig> for EngineConfig {
             tls,
             request_pool_size: py_config.request_pool_size,
             subscription_pool_size: py_config.subscription_pool_size,
+            runtime_worker_threads: py_config.runtime_worker_threads,
+            max_subscription_sessions: py_config.max_subscription_sessions,
             shard_requests: py_config.shard_requests,
             shard_threshold: py_config.shard_threshold,
             shard_chunk_size: py_config.shard_chunk_size,
@@ -1067,6 +1248,7 @@ impl EntitlementReport {
 #[pyclass]
 struct PyEngine {
     engine: Arc<Engine>,
+    subscription_batch_items: usize,
 }
 
 #[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
@@ -1171,7 +1353,7 @@ impl PyEngine {
             "PyEngine: sending request"
         );
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let batch = engine.request(rust_params).await.map_err(|e| {
                 warn!(error = %e, "PyEngine: request failed");
                 blp_async_error_to_pyerr(e)
@@ -1190,7 +1372,7 @@ impl PyEngine {
     /// First use may take a moment and authorization timeout failures are retryable.
     fn seat_type<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let seat_type = engine.seat_type().await.map_err(blp_async_error_to_pyerr)?;
             Python::attach(|py| Ok(seat_type.as_str().into_pyobject(py)?.into_any().unbind()))
         })
@@ -1209,7 +1391,7 @@ impl PyEngine {
         eids: Vec<i32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let report = engine
                 .check_entitlements(&service, &eids)
                 .await
@@ -1239,7 +1421,7 @@ impl PyEngine {
         service: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let authorized = engine
                 .identity_is_authorized(&service)
                 .await
@@ -1255,7 +1437,7 @@ impl PyEngine {
         ticker: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let info = engine.resolve_exchange(&ticker).await;
             Python::attach(|py| exchange_info_to_pydict(py, &info))
         })
@@ -1268,7 +1450,7 @@ impl PyEngine {
         ticker: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let info = engine
                 .fetch_market_info(&ticker)
                 .await
@@ -1293,7 +1475,7 @@ impl PyEngine {
         let date = NaiveDate::parse_from_str(&date, "%Y-%m-%d")
             .map_err(|_| PyValueError::new_err("date must be YYYY-MM-DD"))?;
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let value = engine
                 .resolve_market_timing(&ticker, date, timing, tz.as_deref())
                 .await
@@ -1333,7 +1515,7 @@ impl PyEngine {
         let engine = self.engine.clone();
         let default = default_type.to_string();
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let resolved = engine
                 .resolve_field_types(&fields, overrides.as_ref(), &default)
                 .await
@@ -1362,8 +1544,10 @@ impl PyEngine {
     }
 
     /// Clear the field type cache.
-    fn clear_field_cache(&self) {
-        self.engine.clear_field_cache();
+    fn clear_field_cache(&self) -> PyResult<()> {
+        self.engine
+            .clear_field_cache()
+            .map_err(PyRuntimeError::new_err)
     }
 
     /// Save the field type cache to disk.
@@ -1397,7 +1581,7 @@ impl PyEngine {
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let invalid = engine
                 .validate_fields(&fields)
                 .await
@@ -1419,7 +1603,7 @@ impl PyEngine {
     fn get_schema<'py>(&self, py: Python<'py>, service: String) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let schema = engine
                 .get_schema(&service)
                 .await
@@ -1445,7 +1629,7 @@ impl PyEngine {
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let op = engine
                 .get_operation(&service, &operation)
                 .await
@@ -1467,7 +1651,7 @@ impl PyEngine {
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let ops = engine
                 .list_operations(&service)
                 .await
@@ -1490,13 +1674,17 @@ impl PyEngine {
     }
 
     /// Invalidate a cached schema.
-    fn invalidate_schema(&self, service: &str) {
-        self.engine.invalidate_schema(service);
+    fn invalidate_schema(&self, service: &str) -> PyResult<()> {
+        self.engine
+            .invalidate_schema(service)
+            .map_err(PyRuntimeError::new_err)
     }
 
     /// Clear all cached schemas.
-    fn clear_schema_cache(&self) {
-        self.engine.clear_schema_cache();
+    fn clear_schema_cache(&self) -> PyResult<()> {
+        self.engine
+            .clear_schema_cache()
+            .map_err(PyRuntimeError::new_err)
     }
 
     /// List all cached service URIs.
@@ -1521,7 +1709,7 @@ impl PyEngine {
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let values = engine
                 .get_enum_values(&service, &operation, &element)
                 .await
@@ -1547,7 +1735,7 @@ impl PyEngine {
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.engine.clone();
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let elements = engine
                 .list_valid_elements(&service, &operation)
                 .await
@@ -1595,6 +1783,12 @@ impl PyEngine {
         let engine = self.engine.clone();
         let tickers_clone = tickers.clone();
         let fields_clone = fields.clone();
+        let batch_items = flush_threshold.unwrap_or(self.subscription_batch_items);
+        if batch_items == 0 {
+            return Err(PyValueError::new_err(
+                "flush_threshold must be greater than zero",
+            ));
+        }
 
         let op = overflow_policy
             .as_deref()
@@ -1610,7 +1804,7 @@ impl PyEngine {
             "PyEngine: creating subscription"
         );
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let stream = engine
                 .subscribe_with_options(
                     "//blp/mktdata".to_string(),
@@ -1646,16 +1840,20 @@ impl PyEngine {
                 status,
             };
 
-            Python::attach(|py| {
-                let py_sub = PySubscription {
-                    rx: Arc::new(Mutex::new(Some(rx))),
-                    stream: Arc::new(Mutex::new(Some(handle))),
-                    ops: Arc::new(Mutex::new(())),
-                    close_signal,
-                    engine_shutdown: engine.shutdown_receiver(),
-                };
-                Ok(Py::new(py, py_sub)?.into_any())
-            })
+            let py_sub = PySubscription {
+                rx: Arc::new(Mutex::new(Some(rx))),
+                pending: Arc::new(StdMutex::new(VecDeque::new())),
+                arrow_batcher: Arc::new(StdMutex::new(SubscriptionArrowBatcher::with_capacity(
+                    subscription_batch_capacity_hint(batch_items),
+                ))),
+                arrow_ready: Arc::new(StdMutex::new(VecDeque::new())),
+                batch_items,
+                stream: Arc::new(Mutex::new(Some(handle))),
+                ops: Arc::new(Mutex::new(())),
+                close_signal,
+                engine_shutdown: engine.shutdown_receiver(),
+            };
+            Python::attach(move |py| Ok(Py::new(py, py_sub)?.into_any()))
         })
     }
 
@@ -1699,6 +1897,12 @@ impl PyEngine {
         let fields_clone = fields.clone();
         let options_clone = options.clone().unwrap_or_default();
         let service_clone = service.clone();
+        let batch_items = flush_threshold.unwrap_or(self.subscription_batch_items);
+        if batch_items == 0 {
+            return Err(PyValueError::new_err(
+                "flush_threshold must be greater than zero",
+            ));
+        }
 
         let op = overflow_policy
             .as_deref()
@@ -1716,7 +1920,7 @@ impl PyEngine {
             "PyEngine: creating subscription with options"
         );
 
-        shutdown_safe_future(py, &self.engine, async move {
+        shutdown_safe_future(py, async move {
             let stream = engine
                 .subscribe_with_options(
                     service_clone.clone(),
@@ -1750,16 +1954,20 @@ impl PyEngine {
                 status,
             };
 
-            Python::attach(|py| {
-                let py_sub = PySubscription {
-                    rx: Arc::new(Mutex::new(Some(rx))),
-                    stream: Arc::new(Mutex::new(Some(handle))),
-                    ops: Arc::new(Mutex::new(())),
-                    close_signal,
-                    engine_shutdown: engine.shutdown_receiver(),
-                };
-                Ok(Py::new(py, py_sub)?.into_any())
-            })
+            let py_sub = PySubscription {
+                rx: Arc::new(Mutex::new(Some(rx))),
+                pending: Arc::new(StdMutex::new(VecDeque::new())),
+                arrow_batcher: Arc::new(StdMutex::new(SubscriptionArrowBatcher::with_capacity(
+                    subscription_batch_capacity_hint(batch_items),
+                ))),
+                arrow_ready: Arc::new(StdMutex::new(VecDeque::new())),
+                batch_items,
+                stream: Arc::new(Mutex::new(Some(handle))),
+                ops: Arc::new(Mutex::new(())),
+                close_signal,
+                engine_shutdown: engine.shutdown_receiver(),
+            };
+            Python::attach(move |py| Ok(Py::new(py, py_sub)?.into_any()))
         })
     }
 
@@ -1772,8 +1980,7 @@ impl PyEngine {
     /// Signals all worker threads to stop. They will terminate when they
     /// finish their current work or see the shutdown signal.
     ///
-    /// This is called automatically during Python interpreter shutdown via atexit.
-    /// You usually don't need to call this directly.
+    /// Public/manual shutdown remains observable by pending Python operations.
     fn signal_shutdown(&self) {
         info!("PyEngine: signal_shutdown called");
         self.engine.signal_shutdown();
@@ -1806,6 +2013,7 @@ impl PyEngine {
         // Release GIL during blocking Engine::start().
         // Engine::start() creates Bloomberg sessions and waits for them to connect,
         // which can take seconds — must not hold GIL during this.
+        let subscription_batch_items = config.subscription_flush_threshold;
         let engine = py.detach(|| Engine::start(config)).map_err(|e| {
             warn!(error = %e, "PyEngine: connection failed");
             blp_async_error_to_pyerr(e)
@@ -1815,6 +2023,7 @@ impl PyEngine {
 
         Ok(Self {
             engine: Arc::new(engine),
+            subscription_batch_items,
         })
     }
 }
@@ -1830,10 +2039,8 @@ impl PyEngine {
 /// - Dynamic add/remove of tickers
 /// - Explicit unsubscribe with optional drain
 /// - Context manager (`async with`)
-///
-/// Data arrives as `Result<RecordBatch, BlpError>`:
-/// - `Ok(batch)` — yields an xbbg ArrowRecordBatch
-/// - `Err(error)` — raises a Python exception (BlpRequestError, BlpInternalError, etc.)
+/// Data arrives as native `SubscriptionUpdate`s and is batched into Rust Arrow
+/// arrays on the consumer side before Python wrappers are attached.
 ///
 /// Design: Uses separate locks for rx (data receiving) vs stream (metadata snapshots),
 /// plus a dedicated operation lock to serialize add/remove/unsubscribe without holding
@@ -1843,6 +2050,14 @@ impl PyEngine {
 pub struct PySubscription {
     /// Receiver for incoming data - separate lock so iteration doesn't block add/remove
     rx: SharedStreamReceiver,
+    /// Updates deferred by a layout boundary or alternate consumer.
+    pending: SharedPendingStreamItems,
+    /// Batcher retaining schema/layout/capacity hints; builders are recreated after finish.
+    arrow_batcher: Arc<StdMutex<SubscriptionArrowBatcher>>,
+    /// Completed batches deferred across layout boundaries.
+    arrow_ready: Arc<StdMutex<VecDeque<RecordBatch>>>,
+    /// Maximum immediately available updates returned by one Arrow iteration.
+    batch_items: usize,
     /// Stream handle for metadata and modification operations
     stream: Arc<Mutex<Option<SubscriptionStreamHandle>>>,
     /// Serializes add/remove/unsubscribe without holding the stream lock across await.
@@ -1919,17 +2134,6 @@ impl SubscriptionStreamHandle {
         }))
     }
 
-    fn apply_add(
-        &mut self,
-        topics: &[String],
-        new_keys: Vec<usize>,
-        new_metrics: Vec<Arc<SubscriptionMetrics>>,
-    ) {
-        self.status.update(|state| {
-            state.add_active(topics, &new_keys, new_metrics.clone());
-        });
-    }
-
     fn prepare_remove(&self, tickers: Vec<String>) -> PyResult<Option<PendingRemove>> {
         let claim = self
             .claim
@@ -1965,7 +2169,7 @@ impl SubscriptionStreamHandle {
     fn apply_remove(&mut self, topics: &[String]) {
         self.status.update(|state| {
             for topic in topics {
-                state.remove_topic(topic);
+                state.drop_topic(topic);
             }
         });
     }
@@ -2073,33 +2277,78 @@ impl PySubscription {
     /// Raises StopAsyncIteration when the subscription is closed.
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let rx = self.rx.clone();
+        let pending = self.pending.clone();
+        let arrow_batcher = self.arrow_batcher.clone();
+        let arrow_ready = self.arrow_ready.clone();
+        let batch_items = self.batch_items;
         let close_signal = self.close_signal.clone();
         let mut engine_shutdown_rx = self.engine_shutdown.clone();
 
-        future_into_py(py, async move {
+        shutdown_safe_future(py, async move {
             let mut close_rx = close_signal.subscribe();
-            let item = {
-                let mut guard = rx.lock().await;
-                let rx_ref = guard
-                    .as_mut()
-                    .ok_or_else(|| PyStopAsyncIteration::new_err("subscription closed"))?;
-                tokio::select! {
-                    item = rx_ref.recv() => Ok(item),
-                    _ = wait_for_subscription_close(&mut close_rx) => Err(()),
-                    _ = engine_shutdown_rx.changed() => Err(()),
-                }
-            };
+            if *close_rx.borrow() || *engine_shutdown_rx.borrow() {
+                return Err(PyStopAsyncIteration::new_err("subscription closed"));
+            }
+            let ready_batch = arrow_ready
+                .lock()
+                .expect("subscription Arrow output queue poisoned")
+                .pop_front();
+            if let Some(batch) = ready_batch {
+                return try_attach_or_suspend(|py| {
+                    native_arrow::record_batch_to_arrow_record_batch(py, batch)
+                })
+                .await;
+            }
+            let mut guard = rx.lock().await;
+            let rx_ref = guard
+                .as_mut()
+                .ok_or_else(|| PyStopAsyncIteration::new_err("subscription closed"))?;
+            let read = receive_subscription_updates(
+                rx_ref,
+                pending.as_ref(),
+                &mut close_rx,
+                &mut engine_shutdown_rx,
+                batch_items,
+            )
+            .await;
 
-            match item {
-                Ok(Some(Ok(update))) => {
+            match read {
+                SubscriptionRead::Updates(updates) => {
+                    let produced = {
+                        let mut batcher = arrow_batcher
+                            .lock()
+                            .expect("subscription Arrow batcher poisoned");
+                        let mut produced = Vec::new();
+                        for update in updates {
+                            if let Some(batch) = batcher.append(&update) {
+                                produced.push(batch);
+                            }
+                        }
+                        if let Some(batch) = batcher.flush() {
+                            produced.push(batch);
+                        }
+                        produced
+                    };
+                    let batch = {
+                        let mut ready = arrow_ready
+                            .lock()
+                            .expect("subscription Arrow output queue poisoned");
+                        ready.extend(produced);
+                        ready
+                            .pop_front()
+                            .expect("a non-empty update set must produce an Arrow batch")
+                    };
+                    drop(guard);
                     try_attach_or_suspend(|py| {
-                        subscription_update_to_arrow_record_batch(py, update)
+                        native_arrow::record_batch_to_arrow_record_batch(py, batch)
                     })
                     .await
                 }
-                Ok(Some(Err(blp_err))) => Err(blp_error_to_pyerr(blp_err)),
-                Ok(None) => Err(PyStopAsyncIteration::new_err("subscription ended")),
-                Err(()) => Err(PyStopAsyncIteration::new_err("subscription closed")),
+                SubscriptionRead::Error(error) => Err(blp_error_to_pyerr(error)),
+                SubscriptionRead::Ended => Err(PyStopAsyncIteration::new_err("subscription ended")),
+                SubscriptionRead::Closed => {
+                    Err(PyStopAsyncIteration::new_err("subscription closed"))
+                }
             }
         })
     }
@@ -2107,30 +2356,38 @@ impl PySubscription {
     /// Get next update as a Python dict without building Arrow.
     fn __anext_tick_dict__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let rx = self.rx.clone();
+        let pending = self.pending.clone();
         let close_signal = self.close_signal.clone();
         let mut engine_shutdown_rx = self.engine_shutdown.clone();
 
-        future_into_py(py, async move {
+        shutdown_safe_future(py, async move {
             let mut close_rx = close_signal.subscribe();
-            let item = {
-                let mut guard = rx.lock().await;
-                let rx_ref = guard
-                    .as_mut()
-                    .ok_or_else(|| PyStopAsyncIteration::new_err("subscription closed"))?;
-                tokio::select! {
-                    item = rx_ref.recv() => Ok(item),
-                    _ = wait_for_subscription_close(&mut close_rx) => Err(()),
-                    _ = engine_shutdown_rx.changed() => Err(()),
-                }
-            };
+            let mut guard = rx.lock().await;
+            let rx_ref = guard
+                .as_mut()
+                .ok_or_else(|| PyStopAsyncIteration::new_err("subscription closed"))?;
+            let read = receive_subscription_updates(
+                rx_ref,
+                pending.as_ref(),
+                &mut close_rx,
+                &mut engine_shutdown_rx,
+                1,
+            )
+            .await;
 
-            match item {
-                Ok(Some(Ok(update))) => {
+            match read {
+                SubscriptionRead::Updates(mut updates) => {
+                    let update = updates
+                        .pop()
+                        .expect("one-update read must contain an update");
+                    drop(guard);
                     try_attach_or_suspend(|py| subscription_update_to_pydict(py, update)).await
                 }
-                Ok(Some(Err(blp_err))) => Err(blp_error_to_pyerr(blp_err)),
-                Ok(None) => Err(PyStopAsyncIteration::new_err("subscription ended")),
-                Err(()) => Err(PyStopAsyncIteration::new_err("subscription closed")),
+                SubscriptionRead::Error(error) => Err(blp_error_to_pyerr(error)),
+                SubscriptionRead::Ended => Err(PyStopAsyncIteration::new_err("subscription ended")),
+                SubscriptionRead::Closed => {
+                    Err(PyStopAsyncIteration::new_err("subscription closed"))
+                }
             }
         })
     }
@@ -2141,11 +2398,16 @@ impl PySubscription {
     fn add<'py>(&self, py: Python<'py>, tickers: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
         let stream = self.stream.clone();
         let ops = self.ops.clone();
+        let close_signal = self.close_signal.clone();
+        let engine_shutdown = self.engine_shutdown.clone();
 
         debug!(tickers = ?tickers, "PySubscription: adding tickers");
 
-        future_into_py(py, async move {
+        shutdown_safe_future(py, async move {
             let _op_guard = ops.lock().await;
+            if *close_signal.subscribe().borrow() || *engine_shutdown.borrow() {
+                return Err(PyRuntimeError::new_err("subscription closed"));
+            }
 
             let pending = {
                 let guard = stream.lock().await;
@@ -2159,28 +2421,21 @@ impl PySubscription {
                 return Ok(());
             };
 
-            // Add new topics using the same stream sender
-            let (new_keys, new_metrics) = pending
+            pending
                 .command
                 .add_topics(
-                    pending.service.clone(),
-                    pending.new_topics.clone(),
-                    pending.fields.clone(),
+                    pending.service,
+                    pending.new_topics,
+                    pending.fields,
                     pending.all_fields,
-                    pending.options.clone(),
+                    pending.options,
                     pending.flush_threshold,
                     pending.overflow_policy,
-                    pending.tx.clone(),
-                    pending.status.clone(),
+                    pending.tx,
+                    pending.status,
                 )
                 .await
                 .map_err(blp_async_error_to_pyerr)?;
-
-            let mut guard = stream.lock().await;
-            let handle = guard
-                .as_mut()
-                .ok_or_else(|| PyRuntimeError::new_err("subscription closed"))?;
-            handle.apply_add(&pending.new_topics, new_keys, new_metrics);
 
             Ok(())
         })
@@ -2192,11 +2447,16 @@ impl PySubscription {
     fn remove<'py>(&self, py: Python<'py>, tickers: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
         let stream = self.stream.clone();
         let ops = self.ops.clone();
+        let close_signal = self.close_signal.clone();
+        let engine_shutdown = self.engine_shutdown.clone();
 
         debug!(tickers = ?tickers, "PySubscription: removing tickers");
 
-        future_into_py(py, async move {
+        shutdown_safe_future(py, async move {
             let _op_guard = ops.lock().await;
+            if *close_signal.subscribe().borrow() || *engine_shutdown.borrow() {
+                return Err(PyRuntimeError::new_err("subscription closed"));
+            }
 
             let pending = {
                 let guard = stream.lock().await;
@@ -2240,7 +2500,9 @@ impl PySubscription {
     /// Check if the subscription is still active.
     #[getter]
     fn is_active(&self, py: Python<'_>) -> bool {
-        self.snapshot(py).is_active
+        !*self.close_signal.subscribe().borrow()
+            && !*self.engine_shutdown.borrow()
+            && self.snapshot(py).is_active
     }
 
     #[getter]
@@ -2380,29 +2642,107 @@ impl PySubscription {
     fn unsubscribe<'py>(&self, py: Python<'py>, drain: bool) -> PyResult<Bound<'py, PyAny>> {
         let stream_arc = self.stream.clone();
         let rx_arc = self.rx.clone();
+        let pending = self.pending.clone();
+        let arrow_batcher = self.arrow_batcher.clone();
+        let arrow_ready = self.arrow_ready.clone();
+        let batch_items = self.batch_items;
         let ops = self.ops.clone();
         let close_signal = self.close_signal.clone();
+        let engine_shutdown = self.engine_shutdown.clone();
 
         debug!(drain = drain, "PySubscription: unsubscribing");
 
-        future_into_py(py, async move {
+        shutdown_safe_future(py, async move {
+            // Wake an in-flight read before waiting behind a subscription mutation.
+            // The watch value is monotonic, so a read cannot miss this close.
+            close_signal.send_replace(true);
             let _op_guard = ops.lock().await;
-            let _ = close_signal.send(true);
+            let engine_is_shutting_down = *engine_shutdown.borrow();
 
-            // Take the stream handle first so add/remove operations stop immediately.
-            let handle = {
-                let mut guard = stream_arc.lock().await;
-                guard.take()
+            // Keep the claim in the shared handle until every started close
+            // await completes. Cancellation therefore retains the claim and
+            // receiver so a later close can resume cleanup.
+            let mut stream_guard = stream_arc.lock().await;
+            let mut close_result = if engine_is_shutting_down {
+                Ok(())
+            } else if let Some(handle) = stream_guard.as_ref() {
+                if let Some(claim) = handle.claim.as_ref() {
+                    let keys = handle.status.load().keys().to_vec();
+                    if keys.is_empty() {
+                        Ok(())
+                    } else {
+                        claim
+                            .unsubscribe(keys)
+                            .await
+                            .map_err(blp_async_error_to_pyerr)
+                    }
+                } else {
+                    Ok(())
+                }
+            } else {
+                Ok(())
+            };
+
+            if close_result.is_ok() {
+                if let Some(handle) = stream_guard.as_mut() {
+                    handle.status.update(|state| state.clear_active());
+                }
+            }
+            if close_result.is_ok() && drain && !engine_is_shutting_down {
+                if let Some(claim) = stream_guard
+                    .as_ref()
+                    .and_then(|handle| handle.claim.as_ref())
+                {
+                    let mut rx_guard = rx_arc.lock().await;
+                    close_result = match rx_guard.as_mut() {
+                        Some(rx) => drain_forwarder_into_pending(claim, rx, pending.as_ref())
+                            .await
+                            .map_err(blp_async_error_to_pyerr),
+                        None => claim
+                            .drain_forwarder()
+                            .await
+                            .map_err(blp_async_error_to_pyerr),
+                    };
+                }
+            }
+
+            // A completed error spends the broken claim too; only cancellation
+            // before an await completes keeps it for a retry.
+            stream_guard.take();
+            drop(stream_guard);
+            close_result?;
+
+            // Closing always takes the receiver. Holding it in the mutex until
+            // this point makes cancellation of a pending drain ownership-safe.
+            let mut rx_guard = rx_arc.lock().await;
+            let rx = rx_guard.take();
+            drop(rx_guard);
+            let queued_batches: Vec<RecordBatch> = {
+                let mut ready = arrow_ready
+                    .lock()
+                    .expect("subscription Arrow output queue poisoned");
+                if drain {
+                    ready.drain(..).collect()
+                } else {
+                    ready.clear();
+                    Vec::new()
+                }
             };
 
             let mut remaining = Vec::new();
-
-            // Drain remaining updates if requested (skip errors)
+            {
+                let mut pending = pending.lock().expect("subscription pending queue poisoned");
+                if drain {
+                    while let Some(item) = pending.pop_front() {
+                        if let Ok(update) = item {
+                            remaining.push(update);
+                        }
+                    }
+                } else {
+                    pending.clear();
+                }
+            }
             if drain {
-                let rx = {
-                    let mut guard = rx_arc.lock().await;
-                    guard.take()
-                };
                 if let Some(mut rx) = rx {
                     while let Ok(item) = rx.try_recv() {
                         if let Ok(update) = item {
@@ -2412,29 +2752,34 @@ impl PySubscription {
                 }
             }
 
-            // Unsubscribe from Bloomberg. Only clear status after Bloomberg accepts
-            // termination so SessionClaim::Drop can safely return the worker to the pool.
-            if let Some(mut h) = handle {
-                if let Some(claim) = h.claim.take() {
-                    let keys = h.status.load().keys().to_vec();
-                    if !keys.is_empty() {
-                        claim
-                            .unsubscribe(keys)
-                            .await
-                            .map_err(blp_async_error_to_pyerr)?;
-                        h.status.update(|state| {
-                            state.clear_active();
-                        });
+            // Build Arrow arrays before attaching to Python. The attachment only
+            // creates Python wrappers around already-finished Rust-owned buffers.
+            let remaining = {
+                let mut batches = queued_batches;
+                let mut batcher = arrow_batcher
+                    .lock()
+                    .expect("subscription Arrow batcher poisoned");
+                for update in remaining {
+                    if let Some(batch) = batcher.append(&update) {
+                        batches.push(batch);
                     }
-                    // claim drops here; cleared status means a clean worker lease can be reused.
+                    if batcher.rows() == batch_items {
+                        if let Some(batch) = batcher.flush() {
+                            batches.push(batch);
+                        }
+                    }
                 }
-            }
+                if let Some(batch) = batcher.flush() {
+                    batches.push(batch);
+                }
+                batches
+            };
 
             if !remaining.is_empty() {
                 try_attach_or_suspend(|py| {
                     let list = pyo3::types::PyList::empty(py);
-                    for update in remaining {
-                        let py_batch = subscription_update_to_arrow_record_batch(py, update)?;
+                    for batch in remaining {
+                        let py_batch = native_arrow::record_batch_to_arrow_record_batch(py, batch)?;
                         list.append(py_batch)?;
                     }
                     Ok(list.into_any().unbind())
@@ -2500,14 +2845,6 @@ fn market_info_to_pydict(py: Python<'_>, info: &MarketInfo) -> PyResult<Py<PyAny
     dict.set_item("freq", info.freq.clone())?;
     dict.set_item("is_fut", info.is_fut)?;
     Ok(dict.into_any().unbind())
-}
-
-fn subscription_update_to_arrow_record_batch(
-    py: Python<'_>,
-    update: SubscriptionUpdate,
-) -> PyResult<Py<PyAny>> {
-    let batch = subscription_update_to_record_batch(&update).map_err(blp_error_to_pyerr)?;
-    native_arrow::record_batch_to_arrow_record_batch(py, batch)
 }
 
 fn date32_to_py(py: Python<'_>, days: i32) -> PyResult<Py<PyAny>> {
@@ -2593,6 +2930,13 @@ fn subscription_update_to_pydict(
 
 #[cfg_attr(feature = "stub-gen", gen_stub_pyfunction)]
 #[pyfunction]
+fn _signal_interpreter_shutdown() {
+    info!("PyO3 interpreter finalization signalled");
+    INTERPRETER_SHUTDOWN.send_replace(true);
+}
+
+#[cfg_attr(feature = "stub-gen", gen_stub_pyfunction)]
+#[pyfunction]
 fn version() -> String {
     xbbg_core::version().to_string()
 }
@@ -2612,13 +2956,11 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Developers override with RUST_LOG=xbbg_core=trace,xbbg_async=debug.
     xbbg_log::init();
 
-    // Initialize tokio runtime for pyo3-async-runtimes (future_into_py).
-    //
-    // pyo3-async-runtimes creates its own runtime on first use via get_runtime()
-    // if we don't call init_with_runtime(). This is fine — the Engine also has
-    // its own runtime for worker threads. The pyo3-async-runtimes runtime only
-    // handles the Python↔Rust async bridge (future_into_py scheduling), while
-    // the Engine's runtime handles Bloomberg SDK I/O.
+    // Configure the process-global Python↔Rust bridge before its first use.
+    // This runtime is owned by pyo3-async-runtimes, not by any Engine instance.
+    let mut bridge_runtime = tokio::runtime::Builder::new_multi_thread();
+    bridge_runtime.worker_threads(2).enable_all();
+    pyo3_async_runtimes::tokio::init(bridge_runtime);
 
     info!("xbbg._core module initialized");
 
@@ -2627,8 +2969,28 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let git_version = env!("VERGEN_GIT_DESCRIBE");
     let pkg_version = git_version.strip_prefix('v').unwrap_or(git_version);
     m.add("__version__", pkg_version)?;
+    let build_info = PyDict::new(_py);
+    build_info.set_item("profile", env!("XBBG_BUILD_PROFILE"))?;
+    build_info.set_item("target", env!("XBBG_BUILD_TARGET"))?;
+    let encoded_rustflags = env!("XBBG_BUILD_RUSTFLAGS");
+    let rust_flags: Vec<&str> = encoded_rustflags
+        .split('\u{1f}')
+        .filter(|flag| !flag.is_empty())
+        .collect();
+    build_info.set_item("rustFlags", rust_flags)?;
+    build_info.set_item("rustcVersion", env!("XBBG_BUILD_RUSTC_VERSION"))?;
+    build_info.set_item("gitCommit", env!("XBBG_BUILD_GIT_COMMIT"))?;
+    build_info.set_item("allocator", env!("XBBG_BUILD_ALLOCATOR"))?;
+    build_info.set_item("optLevel", env!("XBBG_BUILD_OPT_LEVEL"))?;
+    let target_features: Vec<&str> = env!("XBBG_BUILD_TARGET_FEATURES")
+        .split(',')
+        .filter(|feature| !feature.is_empty())
+        .collect();
+    build_info.set_item("targetFeatures", target_features)?;
+    m.add("__build_info__", build_info)?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(sdk_version, m)?)?;
+    m.add_function(wrap_pyfunction!(_signal_interpreter_shutdown, m)?)?;
     native_arrow::register(m)?;
     m.add_class::<EntitlementReport>()?;
     m.add_class::<PyEngineConfig>()?;
@@ -2717,6 +3079,7 @@ define_stub_info_gatherer!(stub_info);
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicU64};
+    use xbbg_async::engine::state::{FieldKind, FieldLayout, FieldMeta};
     use xbbg_async::engine::ExtractorType;
 
     fn metrics(
@@ -2734,6 +3097,23 @@ mod tests {
             last_message_us: Arc::new(AtomicU64::new(0)),
             last_data_loss_us: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    fn subscription_update(timestamp_us: i64) -> SubscriptionUpdate {
+        subscription_update_with_layout(Arc::new(FieldLayout::new(1, Vec::new())), timestamp_us)
+    }
+
+    fn subscription_update_with_layout(
+        layout: Arc<FieldLayout>,
+        timestamp_us: i64,
+    ) -> SubscriptionUpdate {
+        SubscriptionUpdate {
+            timestamp_us,
+            topic_id: 1,
+            topic: Arc::from("IBM US Equity"),
+            layout,
+            values: Default::default(),
+        }
     }
 
     #[test]
@@ -2760,13 +3140,21 @@ mod tests {
         assert_eq!(config.shard_threshold, 20);
         assert_eq!(config.shard_chunk_size, 16);
         assert_eq!(config.shard_max_concurrent, 4);
+        assert_eq!(config.runtime_worker_threads, 2);
+        assert_eq!(config.max_subscription_sessions, 32);
     }
 
     #[test]
-    fn py_engine_config_maps_sharding_fields() {
+    fn py_engine_config_maps_sharding_and_resource_fields() {
         Python::initialize();
         Python::attach(|py| {
             let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("runtime_worker_threads", 3)
+                .expect("runtime_worker_threads");
+            kwargs
+                .set_item("max_subscription_sessions", 12)
+                .expect("max_subscription_sessions");
             kwargs
                 .set_item("shard_requests", true)
                 .expect("shard_requests");
@@ -2780,9 +3168,11 @@ mod tests {
                 .set_item("shard_max_concurrent", 2)
                 .expect("shard_max_concurrent");
 
-            let config = PyEngineConfig::new(Some(&kwargs)).expect("sharding config");
+            let config = PyEngineConfig::new(Some(&kwargs)).expect("engine config");
             let engine_config: EngineConfig = (&config).try_into().expect("engine config");
 
+            assert_eq!(engine_config.runtime_worker_threads, 3);
+            assert_eq!(engine_config.max_subscription_sessions, 12);
             assert!(engine_config.shard_requests);
             assert_eq!(engine_config.shard_threshold, 5);
             assert_eq!(engine_config.shard_chunk_size, 3);
@@ -2835,6 +3225,24 @@ mod tests {
     }
 
     #[test]
+    fn py_engine_config_rejects_invalid_resource_limits() {
+        let mut config = PyEngineConfig::new(None).expect("default config");
+        config.runtime_worker_threads = 0;
+        let err = EngineConfig::try_from(&config)
+            .err()
+            .expect("zero runtime worker count should fail");
+        assert!(err.to_string().contains("runtime_worker_threads"));
+
+        config.runtime_worker_threads = 2;
+        config.subscription_pool_size = 4;
+        config.max_subscription_sessions = 3;
+        let err = EngineConfig::try_from(&config)
+            .err()
+            .expect("subscription prewarm above session cap should fail");
+        assert!(err.to_string().contains("max_subscription_sessions"));
+    }
+
+    #[test]
     fn py_engine_config_rejects_zero_subscription_stream_capacity() {
         let mut config = PyEngineConfig::new(None).expect("default config");
         config.subscription_stream_capacity = 0;
@@ -2845,6 +3253,16 @@ mod tests {
         assert!(err
             .to_string()
             .contains("subscription_stream_capacity must be greater than zero"));
+    }
+
+    #[test]
+    fn py_engine_config_rejects_zero_subscription_flush_threshold() {
+        let mut config = PyEngineConfig::new(None).expect("default config");
+        config.subscription_flush_threshold = 0;
+        let err = EngineConfig::try_from(&config)
+            .err()
+            .expect("zero flush threshold should fail");
+        assert!(err.to_string().contains("subscription_flush_threshold"));
     }
 
     #[test]
@@ -2974,6 +3392,7 @@ mod tests {
                 "ArrowTable",
                 "ArrowRecordBatch",
                 "ArrowSchema",
+                "__build_info__",
                 "ArrowField",
                 "EntitlementReport",
                 "BlpError",
@@ -3142,6 +3561,163 @@ mod tests {
             assert!(tzinfo
                 .eq(PyTzInfo::utc(py).expect("utc"))
                 .expect("tz equality"));
+        });
+    }
+
+    #[test]
+    fn python_subscription_batch_limits_preserve_default_one_update() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+            tx.send(Ok(subscription_update(10))).await.expect("first");
+            tx.send(Ok(subscription_update(20))).await.expect("second");
+            tx.send(Ok(subscription_update(30))).await.expect("third");
+            let pending = StdMutex::new(VecDeque::new());
+            let (_close_tx, mut close_rx) = watch::channel(false);
+            let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+
+            let first =
+                receive_subscription_updates(&mut rx, &pending, &mut close_rx, &mut shutdown_rx, 1)
+                    .await;
+            let SubscriptionRead::Updates(first) = first else {
+                panic!("expected first update");
+            };
+            assert_eq!(first.len(), 1);
+            assert_eq!(first[0].timestamp_us, 10);
+
+            let second =
+                receive_subscription_updates(&mut rx, &pending, &mut close_rx, &mut shutdown_rx, 2)
+                    .await;
+            let SubscriptionRead::Updates(second) = second else {
+                panic!("expected batched updates");
+            };
+            assert_eq!(
+                second
+                    .iter()
+                    .map(|update| update.timestamp_us)
+                    .collect::<Vec<_>>(),
+                vec![20, 30]
+            );
+        });
+    }
+
+    #[test]
+    fn python_batching_defers_same_version_schema_change() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let first_layout = Arc::new(FieldLayout::new(
+                1,
+                vec![FieldMeta::new("PX_LAST", 0, FieldKind::F64)],
+            ));
+            let second_layout = Arc::new(FieldLayout::new(
+                1,
+                vec![FieldMeta::new("BID", 0, FieldKind::F64)],
+            ));
+            let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+            tx.send(Ok(subscription_update_with_layout(first_layout, 10)))
+                .await
+                .expect("first");
+            tx.send(Ok(subscription_update_with_layout(second_layout, 20)))
+                .await
+                .expect("second");
+            let pending = StdMutex::new(VecDeque::new());
+            let (_close_tx, mut close_rx) = watch::channel(false);
+            let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+
+            let first =
+                receive_subscription_updates(&mut rx, &pending, &mut close_rx, &mut shutdown_rx, 2)
+                    .await;
+            let second =
+                receive_subscription_updates(&mut rx, &pending, &mut close_rx, &mut shutdown_rx, 2)
+                    .await;
+            let SubscriptionRead::Updates(first) = first else {
+                panic!("expected first schema batch");
+            };
+            let SubscriptionRead::Updates(second) = second else {
+                panic!("expected second schema batch");
+            };
+
+            assert_eq!(first.len(), 1);
+            assert_eq!(first[0].layout.fields[0].name.as_ref(), "PX_LAST");
+            assert_eq!(second.len(), 1);
+            assert_eq!(second[0].layout.fields[0].name.as_ref(), "BID");
+        });
+    }
+
+    #[test]
+    fn cancelled_subscription_read_releases_receiver_lock() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let (_tx, rx) = tokio::sync::mpsc::channel::<StreamBatchResult>(1);
+            let shared = Arc::new(Mutex::new(Some(rx)));
+            let reader_shared = shared.clone();
+            let reader = tokio::spawn(async move {
+                let mut guard = reader_shared.lock().await;
+                guard.as_mut().expect("receiver").recv().await
+            });
+
+            while shared.try_lock().is_ok() {
+                tokio::task::yield_now().await;
+            }
+            reader.abort();
+            let _ = reader.await;
+
+            let guard = shared.lock().await;
+            assert!(guard.is_some(), "cancellation must not take the receiver");
+        });
+    }
+
+    #[test]
+    fn close_signal_cannot_be_lost_before_read_starts() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let (close_signal, initial_rx) = watch::channel(false);
+            drop(initial_rx);
+            close_signal.send_replace(true);
+            let mut close_rx = close_signal.subscribe();
+            wait_for_subscription_close(&mut close_rx).await;
+            assert!(*close_rx.borrow());
+        });
+    }
+
+    #[test]
+    fn engine_shutdown_completes_but_interpreter_finalization_suppresses() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let (engine_shutdown, mut engine_shutdown_rx) = watch::channel(false);
+            let (_finalizing, mut finalizing_rx) = watch::channel(false);
+            engine_shutdown.send_replace(true);
+            let completed =
+                complete_unless_interpreter_finalizing(&mut finalizing_rx, async move {
+                    wait_for_subscription_close(&mut engine_shutdown_rx).await;
+                    42
+                })
+                .await;
+            assert_eq!(completed, 42);
+
+            let (finalizing, mut finalizing_rx) = watch::channel(false);
+            finalizing.send_replace(true);
+            let suppressed = tokio::time::timeout(
+                std::time::Duration::from_millis(1),
+                complete_unless_interpreter_finalizing(&mut finalizing_rx, async { 7 }),
+            )
+            .await;
+            assert!(suppressed.is_err());
         });
     }
 }

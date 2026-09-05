@@ -1,7 +1,7 @@
 //! Criterion comparison for synthetic BQL JSON parser throughput.
 //!
-//! This evaluation harness compares parse-only serde_json and simd-json costs.
-//! Production parsing remains unchanged.
+//! Production parsing remains unchanged. The simd-json lanes explicitly separate
+//! parse-only timing (mutable input copy excluded) from inclusive copy+parse timing.
 
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use serde_json::Value;
@@ -17,6 +17,12 @@ fn bench_bql_json_parsers(c: &mut Criterion) {
         ),
         ("json_rows_1000x2", 1_000, &["px_last", "px_volume"]),
     ];
+    println!(
+        "XBBG_BENCH_PROVENANCE {}",
+        xbbg_bench::benchmark_provenance_json(
+            "cases=json_simple_1x1,json_wide_1x5,json_rows_1000x2;lanes=serde_parse,simd_parse_copy_excluded,simd_copy_and_parse"
+        )
+    );
 
     let mut group = c.benchmark_group("bql_json_parsers");
     for (scenario, rows, fields) in cases {
@@ -37,7 +43,7 @@ fn bench_bql_json_parsers(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("simd_json_from_slice", scenario),
+            BenchmarkId::new("simd_json_parse_only_copy_excluded", scenario),
             &json,
             |b, json| {
                 b.iter_batched(
@@ -50,6 +56,19 @@ fn bench_bql_json_parsers(c: &mut Criterion) {
                     },
                     BatchSize::SmallInput,
                 );
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("simd_json_inclusive_copy_and_parse", scenario),
+            &json,
+            |b, json| {
+                b.iter(|| {
+                    let mut bytes = black_box(json.as_bytes()).to_vec();
+                    let parsed: Value = simd_json::serde::from_slice(bytes.as_mut_slice())
+                        .expect("synthetic BQL fixture should parse with simd-json");
+                    black_box(parsed);
+                });
             },
         );
     }

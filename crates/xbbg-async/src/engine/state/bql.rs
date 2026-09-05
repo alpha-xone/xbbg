@@ -10,11 +10,15 @@ use arrow_array::builder::{Float64Builder, StringBuilder};
 use arrow_array::RecordBatch;
 use arrow_array::{ArrayRef, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use serde::Deserialize;
+use serde::{
+    de::{self, MapAccess, SeqAccess, Visitor},
+    Deserialize, Deserializer,
+};
 use serde_json::Value as JsonValue;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashSet},
+    marker::PhantomData,
     sync::Arc,
 };
 use tokio::sync::oneshot;
@@ -82,14 +86,133 @@ struct BqlException<'a> {
     node_name: Option<Cow<'a, str>>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Clone, Copy, Debug)]
+enum BqlNumber {
+    Signed(i64),
+    Unsigned(u64),
+    Float(f64),
+}
+
+impl BqlNumber {
+    fn from_json(value: &serde_json::Number) -> Self {
+        if let Some(value) = value.as_i64() {
+            Self::Signed(value)
+        } else if let Some(value) = value.as_u64() {
+            Self::Unsigned(value)
+        } else {
+            Self::Float(value.as_f64().unwrap_or(f64::NAN))
+        }
+    }
+
+    fn as_f64(self) -> f64 {
+        match self {
+            Self::Signed(value) => value as f64,
+            Self::Unsigned(value) => value as f64,
+            Self::Float(value) => value,
+        }
+    }
+
+    fn append_as_string(self, builder: &mut StringBuilder) {
+        match self {
+            Self::Signed(value) => {
+                let mut buffer = itoa::Buffer::new();
+                builder.append_value(buffer.format(value));
+            }
+            Self::Unsigned(value) => {
+                let mut buffer = itoa::Buffer::new();
+                builder.append_value(buffer.format(value));
+            }
+            Self::Float(value) => builder.append_value(value.to_string()),
+        }
+    }
+}
+
+#[derive(Debug)]
 enum BqlCell<'a> {
-    String(#[serde(borrow)] Cow<'a, str>),
-    Number(f64),
+    String(Cow<'a, str>),
+    Number(BqlNumber),
     Bool(bool),
     Null,
     Other(Box<JsonValue>),
+}
+
+struct BqlCellVisitor<'a>(PhantomData<&'a str>);
+
+impl<'de, 'a> Visitor<'de> for BqlCellVisitor<'a>
+where
+    'de: 'a,
+{
+    type Value = BqlCell<'a>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON string, number, boolean, null, array, or object")
+    }
+
+    fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E> {
+        Ok(BqlCell::String(Cow::Borrowed(value)))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(BqlCell::String(Cow::Owned(value.to_owned())))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(BqlCell::String(Cow::Owned(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(BqlCell::Number(BqlNumber::Signed(value)))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(BqlCell::Number(BqlNumber::Unsigned(value)))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> {
+        Ok(BqlCell::Number(BqlNumber::Float(value)))
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(BqlCell::Bool(value))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(BqlCell::Null)
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(BqlCell::Null)
+    }
+
+    fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        JsonValue::deserialize(de::value::SeqAccessDeserializer::new(seq))
+            .map(Box::new)
+            .map(BqlCell::Other)
+    }
+
+    fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        JsonValue::deserialize(de::value::MapAccessDeserializer::new(map))
+            .map(Box::new)
+            .map(BqlCell::Other)
+    }
+}
+
+impl<'de, 'a> Deserialize<'de> for BqlCell<'a>
+where
+    'de: 'a,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(BqlCellVisitor(PhantomData))
+    }
 }
 
 impl BqlCell<'_> {
@@ -97,8 +220,8 @@ impl BqlCell<'_> {
         match self {
             Self::String(s) => builder.append_value(s.as_ref()),
             Self::Null => builder.append_null(),
-            Self::Number(n) => builder.append_value(n.to_string()),
-            Self::Bool(b) => builder.append_value(b.to_string()),
+            Self::Number(number) => number.append_as_string(builder),
+            Self::Bool(value) => builder.append_value(if *value { "true" } else { "false" }),
             Self::Other(value) => builder.append_value(value.to_string()),
         }
     }
@@ -476,11 +599,7 @@ impl BqlState {
         let row_count = id_values.len();
         let mut id_builder = Self::string_builder(row_count);
         for value in id_values {
-            match value {
-                JsonValue::String(s) => id_builder.append_value(s),
-                JsonValue::Null => id_builder.append_value(""),
-                other => id_builder.append_value(other.to_string()),
-            }
+            Self::append_json_as_id(value, &mut id_builder);
         }
 
         let mut fields = vec![Field::new("ticker", DataType::Utf8, true)];
@@ -547,7 +666,9 @@ impl BqlState {
                 let mut builder = Self::float_builder(row_count);
                 for row_idx in 0..row_count {
                     match values.get(row_idx) {
-                        Some(BqlCell::Number(n)) => builder.append_value(*n),
+                        Some(BqlCell::Number(number)) => {
+                            builder.append_value(number.as_f64());
+                        }
                         Some(BqlCell::String(s)) => {
                             if let Ok(f) = s.parse::<f64>() {
                                 builder.append_value(f);
@@ -585,7 +706,7 @@ impl BqlState {
         fields: &mut Vec<Field>,
         arrays: &mut Vec<ArrayRef>,
     ) {
-        let mut numeric_values: Vec<Option<f64>> = Vec::with_capacity(row_count);
+        let mut numeric_values: Vec<Option<BqlNumber>> = Vec::with_capacity(row_count);
         let mut string_builder: Option<StringBuilder> = None;
 
         for row_idx in 0..row_count {
@@ -598,13 +719,13 @@ impl BqlState {
             }
 
             match values.get(row_idx) {
-                Some(BqlCell::Number(n)) => numeric_values.push(Some(*n)),
+                Some(BqlCell::Number(number)) => numeric_values.push(Some(*number)),
                 Some(BqlCell::Null) | None => numeric_values.push(None),
                 Some(value) => {
                     let mut builder = Self::string_builder(row_count);
                     for numeric in &numeric_values {
                         match numeric {
-                            Some(n) => builder.append_value(n.to_string()),
+                            Some(number) => number.append_as_string(&mut builder),
                             None => builder.append_null(),
                         }
                     }
@@ -623,7 +744,7 @@ impl BqlState {
         let mut builder = Self::float_builder(row_count);
         for numeric in numeric_values {
             match numeric {
-                Some(n) => builder.append_value(n),
+                Some(number) => builder.append_value(number.as_f64()),
                 None => builder.append_null(),
             }
         }
@@ -644,8 +765,8 @@ impl BqlState {
                 let mut builder = Self::float_builder(row_count);
                 for row_idx in 0..row_count {
                     match values.get(row_idx) {
-                        Some(JsonValue::Number(n)) => {
-                            builder.append_value(n.as_f64().unwrap_or(f64::NAN));
+                        Some(JsonValue::Number(number)) => {
+                            builder.append_value(BqlNumber::from_json(number).as_f64());
                         }
                         Some(JsonValue::String(s)) => {
                             if let Ok(f) = s.parse::<f64>() {
@@ -684,7 +805,7 @@ impl BqlState {
         fields: &mut Vec<Field>,
         arrays: &mut Vec<ArrayRef>,
     ) {
-        let mut numeric_values: Vec<Option<f64>> = Vec::with_capacity(row_count);
+        let mut numeric_values: Vec<Option<BqlNumber>> = Vec::with_capacity(row_count);
         let mut string_builder: Option<StringBuilder> = None;
 
         for row_idx in 0..row_count {
@@ -697,15 +818,15 @@ impl BqlState {
             }
 
             match values.get(row_idx) {
-                Some(JsonValue::Number(n)) => {
-                    numeric_values.push(Some(n.as_f64().unwrap_or(f64::NAN)));
+                Some(JsonValue::Number(number)) => {
+                    numeric_values.push(Some(BqlNumber::from_json(number)));
                 }
                 Some(JsonValue::Null) | None => numeric_values.push(None),
                 Some(value) => {
                     let mut builder = Self::string_builder(row_count);
                     for numeric in &numeric_values {
                         match numeric {
-                            Some(n) => builder.append_value(n.to_string()),
+                            Some(number) => number.append_as_string(&mut builder),
                             None => builder.append_null(),
                         }
                     }
@@ -724,7 +845,7 @@ impl BqlState {
         let mut builder = Self::float_builder(row_count);
         for numeric in numeric_values {
             match numeric {
-                Some(n) => builder.append_value(n),
+                Some(number) => builder.append_value(number.as_f64()),
                 None => builder.append_null(),
             }
         }
@@ -734,9 +855,20 @@ impl BqlState {
 
     fn append_json_as_string(value: &JsonValue, builder: &mut StringBuilder) {
         match value {
-            JsonValue::String(s) => builder.append_value(s),
+            JsonValue::String(value) => builder.append_value(value),
+            JsonValue::Number(number) => BqlNumber::from_json(number).append_as_string(builder),
+            JsonValue::Bool(value) => {
+                builder.append_value(if *value { "true" } else { "false" });
+            }
             JsonValue::Null => builder.append_null(),
             other => builder.append_value(other.to_string()),
+        }
+    }
+
+    fn append_json_as_id(value: &JsonValue, builder: &mut StringBuilder) {
+        match value {
+            JsonValue::Null => builder.append_value(""),
+            other => Self::append_json_as_string(other, builder),
         }
     }
 
@@ -895,6 +1027,284 @@ mod tests {
     fn make_state() -> BqlState {
         let (tx, _rx) = oneshot::channel();
         BqlState::new(tx)
+    }
+
+    #[test]
+    fn bql_cell_borrows_unescaped_strings_and_owns_escaped_strings() {
+        let unescaped_json = r#""borrowed""#;
+        let unescaped: BqlCell<'_> =
+            serde_json::from_str(unescaped_json).expect("unescaped cell parses");
+        match unescaped {
+            BqlCell::String(Cow::Borrowed(value)) => assert_eq!(value, "borrowed"),
+            other => panic!("expected borrowed string, got {other:?}"),
+        }
+
+        let escaped_json = r#""owned\nvalue""#;
+        let escaped: BqlCell<'_> = serde_json::from_str(escaped_json).expect("escaped cell parses");
+        match escaped {
+            BqlCell::String(Cow::Owned(value)) => assert_eq!(value, "owned\nvalue"),
+            other => panic!("expected owned string, got {other:?}"),
+        }
+    }
+
+    fn mixed_cells_json(padding_len: usize) -> String {
+        let padding = "x".repeat(padding_len);
+        format!(
+            r#"{{
+                "padding": "{padding}",
+                "results": {{
+                    "mixed": {{
+                        "idColumn": {{
+                            "values": [
+                                "plain",
+                                "escaped\nvalue",
+                                12.5,
+                                true,
+                                null,
+                                {{"kind": "object", "value": 1}},
+                                ["array", 2]
+                            ]
+                        }},
+                        "valuesColumn": {{
+                            "type": "STRING",
+                            "values": [
+                                "plain",
+                                "escaped\nvalue",
+                                12.5,
+                                true,
+                                null,
+                                {{"kind": "object", "value": 1}},
+                                ["array", 2]
+                            ]
+                        }}
+                    }}
+                }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn parse_bql_json_cell_kinds_match_across_typed_and_value_routes() {
+        let typed_json = mixed_cells_json(0);
+        let value_json = mixed_cells_json(BQL_TYPED_JSON_MAX_BYTES);
+        assert!(typed_json.len() <= BQL_TYPED_JSON_MAX_BYTES);
+        assert!(value_json.len() > BQL_TYPED_JSON_MAX_BYTES);
+
+        let typed = make_state()
+            .parse_bql_json(&typed_json)
+            .expect("typed route parses");
+        let value = make_state()
+            .parse_bql_json(&value_json)
+            .expect("value route parses");
+        assert_eq!(typed.schema(), value.schema());
+
+        let typed_tickers = typed
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("typed tickers are utf8");
+        let value_tickers = value
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("value tickers are utf8");
+        let expected_tickers = vec![
+            Some("plain"),
+            Some("escaped\nvalue"),
+            Some("12.5"),
+            Some("true"),
+            Some(""),
+            Some(r#"{"kind":"object","value":1}"#),
+            Some(r#"["array",2]"#),
+        ];
+        assert_eq!(typed_tickers.iter().collect::<Vec<_>>(), expected_tickers);
+        assert_eq!(value_tickers.iter().collect::<Vec<_>>(), expected_tickers);
+
+        let typed_values = typed
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("typed mixed values are utf8");
+        let value_values = value
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("value mixed values are utf8");
+        let expected_values = vec![
+            Some("plain"),
+            Some("escaped\nvalue"),
+            Some("12.5"),
+            Some("true"),
+            None,
+            Some(r#"{"kind":"object","value":1}"#),
+            Some(r#"["array",2]"#),
+        ];
+        assert_eq!(typed_values.iter().collect::<Vec<_>>(), expected_values);
+        assert_eq!(value_values.iter().collect::<Vec<_>>(), expected_values);
+    }
+
+    fn boundary_numbers_json(padding_len: usize) -> String {
+        let padding = "x".repeat(padding_len);
+        format!(
+            r#"{{
+                "padding": "{padding}",
+                "results": {{
+                    "numeric_values": {{
+                        "idColumn": {{
+                            "values": [
+                                9007199254740993,
+                                18446744073709551615,
+                                -9223372036854775808,
+                                -0.0,
+                                1e-6
+                            ]
+                        }},
+                        "valuesColumn": {{
+                            "type": "DOUBLE",
+                            "values": [
+                                9007199254740993,
+                                18446744073709551615,
+                                -9223372036854775808,
+                                -0.0,
+                                1e-6
+                            ]
+                        }}
+                    }},
+                    "text_values": {{
+                        "idColumn": {{
+                            "values": [
+                                9007199254740993,
+                                18446744073709551615,
+                                -9223372036854775808,
+                                -0.0,
+                                1e-6
+                            ]
+                        }},
+                        "valuesColumn": {{
+                            "type": "STRING",
+                            "values": [
+                                9007199254740993,
+                                18446744073709551615,
+                                -9223372036854775808,
+                                -0.0,
+                                1e-6
+                            ]
+                        }}
+                    }}
+                }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn parse_bql_json_numbers_match_across_typed_and_value_routes() {
+        let typed_json = boundary_numbers_json(0);
+        let value_json = boundary_numbers_json(BQL_TYPED_JSON_MAX_BYTES);
+        assert!(typed_json.len() <= BQL_TYPED_JSON_MAX_BYTES);
+        assert!(value_json.len() > BQL_TYPED_JSON_MAX_BYTES);
+
+        let typed = make_state()
+            .parse_bql_json(&typed_json)
+            .expect("typed route parses");
+        let value = make_state()
+            .parse_bql_json(&value_json)
+            .expect("value route parses");
+        assert_eq!(typed.schema(), value.schema());
+
+        let expected_text = vec![
+            Some("9007199254740993"),
+            Some("18446744073709551615"),
+            Some("-9223372036854775808"),
+            Some("-0"),
+            Some("0.000001"),
+        ];
+        for column_index in [0, 2] {
+            let typed_text = typed
+                .column(column_index)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("typed number text is utf8");
+            let value_text = value
+                .column(column_index)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("value number text is utf8");
+            assert_eq!(typed_text.iter().collect::<Vec<_>>(), expected_text);
+            assert_eq!(value_text.iter().collect::<Vec<_>>(), expected_text);
+        }
+
+        let typed_numeric = typed
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("typed numeric values are f64");
+        let value_numeric = value
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("value numeric values are f64");
+        let expected_numeric = vec![
+            Some(9007199254740993_u64 as f64),
+            Some(u64::MAX as f64),
+            Some(i64::MIN as f64),
+            Some(-0.0),
+            Some(1e-6),
+        ];
+        assert_eq!(typed_numeric.iter().collect::<Vec<_>>(), expected_numeric);
+        assert_eq!(value_numeric.iter().collect::<Vec<_>>(), expected_numeric);
+        assert!(typed_numeric.value(3).is_sign_negative());
+        assert!(value_numeric.value(3).is_sign_negative());
+    }
+
+    fn assert_failed_response_diagnostics(json: &str) {
+        let error = make_state()
+            .parse_bql_json(json)
+            .expect_err("response exception must fail");
+        match error {
+            BlpError::RequestFailure {
+                service,
+                operation,
+                cid,
+                label,
+                request_id,
+                source,
+            } => {
+                assert_eq!(service, "//blp/bqlsvc");
+                assert_eq!(operation.as_deref(), Some("sendQuery"));
+                assert!(cid.is_none());
+                assert!(label.is_none());
+                assert_eq!(request_id.as_deref(), Some("failed-request"));
+                assert_eq!(
+                    source.as_ref().map(ToString::to_string).as_deref(),
+                    Some("bad query (in get(px))")
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_bql_json_failure_diagnostics_match_across_routes() {
+        let make_json = |padding_len| {
+            let padding = "x".repeat(padding_len);
+            format!(
+                r#"{{
+                    "padding": "{padding}",
+                    "clientContext": {{ "clientRequestId": "failed-request" }},
+                    "responseExceptions": [
+                        {{ "message": "bad query", "nodeName": "get(px)" }}
+                    ],
+                    "results": null
+                }}"#
+            )
+        };
+        let typed_json = make_json(0);
+        let value_json = make_json(BQL_TYPED_JSON_MAX_BYTES);
+        assert!(typed_json.len() <= BQL_TYPED_JSON_MAX_BYTES);
+        assert!(value_json.len() > BQL_TYPED_JSON_MAX_BYTES);
+
+        assert_failed_response_diagnostics(&typed_json);
+        assert_failed_response_diagnostics(&value_json);
     }
 
     #[test]

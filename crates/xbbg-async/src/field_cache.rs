@@ -10,8 +10,6 @@
 //! Writers mutate a mutex-protected source-of-truth map and publish snapshots.
 
 use std::collections::HashMap;
-use std::fs;
-use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -21,6 +19,8 @@ use arrow_schema::DataType;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use xbbg_log::{debug, info, warn};
+
+use crate::cache_io::{read_json_array_bounded, AtomicJsonPublisher, PublicationOutcome};
 
 /// Bloomberg field type as returned by //blp/apiflds.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,6 +109,7 @@ pub struct FieldInfo {
 }
 
 const DEFAULT_MAX_FIELD_CACHE_ENTRIES: usize = 65_536;
+const MAX_FIELD_CACHE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 struct FieldCacheEntry {
@@ -133,6 +134,7 @@ pub struct FieldTypeResolver {
     /// Disk load happens at most once (lazy).
     loaded: OnceLock<()>,
     max_entries: usize,
+    publisher: AtomicJsonPublisher,
 }
 
 impl FieldTypeResolver {
@@ -154,6 +156,7 @@ impl FieldTypeResolver {
             cache_path: path,
             loaded: OnceLock::new(),
             max_entries,
+            publisher: AtomicJsonPublisher::default(),
         }
     }
 
@@ -182,61 +185,91 @@ impl FieldTypeResolver {
         self.loaded.get_or_init(|| self.load_from_disk());
     }
 
-    fn publish_snapshot(&self, state: &FieldCacheState) {
+    fn swap_snapshot(&self, state: &FieldCacheState) -> Arc<HashMap<String, FieldInfo>> {
         let snapshot = state
             .entries
             .iter()
             .map(|(key, entry)| (key.clone(), entry.info.clone()))
             .collect();
-        self.cache.store(Arc::new(snapshot));
+        self.cache.swap(Arc::new(snapshot))
     }
 
     fn insert_keyed_entries<I>(&self, entries: I)
     where
         I: IntoIterator<Item = (String, FieldInfo)>,
     {
-        let mut state = self.write_cache.lock();
-        let mut changed = false;
+        let (previous_snapshot, replaced, evicted) = {
+            let mut state = self.write_cache.lock();
+            let mut replaced = Vec::new();
+            let mut changed = false;
 
-        for (key, info) in entries {
-            let key = key.to_uppercase();
-            if key.is_empty() {
-                continue;
+            for (key, info) in entries {
+                let key = key.to_uppercase();
+                if key.is_empty() {
+                    continue;
+                }
+
+                let inserted_at = match state.entries.get(&key) {
+                    Some(existing) => existing.inserted_at,
+                    None => {
+                        let epoch = state.next_insert_epoch;
+                        state.next_insert_epoch = state.next_insert_epoch.saturating_add(1);
+                        epoch
+                    }
+                };
+
+                if let Some(previous) = state
+                    .entries
+                    .insert(key, FieldCacheEntry { info, inserted_at })
+                {
+                    replaced.push(previous);
+                }
+                changed = true;
             }
 
-            let inserted_at = match state.entries.get(&key) {
-                Some(existing) => existing.inserted_at,
-                None => {
-                    let epoch = state.next_insert_epoch;
-                    state.next_insert_epoch = state.next_insert_epoch.saturating_add(1);
-                    epoch
-                }
-            };
+            if !changed {
+                return;
+            }
 
-            state
-                .entries
-                .insert(key, FieldCacheEntry { info, inserted_at });
-            changed = true;
-        }
+            let evicted = Self::evict_oldest(&mut state, self.max_entries);
+            let previous_snapshot = self.swap_snapshot(&state);
+            (previous_snapshot, replaced, evicted)
+        };
 
-        if changed {
-            Self::evict_oldest(&mut state, self.max_entries);
-            self.publish_snapshot(&state);
-        }
+        // A retired ArcSwap snapshot and evicted metadata can both be large.
+        // Release them after the write-side state lock is available again.
+        drop(previous_snapshot);
+        drop(evicted);
+        drop(replaced);
     }
 
-    fn evict_oldest(state: &mut FieldCacheState, max_entries: usize) {
-        while state.entries.len() > max_entries {
-            let Some(key) = state
-                .entries
-                .iter()
-                .min_by_key(|(key, entry)| (entry.inserted_at, key.as_str()))
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            state.entries.remove(&key);
+    fn evict_oldest(
+        state: &mut FieldCacheState,
+        max_entries: usize,
+    ) -> Vec<(String, FieldCacheEntry)> {
+        let excess = state.entries.len().saturating_sub(max_entries);
+        if excess == 0 {
+            return Vec::new();
         }
+
+        let mut oldest: Vec<(&str, u64)> = state
+            .entries
+            .iter()
+            .map(|(key, entry)| (key.as_str(), entry.inserted_at))
+            .collect();
+        if excess < oldest.len() {
+            oldest.select_nth_unstable_by(excess - 1, |left, right| {
+                left.1.cmp(&right.1).then_with(|| left.0.cmp(right.0))
+            });
+        }
+        let keys: Vec<String> = oldest[..excess]
+            .iter()
+            .map(|(key, _)| (*key).to_string())
+            .collect();
+
+        keys.into_iter()
+            .filter_map(|key| state.entries.remove_entry(&key))
+            .collect()
     }
 
     /// Load cache from JSON file.
@@ -249,27 +282,17 @@ impl FieldTypeResolver {
             return;
         }
 
-        let file = match fs::File::open(&self.cache_path) {
-            Ok(f) => f,
-            Err(e) => {
+        let entries: Vec<FieldInfo> = match read_json_array_bounded(
+            &self.cache_path,
+            MAX_FIELD_CACHE_FILE_BYTES,
+            self.max_entries,
+        ) {
+            Ok(entries) => entries,
+            Err(error) => {
                 warn!(
-                    error = %e,
+                    error = %error,
                     path = %self.cache_path.display(),
-                    "Cannot read field cache file. Field types will be re-queried from \
-                     Bloomberg on each session. Check file permissions or set \
-                     field_cache_path in EngineConfig."
-                );
-                return;
-            }
-        };
-        let reader = BufReader::new(file);
-        let entries: Vec<FieldInfo> = match serde_json::from_reader(reader) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    path = %self.cache_path.display(),
-                    "Field cache file is corrupt, ignoring. Will rebuild from API queries."
+                    "Field cache file is unreadable or invalid, ignoring. Will rebuild from API queries."
                 );
                 return;
             }
@@ -291,39 +314,23 @@ impl FieldTypeResolver {
     pub fn save_to_disk(&self) -> Result<(), String> {
         self.ensure_loaded();
 
-        if let Some(parent) = self.cache_path.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                return Err(format!(
-                    "Cannot create field cache directory '{}': {e}. \
-                     Field types will not persist between sessions. \
-                     Set field_cache_path in EngineConfig to a writable location.",
-                    parent.display()
-                ));
+        // Reserve publication order and capture the matching snapshot while
+        // holding the write-state lock. Clear uses the same ordering point.
+        let (publication, snapshot) = {
+            let _state = self.write_cache.lock();
+            (self.publisher.begin(), self.cache.load_full())
+        };
+
+        let entries: Vec<FieldInfo> = snapshot.values().cloned().collect();
+        match publication.publish(&self.cache_path, &entries)? {
+            PublicationOutcome::Published => {
+                info!(count = entries.len(), path = %self.cache_path.display(), "Saved field cache");
+            }
+            PublicationOutcome::Superseded => {
+                debug!(path = %self.cache_path.display(), "Skipped superseded field cache snapshot");
             }
         }
 
-        // Snapshot via ArcSwap load — no locks held during serialization.
-        let snapshot = self.cache.load();
-        if snapshot.is_empty() {
-            debug!("Cache is empty, nothing to save");
-            return Ok(());
-        }
-
-        let entries: Vec<FieldInfo> = snapshot.values().cloned().collect();
-
-        let file = fs::File::create(&self.cache_path).map_err(|e| {
-            format!(
-                "Cannot write field cache to '{}': {e}. \
-                 Field types will not persist between sessions.",
-                self.cache_path.display()
-            )
-        })?;
-        let writer = BufWriter::new(file);
-
-        serde_json::to_writer_pretty(writer, &entries)
-            .map_err(|e| format!("Failed to serialize field cache: {e}"))?;
-
-        info!(count = entries.len(), path = %self.cache_path.display(), "Saved field cache");
         Ok(())
     }
 
@@ -509,13 +516,24 @@ impl FieldTypeResolver {
             .collect()
     }
 
-    /// Clear all cached field info.
-    pub fn clear(&self) {
-        let mut state = self.write_cache.lock();
-        state.entries.clear();
-        state.next_insert_epoch = 0;
-        self.cache.store(Arc::new(HashMap::new()));
+    /// Clear all cached field info and its persisted snapshot.
+    pub fn clear(&self) -> Result<(), String> {
+        self.ensure_loaded();
+        let (previous_snapshot, removed) = {
+            let mut state = self.write_cache.lock();
+            let removal = self.publisher.begin();
+            let outcome = removal.remove(&self.cache_path)?;
+            debug_assert_eq!(outcome, PublicationOutcome::Published);
+
+            let removed: Vec<(String, FieldCacheEntry)> = state.entries.drain().collect();
+            state.next_insert_epoch = 0;
+            let previous_snapshot = self.cache.swap(Arc::new(HashMap::new()));
+            (previous_snapshot, removed)
+        };
+        drop(previous_snapshot);
+        drop(removed);
         info!("Cleared field cache");
+        Ok(())
     }
 
     /// Get cache statistics.
@@ -563,6 +581,7 @@ pub fn global_resolver() -> Arc<FieldTypeResolver> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn field_info(field_id: &str, arrow_type: &str) -> FieldInfo {
         FieldInfo {
@@ -677,5 +696,84 @@ mod tests {
         assert_eq!(resolver.get_arrow_type("SECOND").as_deref(), Some("int64"));
         assert_eq!(resolver.get_arrow_type("THIRD").as_deref(), Some("string"));
         assert_eq!(resolver.cache.load().len(), 2);
+    }
+    #[test]
+    fn saved_snapshot_round_trips_through_atomic_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("field_cache.json");
+        let resolver = FieldTypeResolver::with_cache_path(path.clone());
+        resolver.insert_many([
+            field_info("PX_LAST", "float64"),
+            field_info("VOLUME", "int64"),
+        ]);
+
+        resolver.save_to_disk().unwrap();
+
+        let reloaded = FieldTypeResolver::with_cache_path(path);
+        assert_eq!(
+            reloaded.get_arrow_type("PX_LAST").as_deref(),
+            Some("float64")
+        );
+        assert_eq!(reloaded.get_arrow_type("VOLUME").as_deref(), Some("int64"));
+    }
+
+    #[test]
+    fn replacement_failure_surfaces_from_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("field_cache.json");
+        fs::create_dir(&path).unwrap();
+        let resolver = FieldTypeResolver::with_cache_path(path);
+        resolver.insert(field_info("PX_LAST", "float64"));
+
+        let error = resolver.save_to_disk().unwrap_err();
+
+        assert!(error.contains("cannot replace cache file"));
+    }
+
+    #[test]
+    fn clear_removes_persisted_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("field_cache.json");
+        let resolver = FieldTypeResolver::with_cache_path(path.clone());
+        resolver.insert(field_info("PX_LAST", "float64"));
+        resolver.save_to_disk().unwrap();
+
+        resolver.clear().unwrap();
+
+        assert!(!path.exists());
+        let reloaded = FieldTypeResolver::with_cache_path(path);
+        assert!(reloaded.get("PX_LAST").is_none());
+    }
+
+    #[test]
+    fn failed_clear_keeps_memory_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("field_cache.json");
+        fs::create_dir(&path).unwrap();
+        let resolver = FieldTypeResolver::with_cache_path(path);
+        resolver.insert(field_info("PX_LAST", "float64"));
+
+        let error = resolver.clear().unwrap_err();
+
+        assert!(error.contains("cannot remove cache file"));
+        assert!(resolver.get("PX_LAST").is_some());
+    }
+
+    #[test]
+    fn cold_load_rejects_more_than_configured_entry_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("field_cache.json");
+        let entries = vec![
+            field_info("FIRST", "float64"),
+            field_info("SECOND", "int64"),
+            field_info("THIRD", "string"),
+        ];
+        fs::write(&path, serde_json::to_vec(&entries).unwrap()).unwrap();
+        let resolver = FieldTypeResolver::with_cache_path_and_max_entries(path, 2);
+
+        resolver.preload();
+
+        assert_eq!(resolver.stats().0, 0);
+        assert!(resolver.get("FIRST").is_none());
     }
 }

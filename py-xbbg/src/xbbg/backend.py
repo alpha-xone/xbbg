@@ -13,11 +13,14 @@ Ported from ``release/0.x`` ``xbbg/backend.py``.
 
 from __future__ import annotations
 
+import atexit
 from dataclasses import dataclass
 from enum import Enum
 import functools
 import logging
+import os
 import sys
+import threading
 from typing import Any, TypeAlias
 import warnings
 
@@ -174,8 +177,10 @@ BACKEND_DESCRIPTORS: dict[Backend, BackendDescriptor] = {
     ),
     Backend.NARWHALS_LAZY: _descriptor(
         Backend.NARWHALS_LAZY,
-        package_name="narwhals",
-        module_name="narwhals",
+        package_name="polars",
+        module_name="polars",
+        extra_name="polars",
+        min_version=(0, 20, 4),
         conversion=BackendConversion.NARWHALS_LAZY,
     ),
     Backend.PANDAS: _descriptor(
@@ -191,7 +196,7 @@ BACKEND_DESCRIPTORS: dict[Backend, BackendDescriptor] = {
         package_name="polars",
         module_name="polars",
         extra_name="polars",
-        min_version=(0, 20),
+        min_version=(0, 20, 4),
         conversion=BackendConversion.POLARS,
     ),
     Backend.POLARS_LAZY: _descriptor(
@@ -199,7 +204,7 @@ BACKEND_DESCRIPTORS: dict[Backend, BackendDescriptor] = {
         package_name="polars",
         module_name="polars",
         extra_name="polars",
-        min_version=(0, 20),
+        min_version=(0, 20, 4),
         conversion=BackendConversion.POLARS_LAZY,
     ),
     Backend.DUCKDB: _descriptor(
@@ -207,7 +212,7 @@ BACKEND_DESCRIPTORS: dict[Backend, BackendDescriptor] = {
         package_name="duckdb",
         module_name="duckdb",
         extra_name="duckdb",
-        min_version=(1, 0),
+        min_version=(1, 5),
         conversion=BackendConversion.DUCKDB,
     ),
     Backend.CUDF: _descriptor(
@@ -343,7 +348,8 @@ def _get_module_version(module: Any) -> tuple[int, ...] | None:
 def is_backend_available(backend: Backend | str) -> bool:
     """Check whether a backend is installed and importable.
 
-    The native xbbg carrier and bundled Narwhals plugin always return ``True``.
+    The native xbbg carrier and eager bundled Narwhals plugin always return ``True``.
+    Lazy Narwhals availability additionally requires Polars.
 
     Args:
         backend: A :class:`Backend` member or its string value.
@@ -355,7 +361,7 @@ def is_backend_available(backend: Backend | str) -> bool:
         backend = Backend(backend)
 
     # Core/native dependencies — always available.
-    if backend in (Backend.NATIVE, Backend.NARWHALS, Backend.NARWHALS_LAZY):
+    if backend in (Backend.NATIVE, Backend.NARWHALS):
         return True
 
     module_name = MODULE_NAMES.get(backend)
@@ -389,7 +395,7 @@ def check_backend(backend: Backend | str, *, raise_on_error: bool = True) -> boo
         backend = Backend(backend)
 
     # Native/core dependencies — always OK.
-    if backend in (Backend.NATIVE, Backend.NARWHALS, Backend.NARWHALS_LAZY):
+    if backend in (Backend.NATIVE, Backend.NARWHALS):
         return True
 
     module_name = MODULE_NAMES.get(backend)
@@ -426,7 +432,10 @@ def check_backend(backend: Backend | str, *, raise_on_error: bool = True) -> boo
         logger.warning(msg)
         return False
 
-    if backend in (Backend.POLARS, Backend.POLARS_LAZY) and getattr(module, "__version__", None) == "":
+    if (
+        backend in (Backend.POLARS, Backend.POLARS_LAZY, Backend.NARWHALS_LAZY)
+        and getattr(module, "__version__", None) == ""
+    ):
         msg = (
             f"Backend '{backend.value}' requires a usable '{package_name}' package, "
             "but the installed Polars package is missing its native binary.\n\n"
@@ -557,15 +566,145 @@ def _to_pandas_frame(table: Any) -> Any:
     return _attach_xbbg_metadata_attrs(frame, table)
 
 
-def _to_polars_frame(table: Any) -> Any:
-    """Convert to polars; xbbg Arrow metadata is not attached as frame attrs."""
-    pl = _import_backend_module(Backend.POLARS)
+_POLARS_CAPSULE_CONSTRUCTOR_MIN_VERSION = (1, 3)
 
-    if is_backend_available(Backend.PYARROW) and check_backend(Backend.PYARROW, raise_on_error=False):
+
+def _to_polars_frame_from_native_batches(table: Any, pl: Any) -> Any:
+    """Materialize legacy Polars input one native batch at a time with its schema."""
+    from xbbg._narwhals_impl import _native_schema
+
+    schema = nw.Schema(_native_schema(table)).to_polars()
+    unknown = getattr(pl, "Unknown", None)
+    unsupported = [name for name, dtype in schema.items() if unknown is not None and dtype == unknown]
+    if unsupported:
+        raise TypeError(
+            "installed Polars does not support native Arrow dtype(s) for column(s): "
+            + ", ".join(repr(name) for name in unsupported)
+        )
+    frames = [pl.DataFrame(batch.to_pylist(), schema=schema) for batch in table.to_batches() if batch.num_rows]
+    if not frames:
+        return pl.DataFrame(schema=schema)
+    if len(frames) == 1:
+        return frames[0]
+    return pl.concat(frames, rechunk=False)
+
+
+def _to_polars_frame(table: Any, *, feature: str | None = None) -> Any:
+    """Convert to Polars without coalescing the native Arrow chunks."""
+    pl = _import_backend_module(Backend.POLARS, feature=feature)
+
+    if _is_pyarrow_table(table):
+        return pl.from_arrow(table, rechunk=False)
+
+    version = _get_module_version(pl)
+    if version is not None and version >= _POLARS_CAPSULE_CONSTRUCTOR_MIN_VERSION:
+        # Polars 1.3 added Arrow PyCapsule support to DataFrame constructors.
+        # Unlike ``from_arrow``, which only gained capsule support in 1.22 and
+        # requests a rechunk by default, this constructor preserves chunks.
+        return pl.DataFrame(table)
+
+    try:
         pa = _import_backend_module(Backend.PYARROW)
-        return pl.from_arrow(pa.table(table))
+    except ImportError:
+        # Polars before 1.3 cannot consume an Arrow stream capsule directly.
+        # Construct one frame per native batch so the declared 0.20 floor
+        # preserves both logical dtypes and native chunk boundaries.
+        return _to_polars_frame_from_native_batches(table, pl)
+    return pl.from_arrow(pa.table(table), rechunk=False)
 
-    return pl.from_arrow(table)
+
+class _DuckDBDatabase:
+    """Own one process-local DuckDB database and vend isolated connections."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pid: int | None = None
+        self._initializing_pid: int | None = None
+        self._database_name: str | None = None
+        self._anchor: Any | None = None
+        self._atexit_registered = False
+        register_at_fork = getattr(os, "register_at_fork", None)
+        if register_at_fork is not None:
+            register_at_fork(after_in_child=self._after_fork)
+
+    def _after_fork(self) -> None:
+        # Reset only the Python lock. Native DuckDB state inherited from the
+        # parent must remain untouched and is rejected before any child use.
+        self._lock = threading.Lock()
+
+    def _inherited_owner_pid(self) -> int | None:
+        owner_pid = self._pid if self._pid is not None else self._initializing_pid
+        if owner_pid is not None and owner_pid != os.getpid():
+            return owner_pid
+        return None
+
+    def _raise_if_inherited(self, operation: str) -> None:
+        owner_pid = self._inherited_owner_pid()
+        if owner_pid is None:
+            return
+        raise RuntimeError(
+            f"DuckDB backend state was initialized in process {owner_pid} before "
+            f"this child process was forked and cannot be {operation} safely in "
+            f"process {os.getpid()}. Use the multiprocessing 'spawn' start method, "
+            "or fork before initializing xbbg's DuckDB backend."
+        )
+
+    def connect(self) -> Any:
+        self._raise_if_inherited("used")
+        pid = os.getpid()
+        with self._lock:
+            if self._anchor is None:
+                self._initializing_pid = pid
+                try:
+                    duckdb = _import_backend_module(Backend.DUCKDB)
+                    database_name = f":memory:xbbg_backend_{pid}_{id(self):x}"
+                    anchor = duckdb.connect(database=database_name)
+                    self._pid = pid
+                    self._database_name = database_name
+                    self._anchor = anchor
+                    if not self._atexit_registered:
+                        # Register after DuckDB is imported so this runs before
+                        # module-level DuckDB teardown callbacks (atexit is LIFO).
+                        atexit.register(self._close_at_exit)
+                        self._atexit_registered = True
+                finally:
+                    self._initializing_pid = None
+            else:
+                duckdb = _import_backend_module(Backend.DUCKDB)
+            return duckdb.connect(database=self._database_name)
+
+    def close(self) -> None:
+        self._raise_if_inherited("closed")
+        with self._lock:
+            anchor = self._anchor
+            self._anchor = None
+            self._database_name = None
+            # Keep the owner PID after close: only a manager that has never
+            # initialized DuckDB may be initialized after a fork.
+            if anchor is not None:
+                anchor.close()
+
+    def _close_at_exit(self) -> None:
+        if self._inherited_owner_pid() is not None:
+            return
+        try:
+            self.close()
+        except Exception:
+            # Interpreter teardown may already have unloaded DuckDB.
+            pass
+
+
+_DUCKDB_DATABASE = _DuckDBDatabase()
+
+
+def _to_duckdb_relation(table: Any) -> Any:
+    connection = _DUCKDB_DATABASE.connect()
+    try:
+        connection.register("xbbg_arrow", table)
+        return connection.sql("select * from xbbg_arrow")
+    except Exception:
+        connection.close()
+        raise
 
 
 _native_narwhals_fallback_warned = False
@@ -640,9 +779,14 @@ def convert_backend_frame(frame: Any, backend: Backend | str) -> DataFrameResult
     """Convert an xbbg ArrowTable to the requested public backend."""
     effective = Backend(backend) if isinstance(backend, str) else backend
     descriptor = BACKEND_DESCRIPTORS[effective]
+    if effective is Backend.DUCKDB:
+        # Fail before dependency checks can touch a partially imported DuckDB
+        # module inherited from an initialization-time fork.
+        _DUCKDB_DATABASE._raise_if_inherited("used")
+
     table = ensure_arrow_table(frame)
 
-    if effective not in (Backend.NATIVE, Backend.NARWHALS, Backend.NARWHALS_LAZY):
+    if effective not in (Backend.NATIVE, Backend.NARWHALS, Backend.DUCKDB):
         check_backend(effective)
 
     match descriptor.conversion:
@@ -659,13 +803,9 @@ def convert_backend_frame(frame: Any, backend: Backend | str) -> DataFrameResult
         case BackendConversion.NARWHALS:
             return nw.from_native(_best_narwhals_native(table))
         case BackendConversion.NARWHALS_LAZY:
-            return nw.from_native(_best_narwhals_native(table)).lazy()
+            return nw.from_native(_to_polars_frame(table, feature="backend='narwhals_lazy'").lazy())
         case BackendConversion.DUCKDB:
-            import duckdb
-
-            con = duckdb.connect()
-            con.register("xbbg_arrow", table)
-            return con.sql("select * from xbbg_arrow")
+            return _to_duckdb_relation(table)
         case BackendConversion.PLANNED:
             raise NotImplementedError(
                 f"Backend '{effective.value}' is selectable but conversion from xbbg native Arrow "
@@ -711,7 +851,7 @@ def print_backend_status() -> None:
         if backend == Backend.NATIVE:
             status = "OK (native)"
             version_info = "provided by xbbg"
-        elif backend in (Backend.NARWHALS, Backend.NARWHALS_LAZY):
+        elif backend is Backend.NARWHALS:
             module = _get_module(backend) or __import__(module_name)
             version = _get_module_version(module)
             status = "OK (core)"

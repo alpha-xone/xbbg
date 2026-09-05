@@ -24,6 +24,7 @@ recursive-include py-xbbg/src *.py *.pyi
 
 # Rust workspace crates needed for the build
 recursive-include crates/blpapi-sys *.rs *.toml
+recursive-include crates/xbbg-arrow *.rs *.toml
 recursive-include crates/xbbg-core *.rs *.toml
 recursive-include crates/xbbg-async *.rs *.toml
 recursive-include crates/xbbg-ext *.rs *.toml
@@ -58,6 +59,7 @@ prune py-xbbg/benchmarks
 prune py-xbbg/docker
 prune py-xbbg/examples
 prune scripts
+include scripts/rust_build_provenance.rs
 prune vendor
 prune crates/blpapi-sys/vendor
 prune js-xbbg

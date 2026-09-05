@@ -2,38 +2,33 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    LargeStringArray, StringArray, UInt32Array, UInt64Array,
-};
-use arrow::datatypes::DataType;
-use arrow::record_batch::RecordBatch;
-use arrow::util::display::array_value_to_string;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler, ServiceExt};
-use serde_json::{json, Map, Number, Value};
-use tokio::sync::OnceCell;
+use serde_json::{json, Value};
+use tokio::sync::{OnceCell, Semaphore};
 use xbbg_async::engine::{Engine, EngineConfig, RequestParams, RetryPolicy, ServerAddr, Transport};
 use xbbg_async::BlpAsyncError;
-use xbbg_core::{AuthConfig, BlpError, EntitlementCheck};
+use xbbg_core::errors::ValidationError;
+use xbbg_core::{AuthConfig, BlpError};
 
 mod request_adapter;
+mod serialization;
 mod stdin;
 
 use request_adapter::{
     bdh_request_params, bdib_request_params, bdp_request_params, bds_request_params,
     bflds_request_params, bql_request_params, bsrch_request_params, check_entitlements_params,
     generic_request_params, BdhArgs, BdibArgs, BdpArgs, BdsArgs, BfldsArgs, BqlArgs, BsrchArgs,
-    CheckEntitlementsArgs, RequestArgs, MAX_ENTITLEMENT_EIDS,
+    CheckEntitlementsArgs, RequestArgs,
 };
 
-#[derive(Clone, Debug)]
-struct ResultLimits {
-    max_rows: usize,
-    max_string_chars: usize,
-}
+use serialization::{
+    bounded_error_display, bounded_error_text, bounded_json_text, entitlement_check_to_json,
+    json_serialized_len, record_batch_to_json, should_offload, should_offload_items, ResultLimits,
+    MIN_RESULT_BYTES,
+};
 
 struct XbbgMcpServer {
     #[allow(dead_code)] // read by rmcp's generated ServerHandler impl
@@ -41,34 +36,65 @@ struct XbbgMcpServer {
     engine: OnceCell<Arc<Engine>>,
     engine_config: EngineConfig,
     result_limits: ResultLimits,
+    serialization_permits: Arc<Semaphore>,
 }
 
 impl XbbgMcpServer {
     fn new_from_env() -> Result<Self, String> {
+        const MAX_CONCURRENT_SERIALIZATIONS: usize = 2;
+
         let (engine_config, result_limits) = load_settings_from_env()?;
         Ok(Self {
             tool_router: Self::tool_router(),
             engine: OnceCell::new(),
             engine_config,
             result_limits,
+            serialization_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_SERIALIZATIONS)),
         })
+    }
+
+    fn bounded_input<T>(&self, result: Result<T, ErrorData>) -> Result<T, ErrorData> {
+        result.map_err(|error| bound_existing_error(error, &self.result_limits))
     }
 
     async fn engine(&self) -> Result<&Arc<Engine>, ErrorData> {
         self.engine
             .get_or_try_init(|| async {
                 let config = self.engine_config.clone();
+                let limits = self.result_limits.clone();
                 tokio::task::spawn_blocking(move || {
                     Engine::start(config)
                         .map(Arc::new)
-                        .map_err(map_request_error)
+                        .map_err(|error| map_request_error(error, &limits))
                 })
                 .await
-                .map_err(|err| {
-                    ErrorData::internal_error(format!("engine startup task failed: {err}"), None)
-                })?
+                .map_err(|error| bounded_internal_error(&error, &self.result_limits))?
             })
             .await
+    }
+
+    async fn run_blocking_serialization<T, F>(&self, operation: F) -> Result<T, ErrorData>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, ErrorData> + Send + 'static,
+    {
+        let permit = self
+            .serialization_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| {
+                ErrorData::internal_error(
+                    "MCP result serialization is shutting down".to_string(),
+                    None,
+                )
+            })?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            operation()
+        })
+        .await
+        .map_err(|error| bounded_internal_error(&error, &self.result_limits))?
     }
 
     async fn execute_request(&self, params: RequestParams) -> Result<CallToolResult, ErrorData> {
@@ -77,8 +103,14 @@ impl XbbgMcpServer {
             .await?
             .request(params)
             .await
-            .map_err(map_request_error)?;
-        let payload = record_batch_to_json(&batch, &self.result_limits)?;
+            .map_err(|error| map_request_error(error, &self.result_limits))?;
+        let payload = if should_offload(&batch, &self.result_limits) {
+            let limits = self.result_limits.clone();
+            self.run_blocking_serialization(move || record_batch_to_json(&batch, &limits))
+                .await?
+        } else {
+            record_batch_to_json(&batch, &self.result_limits)?
+        };
         Ok(CallToolResult::structured(payload))
     }
 }
@@ -99,7 +131,8 @@ impl XbbgMcpServer {
         &self,
         Parameters(args): Parameters<BdpArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_request(bdp_request_params(args)?).await
+        self.execute_request(self.bounded_input(bdp_request_params(args))?)
+            .await
     }
 
     #[tool(
@@ -116,7 +149,8 @@ impl XbbgMcpServer {
         &self,
         Parameters(args): Parameters<BdhArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_request(bdh_request_params(args)?).await
+        self.execute_request(self.bounded_input(bdh_request_params(args))?)
+            .await
     }
 
     #[tool(
@@ -133,7 +167,8 @@ impl XbbgMcpServer {
         &self,
         Parameters(args): Parameters<BdsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_request(bds_request_params(args)?).await
+        self.execute_request(self.bounded_input(bds_request_params(args))?)
+            .await
     }
 
     #[tool(
@@ -150,7 +185,8 @@ impl XbbgMcpServer {
         &self,
         Parameters(args): Parameters<BdibArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_request(bdib_request_params(args)?).await
+        self.execute_request(self.bounded_input(bdib_request_params(args))?)
+            .await
     }
 
     #[tool(
@@ -167,7 +203,8 @@ impl XbbgMcpServer {
         &self,
         Parameters(args): Parameters<BqlArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_request(bql_request_params(args)?).await
+        self.execute_request(self.bounded_input(bql_request_params(args))?)
+            .await
     }
 
     #[tool(
@@ -184,7 +221,8 @@ impl XbbgMcpServer {
         &self,
         Parameters(args): Parameters<BsrchArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_request(bsrch_request_params(args)?).await
+        self.execute_request(self.bounded_input(bsrch_request_params(args))?)
+            .await
     }
 
     #[tool(
@@ -201,7 +239,8 @@ impl XbbgMcpServer {
         &self,
         Parameters(args): Parameters<BfldsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_request(bflds_request_params(args)?).await
+        self.execute_request(self.bounded_input(bflds_request_params(args))?)
+            .await
     }
 
     #[tool(
@@ -218,16 +257,24 @@ impl XbbgMcpServer {
         &self,
         Parameters(args): Parameters<CheckEntitlementsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (service, eids) = check_entitlements_params(args)?;
+        let (service, eids) = self.bounded_input(check_entitlements_params(args))?;
         let check = self
             .engine()
             .await?
             .check_entitlements(&service, &eids)
             .await
-            .map_err(map_request_error)?;
-        Ok(CallToolResult::structured(entitlement_check_to_json(
-            service, eids, check,
-        )))
+            .map_err(|error| map_request_error(error, &self.result_limits))?;
+        let work_items = eids.len().saturating_add(check.failed_eids.len());
+        let payload = if should_offload_items(work_items) {
+            let limits = self.result_limits.clone();
+            self.run_blocking_serialization(move || {
+                entitlement_check_to_json(service, eids, check, &limits)
+            })
+            .await?
+        } else {
+            entitlement_check_to_json(service, eids, check, &self.result_limits)?
+        };
+        Ok(CallToolResult::structured(payload))
     }
 
     #[tool(
@@ -244,7 +291,8 @@ impl XbbgMcpServer {
         &self,
         Parameters(args): Parameters<RequestArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_request(generic_request_params(args)?).await
+        self.execute_request(self.bounded_input(generic_request_params(args))?)
+            .await
     }
 }
 
@@ -266,7 +314,7 @@ impl ServerHandler for XbbgMcpServer {
                     ),
             )
             .with_instructions(
-                "Use bdp, bdh, bds, bdib, bql, bsrch, bflds, check_entitlements, or request. Results are JSON with schema metadata and bounded rows. This MCP server currently exposes host/port, selected auth env vars, and core pool settings rather than the full EngineConfig surface. For XBBG_MCP_VALIDATION_MODE/XBBG_VALIDATION_MODE use disabled (default), lenient, or strict; for XBBG_MCP_SDK_LOG_LEVEL/XBBG_SDK_LOG_LEVEL use off (default), fatal, error, warn, info, debug, or trace; for XBBG_MCP_OVERFLOW_POLICY/XBBG_OVERFLOW_POLICY use drop_newest (default) or block.",
+                "Use bdp, bdh, bds, bdib, bql, bsrch, bflds, check_entitlements, or request. Results are structured JSON with Arrow schema and metadata, explicit truncation counts, and bounded rows, cells, strings, metadata, and total bytes. This MCP server currently exposes host/port, selected auth env vars, core pool settings, and result limits rather than the full EngineConfig surface. For XBBG_MCP_VALIDATION_MODE/XBBG_VALIDATION_MODE use disabled (default), lenient, or strict; for XBBG_MCP_SDK_LOG_LEVEL/XBBG_SDK_LOG_LEVEL use off (default), fatal, error, warn, info, debug, or trace; for XBBG_MCP_OVERFLOW_POLICY/XBBG_OVERFLOW_POLICY use drop_newest (default) or block.",
             )
     }
 }
@@ -343,11 +391,40 @@ fn load_settings_from_env() -> Result<(EngineConfig, ResultLimits), String> {
     .unwrap_or(config.overflow_policy);
     config.auth = build_auth_from_env()?;
 
+    let defaults = ResultLimits::default();
     let result_limits = ResultLimits {
-        max_rows: env_usize(&["XBBG_MCP_MAX_ROWS"])?.unwrap_or(500).max(1),
-        max_string_chars: env_usize(&["XBBG_MCP_MAX_STRING_CHARS"])?
-            .unwrap_or(2_048)
-            .max(16),
+        max_rows: env_limit(&["XBBG_MCP_MAX_ROWS"], "max_rows", defaults.max_rows, 1)?,
+        max_cells: env_limit(&["XBBG_MCP_MAX_CELLS"], "max_cells", defaults.max_cells, 1)?,
+        max_metadata_properties: env_limit(
+            &["XBBG_MCP_MAX_METADATA_PROPERTIES"],
+            "max_metadata_properties",
+            defaults.max_metadata_properties,
+            1,
+        )?,
+        max_metadata_bytes: env_limit(
+            &["XBBG_MCP_MAX_METADATA_BYTES"],
+            "max_metadata_bytes",
+            defaults.max_metadata_bytes,
+            1,
+        )?,
+        max_string_chars: env_limit(
+            &["XBBG_MCP_MAX_STRING_CHARS"],
+            "max_string_chars",
+            defaults.max_string_chars,
+            1,
+        )?,
+        max_string_bytes: env_limit(
+            &["XBBG_MCP_MAX_STRING_BYTES"],
+            "max_string_bytes",
+            defaults.max_string_bytes,
+            '…'.len_utf8(),
+        )?,
+        max_result_bytes: env_limit(
+            &["XBBG_MCP_MAX_RESULT_BYTES"],
+            "max_result_bytes",
+            defaults.max_result_bytes,
+            MIN_RESULT_BYTES,
+        )?,
     };
 
     Ok((config, result_limits))
@@ -438,6 +515,14 @@ fn env_usize(keys: &[&str]) -> Result<Option<usize>, String> {
     env_parse(keys, "usize", str::parse)
 }
 
+fn env_limit(keys: &[&str], label: &str, default: usize, minimum: usize) -> Result<usize, String> {
+    let value = env_usize(keys)?.unwrap_or(default);
+    if value < minimum {
+        return Err(format!("{label} must be at least {minimum}, got {value}"));
+    }
+    Ok(value)
+}
+
 fn env_u16(keys: &[&str]) -> Result<Option<u16>, String> {
     env_parse(keys, "u16", str::parse)
 }
@@ -464,15 +549,6 @@ where
     T::Err: std::fmt::Display,
 {
     env_parse(keys, label, str::parse)
-}
-
-fn entitlement_check_to_json(service: String, eids: Vec<i32>, check: EntitlementCheck) -> Value {
-    json!({
-        "service": service,
-        "eids": eids,
-        "entitled": check.entitled,
-        "failed_eids": check.failed_eids,
-    })
 }
 
 fn env_parse<T, E, F>(keys: &[&str], label: &str, parser: F) -> Result<Option<T>, String>
@@ -502,330 +578,253 @@ fn parse_bool(value: &str) -> Result<bool, String> {
     }
 }
 
-fn map_request_error(error: BlpAsyncError) -> ErrorData {
+fn truncation_data(truncated: bool) -> Option<Value> {
+    truncated.then(|| json!({"message_truncated": true}))
+}
+
+fn bound_existing_error(error: ErrorData, limits: &ResultLimits) -> ErrorData {
+    let ErrorData {
+        code,
+        message,
+        data,
+    } = error;
+    let upstream_message_truncated = data
+        .as_ref()
+        .and_then(|value| value.get("message_truncated"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let marker_only = matches!(
+        data.as_ref(),
+        Some(Value::Object(object))
+            if object.len() == 1 && object.contains_key("message_truncated")
+    );
+    let (message, locally_truncated) = bounded_error_text(&message, limits);
+    let message_truncated = locally_truncated || upstream_message_truncated;
+    let data_omitted = data.is_some() && !marker_only;
+    let truncation = (message_truncated || data_omitted).then(|| {
+        json!({
+            "message_truncated": message_truncated,
+            "error_data_omitted": data_omitted,
+        })
+    });
+    ErrorData::new(code, message, truncation)
+}
+
+fn bounded_invalid_params(message: &str, limits: &ResultLimits) -> ErrorData {
+    let (message, truncated) = bounded_error_text(message, limits);
+    ErrorData::invalid_params(message, truncation_data(truncated))
+}
+
+fn bounded_internal_error(error: &impl std::fmt::Display, limits: &ResultLimits) -> ErrorData {
+    let (message, truncated) = bounded_error_display(error, limits);
+    ErrorData::internal_error(message, truncation_data(truncated))
+}
+
+fn map_request_error(error: BlpAsyncError, limits: &ResultLimits) -> ErrorData {
     match error {
-        BlpAsyncError::ConfigError { detail } => ErrorData::invalid_params(detail, None),
+        BlpAsyncError::ConfigError { detail } => bounded_invalid_params(&detail, limits),
         BlpAsyncError::Blp(blp_error) | BlpAsyncError::BlpError(blp_error) => {
-            map_blp_error(blp_error)
+            map_blp_error(blp_error, limits)
         }
-        other => ErrorData::internal_error(other.to_string(), None),
+        other => bounded_internal_error(&other, limits),
     }
 }
 
-fn map_blp_error(error: BlpError) -> ErrorData {
+fn map_blp_error(error: BlpError, limits: &ResultLimits) -> ErrorData {
     match error {
-        BlpError::InvalidArgument { detail } => ErrorData::invalid_params(detail, None),
-        BlpError::SchemaOperationNotFound { service, operation } => ErrorData::invalid_params(
-            format!("unknown Bloomberg operation '{operation}' for service '{service}'"),
-            None,
-        ),
-        BlpError::SchemaElementNotFound { parent, name } => ErrorData::invalid_params(
-            format!("unknown Bloomberg request element '{name}' under '{parent}'"),
-            None,
-        ),
+        BlpError::InvalidArgument { detail } => bounded_invalid_params(&detail, limits),
+        BlpError::SchemaOperationNotFound { service, operation } => {
+            let (service, service_truncated) = bounded_error_text(&service, limits);
+            let (operation, operation_truncated) = bounded_error_text(&operation, limits);
+            let (message, message_truncated) = bounded_error_display(
+                &format_args!("unknown Bloomberg operation '{operation}' for service '{service}'"),
+                limits,
+            );
+            ErrorData::invalid_params(
+                message,
+                truncation_data(service_truncated || operation_truncated || message_truncated),
+            )
+        }
+        BlpError::SchemaElementNotFound { parent, name } => {
+            let (parent, parent_truncated) = bounded_error_text(&parent, limits);
+            let (name, name_truncated) = bounded_error_text(&name, limits);
+            let (message, message_truncated) = bounded_error_display(
+                &format_args!("unknown Bloomberg request element '{name}' under '{parent}'"),
+                limits,
+            );
+            ErrorData::invalid_params(
+                message,
+                truncation_data(parent_truncated || name_truncated || message_truncated),
+            )
+        }
         BlpError::SchemaTypeMismatch {
             element,
             expected,
             found,
-        } => ErrorData::invalid_params(
-            format!("type mismatch at '{element}': expected {expected}, found {found}"),
-            None,
-        ),
-        BlpError::SchemaUnsupported { element, detail } => ErrorData::invalid_params(
-            format!("unsupported schema construct at '{element}': {detail}"),
-            None,
-        ),
-        BlpError::Validation { message, errors } => {
-            let details = errors
-                .iter()
-                .map(|error| match &error.suggestion {
-                    Some(suggestion) => {
-                        format!(
-                            "{}: {} (did you mean '{suggestion}'?)",
-                            error.path, error.message
-                        )
-                    }
-                    None => format!("{}: {}", error.path, error.message),
-                })
-                .collect::<Vec<_>>();
-            let detail = if details.is_empty() {
-                message
-            } else {
-                format!("{message}: {}", details.join("; "))
-            };
-            ErrorData::invalid_params(detail, None)
-        }
-        other => ErrorData::internal_error(other.to_string(), None),
-    }
-}
-
-const MAX_EID_METADATA_SECURITIES: usize = 1_000;
-const MAX_EID_METADATA_SECURITY_BYTES: usize = 64 * 1024;
-
-fn bounded_eid_metadata(raw: &str) -> (Value, Value, bool) {
-    let invalid = || {
-        (
-            json!({"invalid": true}),
-            json!({"total_eids": 0, "returned_eids": 0, "total_securities": 0, "returned_securities": 0, "valid": false}),
-            true,
-        )
-    };
-    let Ok(securities) = serde_json::from_str::<std::collections::BTreeMap<String, Vec<i32>>>(raw)
-    else {
-        return invalid();
-    };
-    if securities.values().flatten().any(|eid| *eid <= 0) {
-        return invalid();
-    }
-
-    let total_securities = securities.len();
-    let mut returned_securities = 0usize;
-    let mut returned_security_bytes = 0usize;
-    let mut total_eids = 0usize;
-    let mut returned_eids = 0usize;
-    let mut bounded = Map::with_capacity(total_securities.min(MAX_EID_METADATA_SECURITIES));
-    for (security, eids) in securities {
-        total_eids = total_eids.saturating_add(eids.len());
-        let security_bytes = security.len();
-        let within_security_budget = returned_securities < MAX_EID_METADATA_SECURITIES
-            && returned_security_bytes.saturating_add(security_bytes)
-                <= MAX_EID_METADATA_SECURITY_BYTES;
-        if !within_security_budget {
-            continue;
-        }
-        let remaining = MAX_ENTITLEMENT_EIDS.saturating_sub(returned_eids);
-        let kept = eids.into_iter().take(remaining).collect::<Vec<_>>();
-        returned_eids += kept.len();
-        returned_securities += 1;
-        returned_security_bytes += security_bytes;
-        bounded.insert(security, json!(kept));
-    }
-    (
-        Value::Object(bounded),
-        json!({
-            "total_eids": total_eids,
-            "returned_eids": returned_eids,
-            "total_securities": total_securities,
-            "returned_securities": returned_securities,
-            "valid": true,
-        }),
-        total_eids > returned_eids || total_securities > returned_securities,
-    )
-}
-
-fn record_batch_to_json(batch: &RecordBatch, limits: &ResultLimits) -> Result<Value, ErrorData> {
-    let schema = batch.schema();
-    let schema_json = schema
-        .fields()
-        .iter()
-        .map(|field| {
-            json!({
-                "name": field.name(),
-                "data_type": field.data_type().to_string(),
-                "nullable": field.is_nullable(),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let total_rows = batch.num_rows();
-    let returned_rows = total_rows.min(limits.max_rows);
-    let mut value_truncated = false;
-    let mut rows = Vec::with_capacity(returned_rows);
-
-    // MCP clients need structured JSON, not opaque Arrow IPC. We keep the Arrow schema in-band and
-    // bound row/string sizes so a single large Bloomberg response cannot overwhelm a stdio client.
-    for row_index in 0..returned_rows {
-        let mut row = Map::with_capacity(schema.fields().len());
-        for (field, column) in schema.fields().iter().zip(batch.columns()) {
-            let value = array_cell_to_json(
-                column,
-                field.data_type(),
-                row_index,
-                limits.max_string_chars,
-                &mut value_truncated,
-            )?;
-            row.insert(field.name().to_string(), value);
-        }
-        rows.push(Value::Object(row));
-    }
-
-    // Response diagnostics (xbbg.eid_data / xbbg.security_errors /
-    // xbbg.field_exceptions) ride on the Arrow schema metadata as JSON;
-    // re-parse them into structured JSON so MCP clients see real objects.
-    let mut metadata = Map::new();
-    let mut metadata_counts = Map::new();
-    let mut metadata_truncated = false;
-    for (key, value) in schema.metadata() {
-        if key == "xbbg.eid_data" {
-            let (parsed, counts, truncated) = bounded_eid_metadata(value);
-            metadata.insert(key.clone(), parsed);
-            metadata_counts.insert(key.clone(), counts);
-            metadata_truncated |= truncated;
-        } else {
-            let parsed = serde_json::from_str::<Value>(value)
-                .unwrap_or_else(|_| Value::String(value.clone()));
-            metadata.insert(key.clone(), parsed);
-        }
-    }
-
-    let mut result = json!({
-        "schema": schema_json,
-        "row_count": total_rows,
-        "returned_rows": returned_rows,
-        "truncated": {
-            "rows": total_rows > returned_rows,
-            "values": value_truncated,
-            "metadata": metadata_truncated,
-        },
-        "rows": rows,
-    });
-    if !metadata.is_empty() {
-        result["metadata"] = Value::Object(metadata);
-    }
-    if !metadata_counts.is_empty() {
-        result["metadata_counts"] = Value::Object(metadata_counts);
-    }
-    Ok(result)
-}
-
-fn array_cell_to_json(
-    column: &ArrayRef,
-    data_type: &DataType,
-    row_index: usize,
-    max_string_chars: usize,
-    value_truncated: &mut bool,
-) -> Result<Value, ErrorData> {
-    if column.is_null(row_index) {
-        return Ok(Value::Null);
-    }
-
-    let value = match data_type {
-        DataType::Utf8 => {
-            json_string_from_array(column, row_index, max_string_chars, value_truncated)?
-        }
-        DataType::LargeUtf8 => {
-            json_large_string_from_array(column, row_index, max_string_chars, value_truncated)?
-        }
-        DataType::Boolean => {
-            Value::Bool(downcast::<BooleanArray>(column, "Boolean")?.value(row_index))
-        }
-        DataType::Int32 => Value::Number(Number::from(
-            downcast::<Int32Array>(column, "Int32")?.value(row_index),
-        )),
-        DataType::Int64 => int64_to_json(downcast::<Int64Array>(column, "Int64")?.value(row_index)),
-        DataType::UInt32 => Value::Number(Number::from(
-            downcast::<UInt32Array>(column, "UInt32")?.value(row_index),
-        )),
-        DataType::UInt64 => {
-            uint64_to_json(downcast::<UInt64Array>(column, "UInt64")?.value(row_index))
-        }
-        DataType::Float32 => float_to_json(
-            downcast::<Float32Array>(column, "Float32")?.value(row_index) as f64,
-            column.as_ref(),
-            row_index,
-        )?,
-        DataType::Float64 => float_to_json(
-            downcast::<Float64Array>(column, "Float64")?.value(row_index),
-            column.as_ref(),
-            row_index,
-        )?,
-        DataType::Date32 => {
-            let array = downcast::<Date32Array>(column, "Date32")?;
-            truncate_json_string(
-                array_value_to_string(array, row_index).map_err(display_error)?,
-                max_string_chars,
-                value_truncated,
+        } => {
+            let (element, element_truncated) = bounded_error_text(&element, limits);
+            let (expected, expected_truncated) = bounded_error_text(&expected, limits);
+            let (found, found_truncated) = bounded_error_text(&found, limits);
+            let (message, message_truncated) = bounded_error_display(
+                &format_args!("type mismatch at '{element}': expected {expected}, found {found}"),
+                limits,
+            );
+            ErrorData::invalid_params(
+                message,
+                truncation_data(
+                    element_truncated || expected_truncated || found_truncated || message_truncated,
+                ),
             )
         }
-        _ => truncate_json_string(
-            array_value_to_string(column.as_ref(), row_index).map_err(display_error)?,
-            max_string_chars,
-            value_truncated,
-        ),
-    };
+        BlpError::SchemaUnsupported { element, detail } => {
+            let (element, element_truncated) = bounded_error_text(&element, limits);
+            let (detail, detail_truncated) = bounded_error_text(&detail, limits);
+            let (message, message_truncated) = bounded_error_display(
+                &format_args!("unsupported schema construct at '{element}': {detail}"),
+                limits,
+            );
+            ErrorData::invalid_params(
+                message,
+                truncation_data(element_truncated || detail_truncated || message_truncated),
+            )
+        }
+        BlpError::Validation { message, errors } => {
+            const ERROR_DATA_RESERVE: usize = 768;
+            const PRIMARY_ERROR_RESERVE: usize = 768;
 
-    Ok(value)
+            let total_errors = errors.len();
+            let available_bytes = limits.max_result_bytes.saturating_sub(ERROR_DATA_RESERVE);
+            let primary_reserve = if total_errors > 0 && limits.max_cells > 0 {
+                available_bytes.min(PRIMARY_ERROR_RESERVE)
+            } else {
+                0
+            };
+            let message_budget = available_bytes.saturating_sub(primary_reserve);
+            let (message, message_truncated) = bounded_json_text(&message, limits, message_budget);
+            let message_bytes = json_serialized_len(&message).unwrap_or(available_bytes);
+            let mut remaining_bytes = available_bytes.saturating_sub(message_bytes);
+            let mut returned_errors = Vec::new();
+            let mut diagnostics_truncated = false;
+            let mut errors = errors.into_iter().take(limits.max_cells);
+
+            if let Some(primary) = errors.next() {
+                let entry_budget = remaining_bytes.saturating_sub(1);
+                if let Some((entry, truncated)) =
+                    bounded_validation_entry(primary, limits, entry_budget)
+                {
+                    let entry_bytes = json_serialized_len(&entry)
+                        .unwrap_or(remaining_bytes)
+                        .saturating_add(1);
+                    remaining_bytes = remaining_bytes.saturating_sub(entry_bytes);
+                    diagnostics_truncated |= truncated;
+                    returned_errors.push(entry);
+                } else {
+                    diagnostics_truncated = true;
+                    remaining_bytes = 0;
+                }
+            }
+
+            if remaining_bytes > 0 {
+                for error in errors {
+                    let entry_budget = remaining_bytes.saturating_sub(1);
+                    let Some((entry, truncated)) =
+                        bounded_validation_entry(error, limits, entry_budget)
+                    else {
+                        diagnostics_truncated = true;
+                        break;
+                    };
+                    let entry_bytes = json_serialized_len(&entry)
+                        .unwrap_or(remaining_bytes)
+                        .saturating_add(1);
+                    remaining_bytes = remaining_bytes.saturating_sub(entry_bytes);
+                    diagnostics_truncated |= truncated;
+                    returned_errors.push(entry);
+                }
+            }
+
+            let returned_error_count = returned_errors.len();
+            ErrorData::invalid_params(
+                message,
+                Some(json!({
+                    "total_errors": total_errors,
+                    "returned_errors": returned_error_count,
+                    "omitted_errors": total_errors.saturating_sub(returned_error_count),
+                    "message_truncated": message_truncated,
+                    "truncated": message_truncated
+                        || diagnostics_truncated
+                        || returned_error_count < total_errors,
+                    "errors": returned_errors,
+                })),
+            )
+        }
+        other => bounded_internal_error(&other, limits),
+    }
 }
 
-fn int64_to_json(value: i64) -> Value {
-    const JS_SAFE_INTEGER_MIN: i64 = -9_007_199_254_740_991;
-    const JS_SAFE_INTEGER_MAX: i64 = 9_007_199_254_740_991;
+fn bounded_validation_entry(
+    error: ValidationError,
+    limits: &ResultLimits,
+    max_bytes: usize,
+) -> Option<(Value, bool)> {
+    let ValidationError {
+        path,
+        message,
+        suggestion,
+    } = error;
+    let minimum = json!({"path": "", "message": "", "truncated": false});
+    let minimum_bytes = json_serialized_len(&minimum).ok()?;
+    if max_bytes < minimum_bytes {
+        return None;
+    }
 
-    if (JS_SAFE_INTEGER_MIN..=JS_SAFE_INTEGER_MAX).contains(&value) {
-        Value::Number(Number::from(value))
+    let string_budget = max_bytes.saturating_sub(minimum_bytes.saturating_sub(4));
+    let path_budget = (string_budget / 3).max(2);
+    let (path, path_truncated) = bounded_json_text(&path, limits, path_budget);
+    let base = json!({"path": path, "message": "", "truncated": false});
+    let base_bytes = json_serialized_len(&base).ok()?;
+    let message_budget = max_bytes.saturating_sub(base_bytes.saturating_sub(2));
+    let (message, message_truncated) = bounded_json_text(&message, limits, message_budget);
+    let mut entry = json!({
+        "path": path,
+        "message": message,
+        "truncated": false,
+    });
+    let mut entry_truncated = path_truncated || message_truncated;
+
+    if let Some(suggestion) = suggestion {
+        let entry_bytes = json_serialized_len(&entry).ok()?;
+        let mut empty_suggestion = entry.clone();
+        empty_suggestion["suggestion"] = json!("");
+        let suggestion_overhead = json_serialized_len(&empty_suggestion)
+            .ok()?
+            .saturating_sub(entry_bytes)
+            .saturating_sub(2);
+        let suggestion_budget = max_bytes
+            .saturating_sub(entry_bytes)
+            .saturating_sub(suggestion_overhead);
+        if suggestion_budget >= 2 {
+            let (suggestion, suggestion_truncated) =
+                bounded_json_text(&suggestion, limits, suggestion_budget);
+            empty_suggestion["suggestion"] = json!(suggestion);
+            if json_serialized_len(&empty_suggestion).ok()? <= max_bytes {
+                entry = empty_suggestion;
+                entry_truncated |= suggestion_truncated;
+            } else {
+                entry_truncated = true;
+            }
+        } else {
+            entry_truncated = true;
+        }
+    }
+
+    if entry_truncated {
+        entry["truncated"] = Value::Bool(true);
     } else {
-        Value::String(value.to_string())
+        entry.as_object_mut()?.remove("truncated");
     }
+    (json_serialized_len(&entry).ok()? <= max_bytes).then_some((entry, entry_truncated))
 }
-
-fn uint64_to_json(value: u64) -> Value {
-    const JS_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
-
-    if value <= JS_SAFE_INTEGER_MAX {
-        Value::Number(Number::from(value))
-    } else {
-        Value::String(value.to_string())
-    }
-}
-
-fn float_to_json(value: f64, column: &dyn Array, row_index: usize) -> Result<Value, ErrorData> {
-    match Number::from_f64(value) {
-        Some(number) => Ok(Value::Number(number)),
-        None => Ok(Value::String(
-            array_value_to_string(column, row_index).map_err(display_error)?,
-        )),
-    }
-}
-
-fn json_string_from_array(
-    column: &ArrayRef,
-    row_index: usize,
-    max_string_chars: usize,
-    value_truncated: &mut bool,
-) -> Result<Value, ErrorData> {
-    let array = downcast::<StringArray>(column, "Utf8")?;
-    Ok(truncate_json_string(
-        array.value(row_index).to_string(),
-        max_string_chars,
-        value_truncated,
-    ))
-}
-
-fn json_large_string_from_array(
-    column: &ArrayRef,
-    row_index: usize,
-    max_string_chars: usize,
-    value_truncated: &mut bool,
-) -> Result<Value, ErrorData> {
-    let array = downcast::<LargeStringArray>(column, "LargeUtf8")?;
-    Ok(truncate_json_string(
-        array.value(row_index).to_string(),
-        max_string_chars,
-        value_truncated,
-    ))
-}
-
-fn truncate_json_string(value: String, max_chars: usize, value_truncated: &mut bool) -> Value {
-    if value.chars().count() <= max_chars {
-        return Value::String(value);
-    }
-
-    *value_truncated = true;
-    let truncated = value.chars().take(max_chars).collect::<String>();
-    Value::String(format!("{truncated}…"))
-}
-
-fn downcast<'a, T: 'static>(column: &'a ArrayRef, label: &str) -> Result<&'a T, ErrorData> {
-    column.as_any().downcast_ref::<T>().ok_or_else(|| {
-        ErrorData::internal_error(format!("failed to downcast Arrow column as {label}"), None)
-    })
-}
-
-fn display_error(error: arrow::error::ArrowError) -> ErrorData {
-    ErrorData::internal_error(format!("failed to format Arrow value: {error}"), None)
-}
-
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Warnings and errors from rmcp and the engine go to stderr (RUST_LOG raises the level).
     // Without a subscriber a transport failure ends the process silently with status 0.
@@ -857,6 +856,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use xbbg_core::EntitlementCheck;
 
     #[test]
     fn mcp_tool_names_and_input_schemas_are_stable() {
@@ -938,116 +938,91 @@ mod tests {
                 entitled: false,
                 failed_eids: vec![202],
             },
-        );
-
-        assert_eq!(
-            payload,
-            json!({
-                "service": "//blp/refdata",
-                "eids": [101, 202],
-                "entitled": false,
-                "failed_eids": [202],
-            })
-        );
-    }
-
-    #[test]
-    fn eid_metadata_remains_structured_json() {
-        let metadata = HashMap::from([(
-            "xbbg.eid_data".to_string(),
-            r#"{"IBM US Equity":[101,202]}"#.to_string(),
-        )]);
-        let schema = Arc::new(arrow::datatypes::Schema::new_with_metadata(
-            Vec::<arrow::datatypes::Field>::new(),
-            metadata,
-        ));
-        let batch = RecordBatch::new_empty(schema);
-
-        let payload = record_batch_to_json(
-            &batch,
-            &ResultLimits {
-                max_rows: 10,
-                max_string_chars: 100,
-            },
+            &ResultLimits::default(),
         )
         .unwrap();
 
-        assert_eq!(
-            payload["metadata"]["xbbg.eid_data"]["IBM US Equity"],
-            json!([101, 202])
-        );
-        assert_eq!(payload["truncated"]["metadata"], false);
-        assert_eq!(
-            payload["metadata_counts"]["xbbg.eid_data"],
-            json!({"total_eids": 2, "returned_eids": 2, "total_securities": 1, "returned_securities": 1, "valid": true})
-        );
+        assert_eq!(payload["service"], "//blp/refdata");
+        assert_eq!(payload["eids"], json!([101, 202]));
+        assert_eq!(payload["entitled"], false);
+        assert_eq!(payload["failed_eids"], json!([202]));
+        assert_eq!(payload["total_eids"], 2);
+        assert_eq!(payload["returned_eids"], 2);
+        assert_eq!(payload["truncated"]["output"], false);
     }
 
     #[test]
-    fn eid_metadata_is_bounded_with_explicit_counts() {
-        let at_limit = json!({
-            "IBM US Equity": (1..=MAX_ENTITLEMENT_EIDS).collect::<Vec<_>>()
-        })
-        .to_string();
-        let (value, counts, truncated) = bounded_eid_metadata(&at_limit);
-        assert_eq!(
-            value["IBM US Equity"].as_array().unwrap().len(),
-            MAX_ENTITLEMENT_EIDS
+    fn validation_errors_are_bounded_as_complete_structured_records() {
+        let limits = ResultLimits {
+            max_result_bytes: MIN_RESULT_BYTES,
+            max_string_chars: 8_192,
+            max_string_bytes: 8_192,
+            ..ResultLimits::default()
+        };
+        let errors = (0..100)
+            .map(|index| ValidationError {
+                path: format!("field.{index}"),
+                message: "invalid".repeat(1_000),
+                suggestion: Some("PX_LAST".repeat(1_000)),
+            })
+            .collect();
+
+        let error = map_blp_error(
+            BlpError::Validation {
+                message: "validation failed".repeat(128),
+                errors,
+            },
+            &limits,
         );
-        assert_eq!(counts["total_eids"], MAX_ENTITLEMENT_EIDS);
-        assert!(!truncated);
+        assert!(serde_json::to_vec(&error).unwrap().len() <= limits.max_result_bytes);
+        let data = error.data.expect("bounded validation diagnostics");
 
-        let over_limit = json!({
-            "A US Equity": (1..=6_000).collect::<Vec<_>>(),
-            "B US Equity": (1..=5_000).collect::<Vec<_>>(),
-        })
-        .to_string();
-        let (value, counts, truncated) = bounded_eid_metadata(&over_limit);
-        assert_eq!(value["A US Equity"].as_array().unwrap().len(), 6_000);
-        assert_eq!(value["B US Equity"].as_array().unwrap().len(), 4_000);
-        assert_eq!(counts["total_eids"], 11_000);
-        assert_eq!(counts["returned_eids"], MAX_ENTITLEMENT_EIDS);
-        assert!(truncated);
-
-        let many_securities = (0..=MAX_EID_METADATA_SECURITIES)
-            .map(|index| (format!("SEC{index:04}"), Vec::<i32>::new()))
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let (value, counts, truncated) =
-            bounded_eid_metadata(&serde_json::to_string(&many_securities).unwrap());
+        assert_eq!(data["total_errors"], 100);
+        assert!(data["returned_errors"].as_u64().unwrap() < 100);
+        assert!(data["returned_errors"].as_u64().unwrap() > 0);
         assert_eq!(
-            value.as_object().unwrap().len(),
-            MAX_EID_METADATA_SECURITIES
+            data["returned_errors"].as_u64().unwrap() + data["omitted_errors"].as_u64().unwrap(),
+            100
         );
-        assert_eq!(counts["total_securities"], MAX_EID_METADATA_SECURITIES + 1);
-        assert_eq!(counts["returned_securities"], MAX_EID_METADATA_SECURITIES);
-        assert!(truncated);
+        assert!(data["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| { entry.get("path").is_some() && entry.get("message").is_some() }));
+        let primary = &data["errors"][0];
+        assert_eq!(primary["path"], "field.0");
+        assert!(primary["message"].as_str().unwrap().ends_with('…'));
+        assert!(primary.get("suggestion").is_none());
+        assert_eq!(primary["truncated"], true);
+    }
 
-        let boundary_name = "X".repeat(MAX_EID_METADATA_SECURITY_BYTES);
-        let boundary_name_metadata = json!({ boundary_name: [] }).to_string();
-        let (value, counts, truncated) = bounded_eid_metadata(&boundary_name_metadata);
-        assert_eq!(value.as_object().unwrap().len(), 1);
-        assert_eq!(counts["returned_securities"], 1);
-        assert!(!truncated);
+    #[test]
+    fn escaped_error_text_respects_the_compact_json_budget() {
+        let limits = ResultLimits {
+            max_result_bytes: MIN_RESULT_BYTES,
+            max_string_chars: 2_000,
+            max_string_bytes: 2_000,
+            ..ResultLimits::default()
+        };
 
-        let oversized_name = "X".repeat(MAX_EID_METADATA_SECURITY_BYTES + 1);
-        let oversized_name_metadata = json!({ oversized_name: [] }).to_string();
-        let (value, counts, truncated) = bounded_eid_metadata(&oversized_name_metadata);
-        assert!(value.as_object().unwrap().is_empty());
-        assert_eq!(counts["total_securities"], 1);
-        assert_eq!(counts["returned_securities"], 0);
-        assert!(truncated);
+        let error = bounded_invalid_params(&"\u{1}".repeat(2_000), &limits);
 
-        for malformed in [
-            "{not json",
-            r#"{"IBM US Equity":{"nested":[101]}}"#,
-            r#"{"IBM US Equity":[101,"202"]}"#,
-            r#"{"IBM US Equity":[0]}"#,
-            r#"[101,202]"#,
-        ] {
-            let (invalid, counts, truncated) = bounded_eid_metadata(malformed);
-            assert_eq!(invalid, json!({"invalid": true}));
-            assert_eq!(counts["valid"], false);
-            assert!(truncated);
-        }
+        assert!(serde_json::to_vec(&error).unwrap().len() <= limits.max_result_bytes);
+        assert_eq!(error.data.unwrap()["message_truncated"], true);
+    }
+
+    #[test]
+    fn adapter_error_data_is_replaced_by_a_bounded_omission_marker() {
+        let limits = ResultLimits {
+            max_result_bytes: MIN_RESULT_BYTES,
+            ..ResultLimits::default()
+        };
+        let original =
+            ErrorData::invalid_params("invalid request", Some(json!({"raw": "x".repeat(100_000)})));
+
+        let error = bound_existing_error(original, &limits);
+
+        assert!(serde_json::to_vec(&error).unwrap().len() <= limits.max_result_bytes);
+        assert_eq!(error.data.unwrap()["error_data_omitted"], true);
     }
 }

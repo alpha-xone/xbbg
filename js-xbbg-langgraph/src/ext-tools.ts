@@ -54,7 +54,7 @@ function resultString(
   name: BloombergToolName,
   value: unknown,
 ): ToolContentAndArtifact {
-  return createToolResult(name, value, resolver.options.maxRows, resolver.options.maxStringChars);
+  return createToolResult(name, value, resolver.options);
 }
 
 function recoveryOverrides(recoveryRate: number | undefined): PrimitiveMap | undefined {

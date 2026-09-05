@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import cast
 
 import pytest
@@ -18,6 +19,8 @@ class DummyConfig:
         self.port = 8194
         self.request_pool_size = 2
         self.subscription_pool_size = 1
+        self.runtime_worker_threads = 2
+        self.max_subscription_sessions = 32
         self.shard_requests = False
         self.shard_threshold = 20
         self.shard_chunk_size = 16
@@ -298,6 +301,20 @@ def test_configure_accepts_sharding_kwargs():
     assert blp._config.shard_max_concurrent == 2
 
 
+def test_configure_accepts_runtime_resource_limits():
+    config = DummyConfig()
+
+    blp.configure(
+        config,
+        runtime_worker_threads=6,
+        max_subscription_sessions=48,
+    )
+
+    assert blp._config is config
+    assert blp._config.runtime_worker_threads == 6
+    assert blp._config.max_subscription_sessions == 48
+
+
 def test_configure_rejects_unknown_kwargs():
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         blp.configure(hots="bpipe-host")
@@ -327,6 +344,174 @@ def test_configure_warns_and_restarts_after_engine_start():
     assert mock.shutdown_called, "signal_shutdown should have been called"
     assert blp._engine is None, "engine should be cleared for recreation"
     assert blp._config is not None, "new config should be stored"
+
+
+def test_configure_atomically_replaces_engine_created_during_config_build(monkeypatch):
+    from xbbg import _core
+
+    config_started = threading.Event()
+    release_config = threading.Event()
+    engine_stopped = threading.Event()
+    configured = []
+    errors: list[BaseException] = []
+
+    class FakeConfig:
+        def __init__(self, **kwargs):
+            config_started.set()
+            assert release_config.wait(timeout=1)
+            self.__dict__.update(kwargs)
+            configured.append(self)
+
+    class FakeEngine:
+        def signal_shutdown(self):
+            engine_stopped.set()
+
+    class FakePyEngine:
+        def __new__(cls):
+            return FakeEngine()
+
+        @staticmethod
+        def with_config(_config):
+            return FakeEngine()
+
+    monkeypatch.setattr(_core, "PyEngineConfig", FakeConfig)
+    monkeypatch.setattr(_core, "PyEngine", FakePyEngine)
+
+    def configure_engine():
+        try:
+            blp.configure(host="configured-host")
+        except BaseException as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=configure_engine)
+    worker.start()
+    assert config_started.wait(timeout=1)
+    concurrent_engine = blp._get_engine()
+    release_config.set()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert configured
+    assert blp._config is configured[0]
+    assert blp._engine is None
+    assert engine_stopped.is_set()
+    assert concurrent_engine is not None
+
+
+@pytest.mark.parametrize("operation", ["shutdown", "reset"])
+def test_global_lifecycle_waits_for_inflight_engine_construction(monkeypatch, operation):
+    from xbbg import _core
+
+    construction_started = threading.Event()
+    release_construction = threading.Event()
+    lifecycle_waiting = threading.Event()
+    engine_stopped = threading.Event()
+    lifecycle_started = threading.Event()
+    lifecycle_errors: list[BaseException] = []
+
+    class ObservedLock:
+        def __init__(self):
+            self._lock = threading.Lock()
+
+        def __enter__(self):
+            if not self._lock.acquire(blocking=False):
+                lifecycle_waiting.set()
+                self._lock.acquire()
+            return self
+
+        def __exit__(self, *_exc):
+            self._lock.release()
+
+    class FakeEngine:
+        def signal_shutdown(self):
+            engine_stopped.set()
+
+    def construct_engine():
+        construction_started.set()
+        assert release_construction.wait(timeout=1)
+        return FakeEngine()
+
+    class BlockingPyEngine:
+        def __new__(cls):
+            return construct_engine()
+
+        @staticmethod
+        def with_config(_config):
+            return construct_engine()
+
+    monkeypatch.setattr(blp, "_engine_lock", ObservedLock())
+    monkeypatch.setattr(_core, "PyEngine", BlockingPyEngine)
+    blp._config = object()
+
+    getter = threading.Thread(target=blp._get_engine)
+    getter.start()
+    assert construction_started.wait(timeout=1)
+
+    def run_lifecycle():
+        lifecycle_started.set()
+        try:
+            getattr(blp, operation)()
+        except BaseException as error:
+            lifecycle_errors.append(error)
+
+    lifecycle = threading.Thread(target=run_lifecycle)
+    lifecycle.start()
+    assert lifecycle_started.wait(timeout=1)
+    try:
+        assert lifecycle_waiting.wait(timeout=1)
+    finally:
+        release_construction.set()
+
+    getter.join(timeout=1)
+    lifecycle.join(timeout=1)
+
+    assert not getter.is_alive()
+    assert not lifecycle.is_alive()
+    assert lifecycle_errors == []
+    assert blp._engine is None
+    assert engine_stopped.is_set()
+    if operation == "reset":
+        assert blp._config is None
+
+
+def test_engine_shutdown_runs_outside_global_state_lock():
+    lock_was_available = False
+
+    class ReentrantEngine:
+        def signal_shutdown(self):
+            nonlocal lock_was_available
+            lock_was_available = blp._engine_lock.acquire(blocking=False)
+            if lock_was_available:
+                blp._engine_lock.release()
+
+    blp._engine = ReentrantEngine()
+
+    blp.shutdown()
+
+    assert lock_was_available
+
+
+def test_request_environment_getters_run_outside_global_state_lock():
+    lock_was_available = False
+
+    class ReentrantConfig:
+        port = 8194
+
+        @property
+        def host(self):
+            nonlocal lock_was_available
+            lock_was_available = blp._engine_lock.acquire(blocking=False)
+            if lock_was_available:
+                blp._engine_lock.release()
+            return "localhost"
+
+    blp._config = ReentrantConfig()
+
+    environment = blp._snapshot_request_environment()
+
+    assert lock_was_available
+    assert environment.host == "localhost"
 
 
 def test_public_exports_include_configure_and_middleware_helpers():

@@ -4,16 +4,17 @@ use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions, StringArray};
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions, StringArray};
 use arrow_ord::sort::{lexsort_to_indices, SortColumn, SortOptions};
 use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
-use arrow_select::concat::concat_batches;
+use arrow_select::concat::{concat, concat_batches};
 use arrow_select::filter::filter_record_batch;
+use arrow_select::interleave::interleave;
 use arrow_select::take::take_record_batch;
 
-use crate::column::ColumnData;
+use crate::column::{compact_array, ColumnData};
 use crate::error::{ArrowCoreError, Result};
-use crate::scalar::{build_array, cell_matches, cell_to_string, CellValue};
+use crate::scalar::{build_array_for_kind, cell_matches, infer_kind, CellValue, InferredKind};
 
 /// Sort direction for Arrow table sorting.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,7 +71,9 @@ impl TableData {
             .iter()
             .map(|_| Arc::new(StringArray::from(Vec::<Option<String>>::new())) as ArrayRef)
             .collect::<Vec<_>>();
-        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)?;
+        let options = RecordBatchOptions::new().with_row_count(Some(0));
+        let batch =
+            RecordBatch::try_new_with_options(Arc::new(Schema::new(fields)), arrays, &options)?;
         Self::try_new(vec![batch])
     }
 
@@ -243,6 +246,27 @@ impl TableData {
         }
         self.slice(rows - n, Some(n))
     }
+    /// Copy logical values into independent, right-sized Arrow buffers.
+    ///
+    /// Unlike [`Self::slice`], this deliberately does not retain the source
+    /// arrays' backing allocations. Physical batch boundaries are preserved.
+    pub fn compact(&self) -> Result<Self> {
+        let mut batches = Vec::with_capacity(self.batches.len());
+        for batch in &self.batches {
+            let columns = batch
+                .columns()
+                .iter()
+                .map(|column| compact_array(column.as_ref()))
+                .collect::<Result<Vec<_>>>()?;
+            let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+            batches.push(RecordBatch::try_new_with_options(
+                batch.schema(),
+                columns,
+                &options,
+            )?);
+        }
+        Self::try_new(batches)
+    }
 
     /// Materialize batches as one batch when multiple chunks are present.
     pub fn combined_batch(&self) -> Result<RecordBatch> {
@@ -252,30 +276,70 @@ impl TableData {
         concat_batches(&self.schema, self.batches.iter()).map_err(Into::into)
     }
 
-    /// Sort rows by named columns.
-    pub fn sort_by(&self, sort_keys: &[(String, SortDirection)]) -> Result<Self> {
+    /// Sort rows by named columns with explicit null placement.
+    pub fn sort_by(
+        &self,
+        sort_keys: &[(String, SortDirection)],
+        nulls_first: bool,
+    ) -> Result<Self> {
         if sort_keys.is_empty() || self.num_rows() == 0 {
             return Ok(self.clone());
         }
-        let batch = self.combined_batch()?;
-        let schema = batch.schema();
+
+        if self.batches.len() == 1 {
+            let batch = &self.batches[0];
+            let columns = sort_columns_for_batch(batch, sort_keys, nulls_first)?;
+            let indices = lexsort_to_indices(&columns, None)?;
+            let sorted = take_record_batch(batch, &indices)?;
+            return Self::try_new(vec![sorted]);
+        }
+
         let columns = sort_keys
             .iter()
             .map(|(name, direction)| {
-                let idx = schema
+                let idx = self
+                    .schema
                     .index_of(name)
                     .map_err(|_| ArrowCoreError::UnknownColumn(name.clone()))?;
+                let chunks = self
+                    .batches
+                    .iter()
+                    .map(|batch| batch.column(idx).as_ref())
+                    .collect::<Vec<&dyn Array>>();
                 Ok(SortColumn {
-                    values: batch.column(idx).clone(),
+                    values: concat(&chunks)?,
                     options: Some(SortOptions {
                         descending: direction.is_descending(),
-                        nulls_first: false,
+                        nulls_first,
                     }),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
         let indices = lexsort_to_indices(&columns, None)?;
-        let sorted = take_record_batch(&batch, &indices)?;
+
+        let batch_ends = self
+            .batches
+            .iter()
+            .scan(0usize, |end, batch| {
+                *end += batch.num_rows();
+                Some(*end)
+            })
+            .collect::<Vec<_>>();
+        let gather_indices = indices
+            .values()
+            .iter()
+            .map(|global| {
+                let global = usize::try_from(*global).expect("UInt32 sort index must fit in usize");
+                let batch_idx = batch_ends.partition_point(|end| *end <= global);
+                let batch_start = batch_idx
+                    .checked_sub(1)
+                    .map(|previous| batch_ends[previous])
+                    .unwrap_or(0);
+                (batch_idx, global - batch_start)
+            })
+            .collect::<Vec<_>>();
+        let sorted =
+            interleave_record_batches(&self.batches, self.schema.clone(), &gather_indices)?;
         Self::try_new(vec![sorted])
     }
 
@@ -326,17 +390,14 @@ impl TableData {
         }
 
         let chunks = split_cells_for_batches(cells, &self.batches)?;
+        let kind = if force_text {
+            InferredKind::Text
+        } else {
+            infer_kind(cells)
+        };
         let mut out = Vec::with_capacity(self.batches.len());
-        for (batch, chunk) in self.batches.iter().zip(chunks.iter()) {
-            let (field, array) = if force_text {
-                let values: Vec<Option<String>> = chunk.iter().map(cell_to_string).collect();
-                (
-                    Field::new(name, DataType::Utf8, true),
-                    Arc::new(StringArray::from(values)) as ArrayRef,
-                )
-            } else {
-                build_array(name, chunk)
-            };
+        for (batch, chunk) in self.batches.iter().zip(chunks) {
+            let (field, array) = build_array_for_kind(name, chunk, kind);
             let mut fields = batch
                 .schema()
                 .fields()
@@ -361,6 +422,50 @@ impl TableData {
         }
         Self::try_new(out)
     }
+}
+
+fn sort_columns_for_batch(
+    batch: &RecordBatch,
+    sort_keys: &[(String, SortDirection)],
+    nulls_first: bool,
+) -> Result<Vec<SortColumn>> {
+    let schema = batch.schema();
+    sort_keys
+        .iter()
+        .map(|(name, direction)| {
+            let idx = schema
+                .index_of(name)
+                .map_err(|_| ArrowCoreError::UnknownColumn(name.clone()))?;
+            Ok(SortColumn {
+                values: batch.column(idx).clone(),
+                options: Some(SortOptions {
+                    descending: direction.is_descending(),
+                    nulls_first,
+                }),
+            })
+        })
+        .collect()
+}
+
+fn interleave_record_batches(
+    batches: &[RecordBatch],
+    schema: SchemaRef,
+    indices: &[(usize, usize)],
+) -> Result<RecordBatch> {
+    if batches.is_empty() {
+        return Ok(RecordBatch::new_empty(schema));
+    }
+    let columns = (0..schema.fields().len())
+        .map(|column_idx| {
+            let chunks = batches
+                .iter()
+                .map(|batch| batch.column(column_idx).as_ref())
+                .collect::<Vec<&dyn Array>>();
+            interleave(&chunks, indices).map_err(Into::into)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+    RecordBatch::try_new_with_options(schema, columns, &options).map_err(Into::into)
 }
 
 fn table_schema(batches: &[RecordBatch]) -> SchemaRef {
@@ -407,18 +512,20 @@ fn rename_batch(batch: &RecordBatch, mapping: &HashMap<String, String>) -> Resul
                 .unwrap_or_else(|| field.as_ref().clone())
         })
         .collect::<Vec<_>>();
-    RecordBatch::try_new(
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    RecordBatch::try_new_with_options(
         Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
         batch.columns().to_vec(),
+        &options,
     )
     .map_err(Into::into)
 }
 
 /// Split one logical column's cells across the table's physical batches.
-pub fn split_cells_for_batches(
-    cells: &[CellValue],
+pub fn split_cells_for_batches<'a>(
+    cells: &'a [CellValue],
     batches: &[RecordBatch],
-) -> Result<Vec<Vec<CellValue>>> {
+) -> Result<Vec<&'a [CellValue]>> {
     let expected = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
     if cells.len() != expected {
         return Err(ArrowCoreError::ColumnLengthMismatch {
@@ -431,7 +538,7 @@ pub fn split_cells_for_batches(
         .iter()
         .map(|batch| {
             let end = offset + batch.num_rows();
-            let chunk = cells[offset..end].to_vec();
+            let chunk = &cells[offset..end];
             offset = end;
             chunk
         })
@@ -442,8 +549,9 @@ pub fn split_cells_for_batches(
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{Float64Array, Int64Array, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_array::builder::StringDictionaryBuilder;
+    use arrow_array::types::Int32Type;
+    use arrow_array::{DictionaryArray, Float64Array, Int64Array, RecordBatch, StringArray};
 
     use super::*;
 
@@ -511,14 +619,58 @@ mod tests {
             .filter_eq("ticker", &CellValue::Text("AAPL".to_string()))
             .unwrap();
         assert_eq!(filtered.num_rows(), 1);
+        assert_eq!(
+            table
+                .filter_eq("px_last", &CellValue::Int(190))
+                .unwrap()
+                .num_rows(),
+            1
+        );
+        assert_eq!(
+            table
+                .filter_eq("volume", &CellValue::Float(2.0))
+                .unwrap()
+                .num_rows(),
+            1
+        );
 
         let sorted = table
-            .sort_by(&[("volume".to_string(), SortDirection::Ascending)])
+            .sort_by(&[("volume".to_string(), SortDirection::Ascending)], false)
             .unwrap();
         let column = sorted.column_by_name("ticker").unwrap();
         let (chunk, _) = column.chunk_for_index(0).unwrap();
         let values = chunk.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(values.value(0), "IBM");
+    }
+
+    #[test]
+    fn float_filter_does_not_round_large_integer_needles() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Float64Array::from(vec![9_007_199_254_740_992.0])) as ArrayRef],
+        )
+        .unwrap();
+        let table = TableData::try_new(vec![batch]).unwrap();
+
+        assert_eq!(
+            table
+                .filter_eq("value", &CellValue::Int(9_007_199_254_740_992))
+                .unwrap()
+                .num_rows(),
+            1
+        );
+        assert_eq!(
+            table
+                .filter_eq("value", &CellValue::Int(9_007_199_254_740_993))
+                .unwrap()
+                .num_rows(),
+            0
+        );
     }
 
     #[test]
@@ -554,6 +706,321 @@ mod tests {
         assert_eq!(
             replaced.column_names(),
             ["ticker", "side2", "px_last", "volume"]
+        );
+    }
+    #[test]
+    fn fragmented_sort_preserves_schema_nulls_and_row_order() {
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("key", DataType::Int64, true)
+                    .with_metadata(HashMap::from([("unit".to_string(), "rank".to_string())])),
+                Field::new("payload", DataType::Utf8, true),
+            ],
+            HashMap::from([("source".to_string(), "test".to_string())]),
+        ));
+        let first = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(2_i64), None])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("second"), None])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        let second = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1_i64), Some(3)])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("first"), Some("third")])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        let empty = RecordBatch::new_empty(schema.clone());
+
+        let table = TableData::try_new(vec![empty.clone(), first, empty, second]).unwrap();
+        let sorted = table
+            .sort_by(&[("key".to_string(), SortDirection::Ascending)], false)
+            .unwrap();
+
+        assert_eq!(sorted.schema.as_ref(), schema.as_ref());
+        assert_eq!(sorted.chunk_lengths(), [4]);
+        let keys = sorted.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(
+            keys.iter().collect::<Vec<_>>(),
+            [Some(1), Some(2), Some(3), None]
+        );
+        let payload = sorted.batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(
+            payload.iter().collect::<Vec<_>>(),
+            [Some("first"), Some("second"), Some("third"), None]
+        );
+
+        let nulls_first = table
+            .sort_by(&[("key".to_string(), SortDirection::Ascending)], true)
+            .unwrap();
+        let keys = nulls_first.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(
+            keys.iter().collect::<Vec<_>>(),
+            [None, Some(1), Some(2), Some(3)]
+        );
+        let payload = nulls_first.batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(
+            payload.iter().collect::<Vec<_>>(),
+            [None, Some("first"), Some("second"), Some("third")]
+        );
+    }
+
+    #[test]
+    fn fragmented_cell_columns_infer_one_logical_dtype() {
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("row", DataType::Int64, false)],
+            HashMap::from([("source".to_string(), "fragmented".to_string())]),
+        ));
+        let batches = [0_i64, 1]
+            .into_iter()
+            .map(|row| {
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(Int64Array::from(vec![row])) as ArrayRef],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let table = TableData::try_new(batches).unwrap();
+
+        let integers = table
+            .add_column(1, "value", &[CellValue::Int(7), CellValue::Null])
+            .unwrap();
+        assert_eq!(integers.schema.field(1).data_type(), &DataType::Int64);
+        assert_eq!(
+            integers.batches[0]
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            [Some(7)]
+        );
+        assert!(integers.batches[1].column(1).is_null(0));
+        assert_eq!(
+            integers.schema.metadata().get("source").map(String::as_str),
+            Some("fragmented")
+        );
+
+        let text = table
+            .add_column(
+                1,
+                "mixed",
+                &[CellValue::Int(7), CellValue::Text("eight".to_string())],
+            )
+            .unwrap();
+        assert_eq!(text.schema.field(1).data_type(), &DataType::Utf8);
+        let values = text
+            .batches
+            .iter()
+            .map(|batch| {
+                batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .value(0)
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, ["7", "eight"]);
+    }
+
+    #[test]
+    fn mixed_numeric_inference_preserves_integer_exactness() {
+        let table = sample_table().slice(0, Some(2)).unwrap();
+        let exact = table
+            .add_column(
+                1,
+                "mixed",
+                &[CellValue::Int(9_007_199_254_740_992), CellValue::Float(0.5)],
+            )
+            .unwrap();
+        assert_eq!(exact.schema.field(1).data_type(), &DataType::Float64);
+        assert_eq!(
+            exact.batches[0]
+                .column(1)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(0),
+            9_007_199_254_740_992.0
+        );
+
+        for inexact in [9_007_199_254_740_993, i64::MAX] {
+            let lossless = table
+                .add_column(
+                    1,
+                    "mixed",
+                    &[CellValue::Int(inexact), CellValue::Float(0.5)],
+                )
+                .unwrap();
+            assert_eq!(lossless.schema.field(1).data_type(), &DataType::Utf8);
+            let values = lossless.batches[0]
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            assert_eq!(values.value(0), inexact.to_string());
+            assert_eq!(values.value(1), "0.5");
+        }
+    }
+
+    #[test]
+    fn zero_column_construction_and_rename_preserve_row_counts() {
+        let empty = TableData::empty_from_columns(vec![]).unwrap();
+        assert_eq!(empty.num_rows(), 0);
+        assert_eq!(empty.num_columns(), 0);
+
+        let options = RecordBatchOptions::new().with_row_count(Some(2));
+        let batch =
+            RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options).unwrap();
+        let table = TableData::try_new(vec![batch]).unwrap();
+        let renamed = table.rename_columns(&HashMap::new()).unwrap();
+        assert_eq!(renamed.num_rows(), 2);
+        assert_eq!(renamed.num_columns(), 0);
+    }
+
+    #[test]
+    fn compact_rebuilds_dictionary_values_referenced_by_a_slice() {
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        for index in 0..256 {
+            builder.append_value(format!("{index:04}-{}", "x".repeat(512)));
+        }
+        let array = builder.finish();
+        let original_dictionary_values = Arc::downgrade(array.values());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(array) as ArrayRef]).unwrap();
+        let retained = TableData::try_new(vec![batch])
+            .unwrap()
+            .slice(128, Some(2))
+            .unwrap();
+
+        let retained_bytes = retained.nbytes();
+        let compact = retained.compact().unwrap();
+        drop(retained);
+        assert!(original_dictionary_values.upgrade().is_none());
+        assert!(compact.nbytes() < retained_bytes);
+        let dictionary = compact.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(dictionary.values().len(), 2);
+        let values = dictionary
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert!(values.value(0).starts_with("0128-"));
+        assert!(values.value(1).starts_with("0129-"));
+    }
+
+    #[test]
+    fn compact_copies_slices_and_preserves_schema_and_nulls() {
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("payload", DataType::Utf8, true)
+                .with_metadata(HashMap::from([("kind".to_string(), "text".to_string())]))],
+            HashMap::from([("source".to_string(), "test".to_string())]),
+        ));
+        let mut values = (0..256)
+            .map(|index| Some(format!("{index:04}-{}", "x".repeat(512))))
+            .collect::<Vec<_>>();
+        values[129] = None;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(values)) as ArrayRef],
+        )
+        .unwrap();
+        let retained = TableData::try_new(vec![batch])
+            .unwrap()
+            .slice(128, Some(2))
+            .unwrap();
+
+        let compact = retained.compact().unwrap();
+        assert_eq!(compact.schema.as_ref(), schema.as_ref());
+        assert!(compact.nbytes() < retained.nbytes());
+        let payload = compact.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert!(payload.value(0).starts_with("0128-"));
+        assert!(payload.is_null(1));
+
+        let retained_column = retained.column_by_name("payload").unwrap();
+        let compact_column = retained_column.compact().unwrap();
+        assert_eq!(compact_column.field, retained_column.field);
+        assert!(compact_column.nbytes() < retained_column.nbytes());
+        let payload = compact_column.chunks[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert!(payload.value(0).starts_with("0128-"));
+        assert!(payload.is_null(1));
+    }
+
+    #[test]
+    fn forced_text_column_preserves_scalar_formatting_and_nulls() {
+        let schema = Arc::new(Schema::new(vec![Field::new("row", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from(vec![0_i64, 1, 2, 3, 4, 5])) as ArrayRef],
+        )
+        .unwrap();
+        let table = TableData::try_new(vec![batch]).unwrap();
+        let cells = [
+            CellValue::Bool(true),
+            CellValue::Int(-7),
+            CellValue::Float(1.25),
+            CellValue::Date(chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap()),
+            CellValue::Text("borrowed".to_string()),
+            CellValue::Null,
+        ];
+
+        let output = table
+            .with_cells_column(1, "text", &cells, false, true)
+            .unwrap();
+        let text = output.batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(
+            text.iter().collect::<Vec<_>>(),
+            [
+                Some("true"),
+                Some("-7"),
+                Some("1.25"),
+                Some("2024-01-02"),
+                Some("borrowed"),
+                None,
+            ]
         );
     }
 }

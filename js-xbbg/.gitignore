@@ -5,5 +5,5 @@ node_modules/
 *.tsbuildinfo
 
 packages/xbbg-core-*/index.js
-.native-build-profile
+.native-build-info.json
 lib/

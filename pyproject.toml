@@ -61,7 +61,8 @@ dependencies = [
 #   * narwhals below 2.10.0 ignores our plugin entry point (see above).
 pyarrow = ["pyarrow>=22.0.0"]
 pandas = ["pandas>=2.2.2,<4"]
-polars = ["polars>=0.20"]
+# Polars' timezone extra supplies tzdata on Windows, including at the floor.
+polars = ["polars[timezone]>=0.20.4"]
 duckdb = ["duckdb>=1.5.0"]
 test = [
   "pytest>=8.4",
@@ -71,7 +72,7 @@ test = [
   "pytest-asyncio>=0.24",
   "pyarrow>=22.0.0",
   "pandas>=2.2.2,<4",
-  "polars>=0.20",
+  "polars[timezone]>=0.20.4",
   "duckdb>=1.5.0",
 ]
 

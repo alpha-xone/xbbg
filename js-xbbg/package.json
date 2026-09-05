@@ -68,10 +68,10 @@
     "smoke:packaged-install": "tsx ./scripts/smoke-packaged-install.ts --packed",
     "stage:native-package": "tsx ./scripts/stage-native-package.ts",
     "stamp:version": "tsx ./scripts/stamp-version.ts",
-    "test": "vitest run test/resolve-native.test.ts test/runtime-search-path.test.ts",
+    "test": "vitest run --exclude test/live.test.ts --exclude test/smoke.test.ts",
     "test:live": "vitest run test/live.test.ts --testTimeout=120000",
     "test:smoke": "vitest run test/smoke.test.ts",
-    "test:watch": "vitest test/resolve-native.test.ts test/runtime-search-path.test.ts",
+    "test:watch": "vitest --exclude test/live.test.ts --exclude test/smoke.test.ts",
     "typecheck": "tsc --noEmit",
     "types:attw": "tsx ./scripts/validate-packages.ts --attw"
   },

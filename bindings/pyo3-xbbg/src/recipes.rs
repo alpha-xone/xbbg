@@ -37,9 +37,9 @@ macro_rules! recipe_wrapper {
             let $eng = engine.engine.clone();
             $($($prepare)*)?
 
-            crate::shutdown_safe_future(py, &engine.engine, async move {
+            crate::shutdown_safe_future(py, async move {
                 let batch = $call.await.map_err(recipe_err)?;
-                Python::attach(|py| record_batch_to_arrow_record_batch(py, batch))
+                crate::try_attach_or_suspend(|py| record_batch_to_arrow_record_batch(py, batch)).await
             })
         }
     };

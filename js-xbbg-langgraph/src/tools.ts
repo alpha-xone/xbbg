@@ -87,7 +87,7 @@ function resultString(
   name: BloombergToolName,
   value: unknown,
 ): ToolContentAndArtifact {
-  return createToolResult(name, value, resolver.options.maxRows, resolver.options.maxStringChars);
+  return createToolResult(name, value, resolver.options);
 }
 
 type SnapshotReason = "max_updates" | "timeout" | "done";
@@ -111,6 +111,11 @@ interface SnapshotResult {
   readonly updates: readonly unknown[];
   /** Set when collection succeeded but releasing the subscription failed. */
   readonly unsubscribeError?: string;
+}
+
+interface CollectedSnapshot {
+  readonly materializedRows: number;
+  readonly result: SnapshotResult;
 }
 
 interface StreamOptionsInput {
@@ -151,59 +156,70 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function rowsFromArrowTable(value: unknown): unknown[] | undefined {
+interface TruncatedArrowRows {
+  readonly rows: readonly unknown[];
+  readonly rowCount: number;
+  readonly truncated: true;
+  readonly truncation: {
+    readonly omittedRowsAtLeast: number;
+    readonly reason: "max_rows";
+  };
+}
+
+interface NormalizedStreamUpdate {
+  readonly materializedRows: number;
+  readonly value: unknown;
+}
+
+function truncatedArrowRows(rows: readonly unknown[], rowCount: number): TruncatedArrowRows {
+  return {
+    rows,
+    rowCount,
+    truncated: true,
+    truncation: {
+      omittedRowsAtLeast: rowCount - rows.length,
+      reason: "max_rows",
+    },
+  };
+}
+
+function rowsFromArrowTable(value: unknown, maxRows: number): NormalizedStreamUpdate | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const toArray = value.toArray;
-  if (typeof toArray === "function") {
-    return Array.from(toArray.call(value) as Iterable<unknown>);
-  }
   const numRows = value.numRows;
   const get = value.get;
-  if (typeof numRows === "number" && Number.isInteger(numRows) && typeof get === "function") {
+  if (
+    typeof numRows === "number" &&
+    Number.isSafeInteger(numRows) &&
+    numRows >= 0 &&
+    typeof get === "function"
+  ) {
+    const retainedRows = Math.min(numRows, maxRows);
     const rows: unknown[] = [];
-    for (let index = 0; index < numRows; index += 1) {
+    for (let index = 0; index < retainedRows; index += 1) {
       rows.push(get.call(value, index));
     }
-    return rows;
+    return {
+      materializedRows: retainedRows,
+      value: retainedRows === numRows ? rows : truncatedArrowRows(rows, numRows),
+    };
   }
   return undefined;
 }
 
-function jsonCompatible(value: unknown): unknown {
-  if (typeof value === "bigint") {
-    return value.toString();
+function normalizeStreamUpdate(value: unknown, maxRows: number): NormalizedStreamUpdate {
+  const arrowRows = rowsFromArrowTable(value, maxRows);
+  if (arrowRows !== undefined) {
+    return arrowRows;
   }
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-  if (Array.isArray(value)) {
-    return value.map(jsonCompatible);
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  const toJSON = value.toJSON;
-  if (typeof toJSON === "function") {
-    return jsonCompatible(toJSON.call(value));
-  }
-  const output: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    output[key] = jsonCompatible(entry);
-  }
-  return output;
-}
-
-function normalizeStreamUpdate(value: unknown): unknown {
   if (isRecord(value)) {
     const toObject = value.toObject;
     if (typeof toObject === "function") {
-      return jsonCompatible(toObject.call(value));
+      return { materializedRows: 0, value: toObject.call(value) };
     }
   }
-  const rows = rowsFromArrowTable(value);
-  return rows === undefined ? jsonCompatible(value) : rows.map(jsonCompatible);
+  return { materializedRows: 0, value };
 }
 
 async function nextWithinTimeout(
@@ -254,9 +270,15 @@ async function collectSnapshot(
   subscription: SnapshotSubscriptionLike,
   input: SnapshotControlInput,
   signal: AbortSignal | undefined,
-): Promise<SnapshotResult> {
+  maxRows: number,
+  maxResultNodes: number,
+): Promise<CollectedSnapshot> {
   const updates: unknown[] = [];
   const deadlineMs = Date.now() + input.timeoutMs;
+  // Each retained Arrow row expands into at least one container and one
+  // serialized value, so reserve two thirds of the node budget downstream.
+  const arrowRowAllowance = Math.min(maxRows, Math.floor(maxResultNodes / 3));
+  let remainingArrowRows = arrowRowAllowance;
   let reason: SnapshotReason = "max_updates";
   let failed = false;
   let caught: unknown;
@@ -274,7 +296,9 @@ async function collectSnapshot(
         reason = "done";
         break;
       }
-      updates.push(normalizeStreamUpdate(next.value));
+      const normalized = normalizeStreamUpdate(next.value, remainingArrowRows);
+      updates.push(normalized.value);
+      remainingArrowRows -= normalized.materializedRows;
     }
   } catch (error) {
     failed = true;
@@ -296,12 +320,15 @@ async function collectSnapshot(
     throw caught;
   }
   return {
-    maxUpdates: input.maxUpdates,
-    reason,
-    timeoutMs: input.timeoutMs,
-    updateCount: updates.length,
-    updates,
-    ...(unsubscribeError === undefined ? {} : { unsubscribeError }),
+    materializedRows: arrowRowAllowance - remainingArrowRows,
+    result: {
+      maxUpdates: input.maxUpdates,
+      reason,
+      timeoutMs: input.timeoutMs,
+      updateCount: updates.length,
+      updates,
+      ...(unsubscribeError === undefined ? {} : { unsubscribeError }),
+    },
   };
 }
 
@@ -476,12 +503,10 @@ function checkEntitlementsWithResolver(resolver: CoreResolver): BloombergTool {
       try {
         const engine = await resolver.getEngine();
         const result = await engine.checkEntitlements(input.service ?? "//blp/refdata", input.eids);
-        return createToolResult(
-          name,
-          result,
-          MAX_ENTITLEMENT_EIDS,
-          resolver.options.maxStringChars,
-        );
+        return createToolResult(name, result, {
+          ...resolver.options,
+          maxRows: MAX_ENTITLEMENT_EIDS,
+        });
       } catch (error) {
         throwWithToolContext(name, error);
       }
@@ -808,8 +833,17 @@ function streamSnapshotWithResolver(resolver: CoreResolver): BloombergTool {
         // Connecting may have outlived the caller; never open a doomed subscription.
         signal?.throwIfAborted();
         const subscription = await engine.stream(input.tickers, input.fields, streamOptions(input));
-        const result = await collectSnapshot(subscription, input, signal);
-        return resultString(resolver, name, result);
+        const snapshot = await collectSnapshot(
+          subscription,
+          input,
+          signal,
+          Math.max(resolver.options.maxRows, resolver.options.maxContentRows),
+          resolver.options.maxResultNodes,
+        );
+        return createToolResult(name, snapshot.result, {
+          ...resolver.options,
+          materializedNodes: snapshot.materializedRows,
+        });
       } catch (error) {
         throwWithToolContext(name, error);
       }
@@ -835,8 +869,17 @@ function mktbarSnapshotWithResolver(resolver: CoreResolver): BloombergTool {
         const engine = await resolver.getEngine();
         signal?.throwIfAborted();
         const subscription = await engine.mktbar(input.ticker, singleTickerStreamOptions(input));
-        const result = await collectSnapshot(subscription, input, signal);
-        return resultString(resolver, name, result);
+        const snapshot = await collectSnapshot(
+          subscription,
+          input,
+          signal,
+          Math.max(resolver.options.maxRows, resolver.options.maxContentRows),
+          resolver.options.maxResultNodes,
+        );
+        return createToolResult(name, snapshot.result, {
+          ...resolver.options,
+          materializedNodes: snapshot.materializedRows,
+        });
       } catch (error) {
         throwWithToolContext(name, error);
       }
@@ -862,8 +905,17 @@ function depthSnapshotWithResolver(resolver: CoreResolver): BloombergTool {
         const engine = await resolver.getEngine();
         signal?.throwIfAborted();
         const subscription = await engine.depth(input.ticker, singleTickerStreamOptions(input));
-        const result = await collectSnapshot(subscription, input, signal);
-        return resultString(resolver, name, result);
+        const snapshot = await collectSnapshot(
+          subscription,
+          input,
+          signal,
+          Math.max(resolver.options.maxRows, resolver.options.maxContentRows),
+          resolver.options.maxResultNodes,
+        );
+        return createToolResult(name, snapshot.result, {
+          ...resolver.options,
+          materializedNodes: snapshot.materializedRows,
+        });
       } catch (error) {
         throwWithToolContext(name, error);
       }

@@ -404,30 +404,48 @@ fn alloc_delta(
 fn profile_record<F>(
     config: &SuiteConfig,
     suite: &'static str,
-    _scenario: &str,
-    run: F,
+    scenario: &str,
+    mut run: F,
 ) -> BenchRecord
 where
-    F: FnOnce(bool) -> BenchRecord,
+    F: FnMut(bool) -> BenchRecord,
 {
     if !config.profile_mode.is_detail() {
         return run(false);
     }
 
+    // Keep reported timings free of allocator-counter traffic. A second,
+    // untimed execution supplies allocation metrics for the same scenario.
+    let mut timing_record = run(true);
     TRACK_ALLOCATIONS.store(true, Ordering::SeqCst);
     let before = alloc_snapshot();
-    let mut record = run(true);
+    let allocation_record = run(false);
     let after = alloc_snapshot();
     TRACK_ALLOCATIONS.store(false, Ordering::SeqCst);
-    let allocation = alloc_delta(before, after, record.rows, record.values);
-    if record.phases.is_empty() {
-        record.phases.push(PhaseMetric {
+
+    if timing_record.status != allocation_record.status
+        || timing_record.rows != allocation_record.rows
+        || timing_record.values != allocation_record.values
+    {
+        timing_record.status = "error".to_string();
+        timing_record.detail = format!(
+            "{}; separate allocation observation changed outcome for {scenario}",
+            timing_record.detail
+        );
+    }
+    if timing_record.phases.is_empty() {
+        timing_record.phases.push(PhaseMetric {
             name: suite,
-            elapsed_us: record.elapsed_us,
+            elapsed_us: timing_record.elapsed_us,
         });
     }
-    record.allocations = Some(allocation);
-    record
+    timing_record.allocations = Some(alloc_delta(
+        before,
+        after,
+        allocation_record.rows,
+        allocation_record.values,
+    ));
+    timing_record
 }
 
 fn phase(name: &'static str, elapsed: Duration) -> PhaseMetric {
@@ -2934,13 +2952,16 @@ fn replay_subscription_events(
                 format!("SYN{idx:05} US Equity"),
                 field_vec.clone(),
                 tx.clone(),
-                target_messages.saturating_add(1),
+                1,
                 all_fields,
             )
         })
         .collect::<Vec<_>>();
     drop(tx);
 
+    let mut rows = 0usize;
+    let mut columns = 0usize;
+    let mut batches = 0usize;
     let process_start = Instant::now();
     let mut processed = 0usize;
     while processed < target_messages {
@@ -2949,6 +2970,13 @@ fn replay_subscription_events(
                 for _ in 0..repeats_per_message {
                     let idx = processed % topic_count;
                     states[idx].on_message(&msg);
+                    if let Ok(Ok(update)) = rx.try_recv() {
+                        let (update_rows, update_columns) = subscription_update_shape(&update);
+                        rows += update_rows;
+                        columns = columns.max(update_columns);
+                        batches += 1;
+                        black_box(update);
+                    }
                     processed += 1;
                     if processed >= target_messages {
                         break;
@@ -2969,9 +2997,6 @@ fn replay_subscription_events(
     let flush_elapsed = flush_start.elapsed();
 
     let drain_start = Instant::now();
-    let mut rows = 0usize;
-    let mut columns = 0usize;
-    let mut batches = 0usize;
     while let Ok(item) = rx.try_recv() {
         if let Ok(update) = item {
             let (update_rows, update_columns) = subscription_update_shape(&update);
@@ -2982,6 +3007,10 @@ fn replay_subscription_events(
         }
     }
     let drain_elapsed = drain_start.elapsed();
+    let dropped_batches = states
+        .iter()
+        .map(|state| state.dropped_batches)
+        .sum::<u64>();
 
     let mut record = BenchRecord::ok(
         "subscription_replay",
@@ -2992,17 +3021,20 @@ fn replay_subscription_events(
         processed,
         "messages",
         format!(
-            "target_messages={target_messages}, topics={topic_count}, batches={batches}, all_fields={all_fields}, cached_events={}, cached_messages={cached_messages}, repeats_per_message={repeats_per_message}",
+            "target_messages={target_messages}, topics={topic_count}, batches={batches}, dropped_batches={dropped_batches}, all_fields={all_fields}, cached_events={}, cached_messages={cached_messages}, repeats_per_message={repeats_per_message}, compatibility_flush_threshold=1 (does not batch output), queue_capacity_units=SubscriptionUpdate batches, producer interleaved with consumer dequeue",
             events.len()
         ),
     );
+    if dropped_batches > 0 {
+        record.status = "error".to_string();
+    }
     record.phases = vec![
         phase(
-            "process_messages_through_subscription_state",
+            "process_messages_and_interleaved_consumer_dequeue",
             process_elapsed,
         ),
-        phase("flush_arrow_batches", flush_elapsed),
-        phase("drain_batches", drain_elapsed),
+        phase("compatibility_flush_call", flush_elapsed),
+        phase("final_queue_drain", drain_elapsed),
         phase("total", Duration::from_micros(record.elapsed_us as u64)),
     ];
     record
@@ -3582,7 +3614,7 @@ fn render_phases_json(phases: &[PhaseMetric]) -> String {
 fn render_allocations_json(allocations: Option<AllocDelta>) -> String {
     match allocations {
         Some(a) => format!(
-            "{{\"alloc_count\":{},\"alloc_bytes\":{},\"dealloc_count\":{},\"dealloc_bytes\":{},\"net_alloc_bytes\":{},\"allocs_per_row\":{:.8},\"bytes_per_row\":{:.4},\"allocs_per_value\":{:.8},\"bytes_per_value\":{:.4}}}",
+            "{{\"scope\":\"separate untimed execution with global allocator counters; reported timing excludes allocator counters\",\"sample_count\":1,\"alloc_count\":{},\"alloc_bytes\":{},\"dealloc_count\":{},\"dealloc_bytes\":{},\"net_alloc_bytes\":{},\"allocs_per_row\":{:.8},\"bytes_per_row\":{:.4},\"allocs_per_value\":{:.8},\"bytes_per_value\":{:.4}}}",
             a.alloc_count,
             a.alloc_bytes,
             a.dealloc_count,
@@ -3634,16 +3666,32 @@ fn render_json(
         .collect::<Vec<_>>()
         .join(",\n");
 
-    let build_mode = xbbg_bench::build_mode();
+    let input_descriptor = format!(
+        "profile={};profile_mode={};bench_only={:?};bdp={}x{};bdh={}x{}x{};bdtick={};bql={}x{};sub={}x{}x{}",
+        config.profile.as_str(),
+        config.profile_mode.as_str(),
+        config.only,
+        shape.bdp_securities,
+        shape.bdp_fields,
+        shape.bdh_securities,
+        shape.bdh_dates,
+        shape.bdh_fields,
+        shape.bdtick_ticks,
+        shape.bql_rows,
+        shape.bql_columns,
+        shape.sub_messages,
+        shape.sub_topics,
+        shape.sub_fields,
+    );
+    let provenance = xbbg_bench::benchmark_provenance_json(&input_descriptor);
     format!(
-        "{{\n  \"suite\": \"xbbg_benchmark_suite\",\n  \"timestamp\": {},\n  \"profile\": \"{}\",\n  \"profile_mode\": \"{}\",\n  \"bench_only\": {},\n  \"git_sha\": \"{}\",\n  \"target_cpu\": {{ \"native\": {} }},\n  \"debug_build\": {},\n  \"bloomberg\": {{\n    \"host\": \"{}\",\n    \"port\": {}\n  }},\n  \"synthetic_shape\": {{\n    \"bdp_securities\": {},\n    \"bdp_fields\": {},\n    \"bdh_securities\": {},\n    \"bdh_dates\": {},\n    \"bdh_fields\": {},\n    \"bdtick_ticks\": {},\n    \"bql_rows\": {},\n    \"bql_columns\": {},\n    \"sub_messages\": {},\n    \"sub_topics\": {},\n    \"sub_fields\": {}\n  }},\n  \"benchmarks\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"schema_version\": 2,\n  \"suite\": \"xbbg_benchmark_suite\",\n  \"timestamp\": {},\n  \"profile\": \"{}\",\n  \"profile_mode\": \"{}\",\n  \"bench_only\": {},\n  \"source_checkout_git_commit\": \"{}\",\n  \"coverage\": \"mixed suite: live SDK/network probes are explicitly separate from cached Event replay and synthetic Arrow workloads\",\n  \"timing_scope\": \"scenario-specific warm measurements; detail allocations come from a separate untimed execution\",\n  \"provenance\": {},\n  \"bloomberg\": {{\n    \"host\": \"{}\",\n    \"port\": {}\n  }},\n  \"synthetic_shape\": {{\n    \"bdp_securities\": {},\n    \"bdp_fields\": {},\n    \"bdh_securities\": {},\n    \"bdh_dates\": {},\n    \"bdh_fields\": {},\n    \"bdtick_ticks\": {},\n    \"bql_rows\": {},\n    \"bql_columns\": {},\n    \"sub_messages\": {},\n    \"sub_topics\": {},\n    \"sub_fields\": {}\n  }},\n  \"benchmarks\": [\n{}\n  ]\n}}\n",
         timestamp,
         config.profile.as_str(),
         config.profile_mode.as_str(),
         render_optional_string(config.only.as_deref()),
         escape_json(git_sha),
-        build_mode.target_cpu_native,
-        build_mode.debug_build,
+        provenance,
         escape_json(&blp_host()),
         blp_port(),
         shape.bdp_securities,

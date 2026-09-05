@@ -5,9 +5,7 @@ from __future__ import annotations
 import pytest
 
 from xbbg.backend import (
-    BACKEND_DESCRIPTORS,
     Backend,
-    BackendConversion,
     effective_backend,
     resolve_backend,
     validate_backend_format,
@@ -123,33 +121,3 @@ class TestBackendEnum:
         assert resolve_backend(None, Backend.NATIVE) == Backend.NATIVE
         assert resolve_backend("pyarrow", Backend.NATIVE) == Backend.PYARROW
         assert effective_backend(None, Backend.NATIVE) == Backend.NATIVE
-
-    def test_descriptor_exists_for_every_backend(self):
-        assert set(BACKEND_DESCRIPTORS) == set(Backend)
-
-    def test_descriptor_records_conversion_status(self):
-        implemented = {
-            Backend.NATIVE,
-            Backend.PYARROW,
-            Backend.PANDAS,
-            Backend.POLARS,
-            Backend.POLARS_LAZY,
-            Backend.NARWHALS,
-            Backend.NARWHALS_LAZY,
-            Backend.DUCKDB,
-        }
-        for backend in Backend:
-            descriptor = BACKEND_DESCRIPTORS[backend]
-            assert descriptor.backend is backend
-            assert descriptor.supported_formats
-            if backend in implemented:
-                assert descriptor.conversion is not BackendConversion.PLANNED
-            else:
-                assert descriptor.conversion is BackendConversion.PLANNED
-
-    def test_descriptor_owns_backend_metadata(self):
-        assert BACKEND_DESCRIPTORS[Backend.PYARROW].package_name == "pyarrow"
-        assert BACKEND_DESCRIPTORS[Backend.PYARROW].module_name == "pyarrow"
-        assert BACKEND_DESCRIPTORS[Backend.PYARROW].extra_name == "pyarrow"
-        assert BACKEND_DESCRIPTORS[Backend.PYARROW].min_version == (22, 0)
-        assert BACKEND_DESCRIPTORS[Backend.NATIVE].module_name is None

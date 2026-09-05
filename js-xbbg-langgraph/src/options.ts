@@ -45,8 +45,17 @@ export interface BloombergToolsOptions {
   readonly core?: XbbgCoreLike;
   readonly maxSecurities?: number;
   readonly maxFields?: number;
+  /** Maximum aggregate primary rows retained in the structured artifact. */
   readonly maxRows?: number;
   readonly maxStringChars?: number;
+  /** Maximum UTF-8 bytes retained in the structured tool artifact. Minimum 256. */
+  readonly maxResultBytes?: number;
+  /** Maximum aggregate values/properties inspected while bounding one result. Minimum 10. */
+  readonly maxResultNodes?: number;
+  /** Maximum UTF-8 bytes sent back to the model as tool content. Minimum 256. */
+  readonly maxContentBytes?: number;
+  /** Maximum aggregate primary rows in model content; independent of artifact maxRows. */
+  readonly maxContentRows?: number;
   readonly maxBqlQueryChars?: number;
   readonly maxSearchSpecChars?: number;
   readonly maxStreamUpdates?: number;
@@ -63,6 +72,10 @@ export interface NormalizedBloombergToolsOptions {
   readonly maxFields: number;
   readonly maxRows: number;
   readonly maxStringChars: number;
+  readonly maxResultBytes: number;
+  readonly maxResultNodes: number;
+  readonly maxContentBytes: number;
+  readonly maxContentRows: number;
   readonly maxBqlQueryChars: number;
   readonly maxSearchSpecChars: number;
   readonly maxStreamUpdates: number;
@@ -75,6 +88,12 @@ const DEFAULT_MAX_SECURITIES = 25;
 const DEFAULT_MAX_FIELDS = 25;
 const DEFAULT_MAX_ROWS = 500;
 const DEFAULT_MAX_STRING_CHARS = 2000;
+const DEFAULT_MAX_RESULT_BYTES = 1_048_576;
+const DEFAULT_MAX_RESULT_NODES = 50_000;
+const DEFAULT_MAX_CONTENT_BYTES = 65_536;
+const DEFAULT_MAX_CONTENT_ROWS = 50;
+const MIN_RESULT_BYTE_BUDGET = 256;
+const MIN_RESULT_NODE_BUDGET = 10;
 const DEFAULT_MAX_BQL_QUERY_CHARS = 4000;
 const DEFAULT_MAX_SEARCH_SPEC_CHARS = 1000;
 const DEFAULT_MAX_STREAM_UPDATES = 10;
@@ -99,10 +118,25 @@ function positiveInteger(value: number | undefined, fallback: number, name: stri
   if (value === undefined) {
     return fallback;
   }
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new RangeError(`${name} must be a positive integer; got ${String(value)}`);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(
+      `${name} must be a positive integer no greater than Number.MAX_SAFE_INTEGER; got ${String(value)}`,
+    );
   }
   return value;
+}
+
+function integerAtLeast(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  name: string,
+): number {
+  const normalized = positiveInteger(value, fallback, name);
+  if (normalized < minimum) {
+    throw new RangeError(`${name} must be at least ${String(minimum)}; got ${String(normalized)}`);
+  }
+  return normalized;
 }
 
 function disabledToolSet(
@@ -125,7 +159,30 @@ export function normalizeBloombergToolsOptions(
       "maxBqlQueryChars",
     ),
     maxFields: positiveInteger(options.maxFields, DEFAULT_MAX_FIELDS, "maxFields"),
+    maxContentBytes: integerAtLeast(
+      options.maxContentBytes,
+      DEFAULT_MAX_CONTENT_BYTES,
+      MIN_RESULT_BYTE_BUDGET,
+      "maxContentBytes",
+    ),
+    maxContentRows: positiveInteger(
+      options.maxContentRows,
+      DEFAULT_MAX_CONTENT_ROWS,
+      "maxContentRows",
+    ),
     maxRows: positiveInteger(options.maxRows, DEFAULT_MAX_ROWS, "maxRows"),
+    maxResultBytes: integerAtLeast(
+      options.maxResultBytes,
+      DEFAULT_MAX_RESULT_BYTES,
+      MIN_RESULT_BYTE_BUDGET,
+      "maxResultBytes",
+    ),
+    maxResultNodes: integerAtLeast(
+      options.maxResultNodes,
+      DEFAULT_MAX_RESULT_NODES,
+      MIN_RESULT_NODE_BUDGET,
+      "maxResultNodes",
+    ),
     maxSearchSpecChars: positiveInteger(
       options.maxSearchSpecChars,
       DEFAULT_MAX_SEARCH_SPEC_CHARS,

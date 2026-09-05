@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { assertNativeBuildArtifact, readNativeBuildInfo } from './native-build-info';
 import { nativeBinaryName, nativePackageSpecForKey, platformKey } from './platform-map';
 import type { NativePackageSpec } from './platform-map';
 
@@ -32,8 +33,7 @@ interface NpmInvocation {
 const npmExecPath = process.env.npm_execpath;
 
 function fail(message: string): never {
-  console.error(`js-xbbg stage failed: ${message}`);
-  process.exit(1);
+  throw new Error(message);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -108,45 +108,23 @@ function tempPathFor(destPath: string, suffix: string): string {
   );
 }
 
-function replaceWithPreparedFile(tempPath: string, destPath: string): void {
-  if (process.platform !== 'win32' || !fs.existsSync(destPath)) {
-    fs.renameSync(tempPath, destPath);
-    return;
-  }
-
-  const backupPath = tempPathFor(destPath, 'backup');
-  let backedUp = false;
-  let committed = false;
-  try {
-    fs.renameSync(destPath, backupPath);
-    backedUp = true;
-    fs.renameSync(tempPath, destPath);
-    committed = true;
-    fs.rmSync(backupPath, { force: true });
-  } catch (error) {
-    if (backedUp && !committed && fs.existsSync(backupPath) && !fs.existsSync(destPath)) {
-      try {
-        fs.renameSync(backupPath, destPath);
-      } catch (rollbackError) {
-        throw new Error(
-          `failed to replace ${destPath}; rollback backup preserved at ${backupPath}: ${String(error)}; rollback failed: ${String(rollbackError)}`,
-        );
-      }
-    }
-    throw error;
-  }
-}
-
-function copyBinarySafely(sourcePath: string, destPath: string): void {
+function copyBinarySafely(
+  sourcePath: string,
+  destPath: string,
+  key: NativePackageSpec['key'],
+  release: boolean,
+): void {
   const tempPath = tempPathFor(destPath, 'binary');
   try {
+    const provenance = readNativeBuildInfo(path.join(packageDir, '.native-build-info.json'));
     fs.copyFileSync(sourcePath, tempPath);
     fs.chmodSync(tempPath, 0o755);
     const stat = fs.statSync(tempPath);
     if (!stat.isFile() || stat.size === 0) {
       fail(`prepared native addon is empty: ${tempPath}`);
     }
-    replaceWithPreparedFile(tempPath, destPath);
+    assertNativeBuildArtifact(provenance, tempPath, key, release);
+    fs.renameSync(tempPath, destPath);
   } finally {
     fs.rmSync(tempPath, { force: true });
   }
@@ -161,25 +139,9 @@ function writePackageJsonSafely(
     const serialized = `${JSON.stringify(packageJson, null, 2)}\n`;
     fs.writeFileSync(tempPath, serialized);
     JSON.parse(fs.readFileSync(tempPath, 'utf8'));
-    replaceWithPreparedFile(tempPath, packageJsonPath);
+    fs.renameSync(tempPath, packageJsonPath);
   } finally {
     fs.rmSync(tempPath, { force: true });
-  }
-}
-
-function assertReleaseProvenance(release: boolean): void {
-  if (!release) {
-    return;
-  }
-  const provenancePath = path.join(packageDir, '.native-build-profile');
-  const profile = fs.existsSync(provenancePath)
-    ? fs.readFileSync(provenancePath, 'utf8').trim()
-    : null;
-  if (profile !== 'release') {
-    fail(
-      `refusing to stage a non-release native addon (build profile: ${profile ?? 'unknown'}); ` +
-        'rebuild with `npm --prefix js-xbbg run build:native` or pass --debug to stage a debug addon deliberately',
-    );
   }
 }
 
@@ -202,9 +164,8 @@ function stagePackage(release: boolean, version: string | null = null): StagePac
     );
   }
 
-  assertReleaseProvenance(release);
   const destBinary = path.join(localPackageDir, spec.binaryName);
-  copyBinarySafely(sourceBinary, destBinary);
+  copyBinarySafely(sourceBinary, destBinary, spec.key, release);
 
   if (version !== null) {
     const normalizedVersion = version.replace(/^v/u, '');
@@ -244,6 +205,11 @@ function maybeBuild({ build, release }: StageOptions): void {
   );
 }
 
-const options = parseArgs(process.argv.slice(2));
-maybeBuild(options);
-stagePackage(options.release, options.version);
+try {
+  const options = parseArgs(process.argv.slice(2));
+  maybeBuild(options);
+  stagePackage(options.release, options.version);
+} catch (error) {
+  console.error(`js-xbbg stage failed: ${String(error)}`);
+  process.exitCode = 1;
+}

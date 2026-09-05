@@ -66,11 +66,22 @@ DataFrameResult: TypeAlias = Any
 logger = logging.getLogger(__name__)
 _FIELD_TYPE_RESOLUTION_CACHE_MAXSIZE = 1024
 _FIELD_TYPE_RESOLUTION_CACHE: dict[tuple[tuple[str, ...], str], dict[str, str]] = {}
+_FIELD_TYPE_RESOLUTION_CACHE_LOCK = threading.Lock()
+_FIELD_TYPE_RESOLUTION_CACHE_GENERATION = 0
+_DEFAULT_SYNC_STREAM_CAPACITY = 256
+_DEFAULT_MAX_SYNC_STREAM_PRODUCERS = 32
+_SYNC_STREAM_PRODUCERS_LOCK = threading.Lock()
+_GLOBAL_SYNC_STREAM_PRODUCER_SCOPE = object()
+_ACTIVE_SYNC_STREAM_PRODUCERS: dict[object, set[object]] = {}
+_SYNC_STREAM_CLOSE_TIMEOUT_SECONDS = 1.0
 
 
 def _clear_field_type_resolution_cache() -> None:
     """Clear cached field type resolutions after schema/cache invalidation."""
-    _FIELD_TYPE_RESOLUTION_CACHE.clear()
+    global _FIELD_TYPE_RESOLUTION_CACHE_GENERATION
+    with _FIELD_TYPE_RESOLUTION_CACHE_LOCK:
+        _FIELD_TYPE_RESOLUTION_CACHE.clear()
+        _FIELD_TYPE_RESOLUTION_CACHE_GENERATION += 1
 
 
 __all__ = list(BLP_MODULE_EXPORTS)
@@ -314,9 +325,6 @@ _engine_lock = threading.Lock()
 _active_engine: contextvars.ContextVar[Engine | None] = contextvars.ContextVar("_active_engine", default=None)
 
 _NOTEBOOK_SYNC_BRIDGE_NAMES = frozenset({"bdp", "bdh", "bds", "bdib", "bdtick", "request"})
-_notebook_sync_loop: asyncio.AbstractEventLoop | None = None
-_notebook_sync_loop_thread: threading.Thread | None = None
-_notebook_sync_loop_lock = threading.Lock()
 
 
 class Engine:
@@ -342,25 +350,27 @@ class Engine:
         config = _core.PyEngineConfig(**normalized)
         self._config_snapshot = config
         self._py_engine = _core.PyEngine.with_config(config)
-        self._token: contextvars.Token | None = None
+        self._scope_tokens: contextvars.ContextVar[tuple[contextvars.Token, ...]] = contextvars.ContextVar(
+            f"xbbg_engine_scope_tokens_{id(self)}",
+            default=(),
+        )
 
     def __enter__(self) -> Engine:
-        self._token = _active_engine.set(self)
+        token = _active_engine.set(self)
+        self._scope_tokens.set((*self._scope_tokens.get(), token))
         return self
 
     def __exit__(self, *exc: Any) -> None:
-        if self._token is not None:
-            _active_engine.reset(self._token)
-            self._token = None
+        tokens = self._scope_tokens.get()
+        if tokens:
+            _active_engine.reset(tokens[-1])
+            self._scope_tokens.set(tokens[:-1])
 
     async def __aenter__(self) -> Engine:
-        self._token = _active_engine.set(self)
-        return self
+        return self.__enter__()
 
     async def __aexit__(self, *exc: Any) -> None:
-        if self._token is not None:
-            _active_engine.reset(self._token)
-            self._token = None
+        self.__exit__(*exc)
 
     def shutdown(self) -> None:
         self._py_engine.signal_shutdown()
@@ -372,20 +382,25 @@ class Engine:
 
 
 def _atexit_cleanup() -> None:
-    """Release engine reference during interpreter shutdown.
-
-    This is called automatically by atexit. The Rust Drop chain handles
-    actual cleanup (signaling worker threads to stop).
-
-    Non-blocking: just releases the reference, doesn't wait for threads.
-    """
+    """Signal interpreter finalization before releasing process-global resources."""
     global _engine
-    if _engine is not None:
+    core = sys.modules.get("xbbg._core")
+    if core is not None:
         try:
-            _engine.signal_shutdown()
+            core._signal_interpreter_shutdown()
+        except Exception:
+            logger.error("Failed to signal native interpreter shutdown", exc_info=True)
+
+    with _engine_lock:
+        engine = _engine
+        _engine = None
+
+    if engine is not None:
+        try:
+            engine.signal_shutdown()
         except Exception:
             logger.debug("Exception during atexit cleanup (ignored)", exc_info=True)
-        _engine = None
+
     stop_bridge = globals().get("_stop_notebook_sync_loop")
     if stop_bridge is not None:
         try:
@@ -417,9 +432,12 @@ def shutdown() -> None:
         xbbg.shutdown()
     """
     global _engine
-    if _engine is not None:
-        _engine.signal_shutdown()
+    with _engine_lock:
+        engine = _engine
         _engine = None
+
+    if engine is not None:
+        engine.signal_shutdown()
 
 
 def reset() -> None:
@@ -441,8 +459,13 @@ def reset() -> None:
         df = xbbg.bdp("AAPL US Equity", "PX_LAST")  # Uses new config
     """
     global _engine, _config
-    shutdown()
-    _config = None
+    with _engine_lock:
+        engine = _engine
+        _engine = None
+        _config = None
+
+    if engine is not None:
+        engine.signal_shutdown()
 
 
 def is_connected() -> bool:
@@ -462,9 +485,9 @@ def is_connected() -> bool:
 
         print(xbbg.is_connected())  # True - connected
     """
-    if _engine is None:
-        return False
-    return _engine.is_connected()
+    with _engine_lock:
+        engine = _engine
+    return engine is not None and engine.is_connected()
 
 
 async def aseat_type() -> str:
@@ -508,6 +531,8 @@ _VALID_CONFIG_KEYS: frozenset[str] = frozenset(
         "zfp_remote",
         "request_pool_size",
         "subscription_pool_size",
+        "runtime_worker_threads",
+        "max_subscription_sessions",
         "shard_requests",
         "shard_threshold",
         "shard_chunk_size",
@@ -584,7 +609,8 @@ def configure(
     Args:
         config: An EngineConfig object with all settings.
         **kwargs: Override individual fields (host, port, request_pool_size,
-            subscription_pool_size, shard_requests, shard_threshold,
+            subscription_pool_size, runtime_worker_threads,
+            max_subscription_sessions, shard_requests, shard_threshold,
             shard_chunk_size, shard_max_concurrent, field_cache_path,
             auth_method, app_name, user_id, ip_address, token, etc.). The closed
             string fields are ``validation_mode`` (``"disabled"`` (default),
@@ -646,31 +672,29 @@ def configure(
     if (num_start_attempts := normalized.get("num_start_attempts")) is not None and num_start_attempts < 1:
         raise ValueError("num_start_attempts must be at least 1")
 
-    with _engine_lock:
-        if _engine is not None:
-            warnings.warn(
-                "xbbg.configure() called after engine was already started. "
-                "The existing engine has been shut down and will restart with new config on next use. "
-                "To avoid this, call configure() before any Bloomberg request, "
-                "or use xbbg.Engine(...) for scoped configuration.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            _engine.signal_shutdown()
-            _engine = None
-
     from . import _core
 
-    if config is not None:
-        # Start from the provided config, apply kwargs on top
-        _config = config
-        for key, value in normalized.items():
-            setattr(_config, key, value)
-    else:
-        # Build from kwargs; PyEngineConfig fills Rust defaults for anything unset
-        _config = _core.PyEngineConfig(**normalized)
+    configured = config if config is not None else _core.PyEngineConfig(**normalized)
+    with _engine_lock:
+        if config is not None:
+            for key, value in normalized.items():
+                setattr(configured, key, value)
+        previous_engine = _engine
+        _engine = None
+        _config = configured
 
-    logger.info("Engine configured: %s", _config)
+    if previous_engine is not None:
+        warnings.warn(
+            "xbbg.configure() called after engine was already started. "
+            "The existing engine has been shut down and will restart with new config on next use. "
+            "To avoid this, call configure() before any Bloomberg request, "
+            "or use xbbg.Engine(...) for scoped configuration.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        previous_engine.signal_shutdown()
+
+    logger.info("Engine configured: %s", configured)
 
 
 def set_backend(backend: Backend | str | None) -> None:
@@ -751,13 +775,22 @@ async def _resolve_field_types_cached(
 ) -> dict[str, str]:
     """Resolve Bloomberg field types with a bounded Python-side memo."""
     key = (tuple(fields), default_type)
-    cached = _FIELD_TYPE_RESOLUTION_CACHE.get(key)
-    if cached is None:
-        cached = await _get_engine().resolve_field_types(fields, None, default_type)
-        if len(_FIELD_TYPE_RESOLUTION_CACHE) >= _FIELD_TYPE_RESOLUTION_CACHE_MAXSIZE:
-            _FIELD_TYPE_RESOLUTION_CACHE.pop(next(iter(_FIELD_TYPE_RESOLUTION_CACHE)))
-        _FIELD_TYPE_RESOLUTION_CACHE[key] = dict(cached)
+    with _FIELD_TYPE_RESOLUTION_CACHE_LOCK:
+        generation = _FIELD_TYPE_RESOLUTION_CACHE_GENERATION
+        cached = _FIELD_TYPE_RESOLUTION_CACHE.get(key)
 
+    if cached is None:
+        fetched = await _get_engine().resolve_field_types(fields, None, default_type)
+        with _FIELD_TYPE_RESOLUTION_CACHE_LOCK:
+            if generation != _FIELD_TYPE_RESOLUTION_CACHE_GENERATION:
+                cached = dict(fetched)
+            else:
+                cached = _FIELD_TYPE_RESOLUTION_CACHE.get(key)
+                if cached is None:
+                    if len(_FIELD_TYPE_RESOLUTION_CACHE) >= _FIELD_TYPE_RESOLUTION_CACHE_MAXSIZE:
+                        _FIELD_TYPE_RESOLUTION_CACHE.pop(next(iter(_FIELD_TYPE_RESOLUTION_CACHE)))
+                    cached = dict(fetched)
+                    _FIELD_TYPE_RESOLUTION_CACHE[key] = cached
     resolved = dict(cached)
     if overrides:
         resolved.update(overrides)
@@ -765,10 +798,7 @@ async def _resolve_field_types_cached(
 
 
 def _get_engine(*, engine: Engine | None = None):
-    """Get the active engine: explicit arg > contextvar scope > global singleton.
-
-    Thread-safe: uses double-checked locking for the global singleton.
-    """
+    """Get the active engine: explicit arg > contextvar scope > global singleton."""
     if engine is not None:
         return engine._py_engine
 
@@ -777,19 +807,18 @@ def _get_engine(*, engine: Engine | None = None):
         return scoped._py_engine
 
     global _engine
-    if _engine is None:
-        with _engine_lock:
-            if _engine is None:
-                from . import _core
+    with _engine_lock:
+        if _engine is None:
+            from . import _core
 
-                if _config is not None:
-                    logger.debug("Creating PyEngine with config: %s", _config)
-                    _engine = _core.PyEngine.with_config(_config)
-                else:
-                    logger.debug("Creating PyEngine with default config")
-                    _engine = _core.PyEngine()
-                logger.info("PyEngine connected to Bloomberg")
-    return _engine
+            if _config is not None:
+                logger.debug("Creating PyEngine with config: %s", _config)
+                _engine = _core.PyEngine.with_config(_config)
+            else:
+                logger.debug("Creating PyEngine with default config")
+                _engine = _core.PyEngine()
+            logger.info("PyEngine connected to Bloomberg")
+        return _engine
 
 
 def _coerce_server_snapshot(value: Any) -> tuple[tuple[str, int], ...]:
@@ -811,15 +840,18 @@ def _coerce_server_snapshot(value: Any) -> tuple[tuple[str, int], ...]:
 def _snapshot_request_environment() -> RequestEnvironment:
     scoped = _active_engine.get()
     if scoped is not None:
-        config = getattr(scoped, "_config_snapshot", None)
-        source = "scoped_engine"
-    elif _config is not None:
-        config = _config
-        source = "global_config"
-    else:
-        config = None
-        source = "default_engine"
+        return _request_environment_from_config(
+            getattr(scoped, "_config_snapshot", None),
+            "scoped_engine",
+        )
 
+    with _engine_lock:
+        config = _config
+        source = "global_config" if config is not None else "default_engine"
+    return _request_environment_from_config(config, source)
+
+
+def _request_environment_from_config(config: Any, source: str) -> RequestEnvironment:
     if config is None:
         return RequestEnvironment(source=source, host="localhost", port=8194)
 
@@ -2160,40 +2192,70 @@ def _is_notebook_context() -> bool:
     return bool(config is not None and "IPKernelApp" in config)
 
 
-def _ensure_notebook_sync_loop() -> asyncio.AbstractEventLoop:
-    global _notebook_sync_loop, _notebook_sync_loop_thread
+@dataclass(eq=False)
+class _ManagedAsyncCall:
+    result: concurrent.futures.Future[Any]
+    task: asyncio.Task[tuple[bool, Any]] | None = None
+    cancel_requested: bool = False
 
-    with _notebook_sync_loop_lock:
+
+class _ManagedAsyncBridge:
+    """Own one background event loop and every coroutine accepted by it."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._stopping = False
+        self._calls: set[_ManagedAsyncCall] = set()
+
+    def _ensure_loop_locked(self) -> asyncio.AbstractEventLoop:
+        if self._stopping:
+            raise RuntimeError("xbbg coroutine bridge is stopping")
         if (
-            _notebook_sync_loop is not None
-            and not _notebook_sync_loop.is_closed()
-            and _notebook_sync_loop.is_running()
-            and _notebook_sync_loop_thread is not None
-            and _notebook_sync_loop_thread.is_alive()
+            self._loop is not None
+            and not self._loop.is_closed()
+            and self._loop.is_running()
+            and self._thread is not None
+            and self._thread.is_alive()
         ):
-            return _notebook_sync_loop
+            return self._loop
+        if self._loop is not None or self._thread is not None:
+            raise RuntimeError("xbbg coroutine bridge loop is unavailable")
 
         ready = threading.Event()
         loop_holder: dict[str, asyncio.AbstractEventLoop] = {}
-        error_holder: list[Exception] = []
+        error_holder: list[BaseException] = []
 
         def run_loop() -> None:
+            loop: asyncio.AbstractEventLoop | None = None
+            failure: BaseException | None = None
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 loop_holder["loop"] = loop
                 loop.call_soon(ready.set)
                 loop.run_forever()
-                pending = asyncio.all_tasks(loop)
-                for task in pending:
-                    task.cancel()
-                if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                loop.run_until_complete(loop.shutdown_asyncgens())
-                loop.close()
-            except Exception as exc:
-                error_holder.append(exc)
+            except BaseException as error:
+                failure = error
+                error_holder.append(error)
                 ready.set()
+            finally:
+                if loop is not None and not loop.is_closed():
+                    try:
+                        pending = asyncio.all_tasks(loop)
+                        for task in pending:
+                            task.cancel()
+                        if pending:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        loop.run_until_complete(loop.shutdown_asyncgens())
+                    except BaseException as error:
+                        if failure is None:
+                            failure = error
+                        logger.error("Exception stopping xbbg coroutine bridge loop", exc_info=True)
+                    finally:
+                        loop.close()
+                self._loop_exited(loop, threading.current_thread(), failure)
 
         thread = threading.Thread(
             target=run_loop,
@@ -2203,27 +2265,204 @@ def _ensure_notebook_sync_loop() -> asyncio.AbstractEventLoop:
         thread.start()
         ready.wait()
 
-        if error_holder:
-            raise RuntimeError("Failed to start xbbg notebook sync bridge") from error_holder[0]
+        if error_holder or "loop" not in loop_holder or not thread.is_alive():
+            cause = error_holder[0] if error_holder else None
+            raise RuntimeError("Failed to start xbbg coroutine bridge") from cause
 
-        _notebook_sync_loop = loop_holder["loop"]
-        _notebook_sync_loop_thread = thread
-        return _notebook_sync_loop
+        self._loop = loop_holder["loop"]
+        self._thread = thread
+        return self._loop
+
+    def _loop_exited(
+        self,
+        loop: asyncio.AbstractEventLoop | None,
+        thread: threading.Thread,
+        failure: BaseException | None,
+    ) -> None:
+        with self._lock:
+            if self._loop is not loop or self._thread is not thread:
+                return
+            calls = tuple(self._calls)
+            self._calls.clear()
+            self._loop = None
+            self._thread = None
+            self._stopping = False
+
+        for call in calls:
+            if not call.result.done():
+                error = RuntimeError("xbbg coroutine bridge stopped before call completed")
+                if failure is not None:
+                    error.__cause__ = failure
+                call.result.set_exception(error)
+
+    def ensure_loop(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            return self._ensure_loop_locked()
+
+    def _complete_call(
+        self,
+        call: _ManagedAsyncCall,
+        succeeded: bool,
+        value: Any,
+    ) -> None:
+        with self._lock:
+            if call not in self._calls:
+                return
+            self._calls.remove(call)
+
+        if call.result.done():
+            return
+        try:
+            if succeeded:
+                call.result.set_result(value)
+            else:
+                call.result.set_exception(value)
+        except concurrent.futures.InvalidStateError:
+            pass
+
+    def _schedule_call(
+        self,
+        call: _ManagedAsyncCall,
+        async_func: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
+        if call.result.done():
+            return
+
+        async def invoke() -> tuple[bool, Any]:
+            try:
+                return True, await async_func(*args, **kwargs)
+            except BaseException as error:
+                return False, error
+
+        try:
+            task = asyncio.create_task(invoke())
+        except BaseException as error:
+            self._complete_call(call, False, error)
+            return
+
+        with self._lock:
+            if call not in self._calls:
+                task.cancel()
+                return
+            call.task = task
+            cancel_requested = call.cancel_requested
+
+        def complete(completed: asyncio.Task[tuple[bool, Any]]) -> None:
+            try:
+                succeeded, value = completed.result()
+            except BaseException as error:
+                succeeded, value = False, error
+            self._complete_call(call, succeeded, value)
+
+        task.add_done_callback(complete)
+        if cancel_requested:
+            task.cancel()
+
+    def start(
+        self,
+        async_func: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> _ManagedAsyncCall:
+        caller_context = contextvars.copy_context()
+        call = _ManagedAsyncCall(concurrent.futures.Future())
+
+        with self._lock:
+            if self._thread is threading.current_thread():
+                raise RuntimeError("xbbg coroutine bridge cannot be re-entered from its own event-loop thread")
+            loop = self._ensure_loop_locked()
+            self._calls.add(call)
+            try:
+                loop.call_soon_threadsafe(
+                    self._schedule_call,
+                    call,
+                    async_func,
+                    args,
+                    kwargs,
+                    context=caller_context,
+                )
+            except BaseException:
+                self._calls.remove(call)
+                raise
+
+        return call
+
+    def cancel(self, call: _ManagedAsyncCall) -> None:
+        with self._lock:
+            if call not in self._calls:
+                return
+            call.cancel_requested = True
+            task = call.task
+            loop = self._loop
+
+        if task is not None and loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass
+
+    def submit(
+        self,
+        async_func: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        call = self.start(async_func, args, kwargs)
+        try:
+            return call.result.result()
+        except BaseException:
+            if not call.result.done():
+                self.cancel(call)
+            raise
+
+    def close(self) -> None:
+        with self._lock:
+            loop = self._loop
+            thread = self._thread
+            if loop is None or thread is None:
+                return
+            initiate_stop = not self._stopping
+            if initiate_stop:
+                self._stopping = True
+                calls = tuple(self._calls)
+                self._calls.clear()
+            else:
+                calls = ()
+
+        if initiate_stop:
+            for call in calls:
+                call.result.cancel()
+            tasks = tuple(call.task for call in calls if call.task is not None)
+
+            def cancel_and_stop() -> None:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                loop.stop()
+
+            if loop.is_running():
+                try:
+                    loop.call_soon_threadsafe(cancel_and_stop)
+                except RuntimeError:
+                    logger.error("Failed to schedule xbbg coroutine bridge shutdown", exc_info=True)
+
+        if thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+            if thread.is_alive():
+                logger.error("xbbg coroutine bridge did not stop within 1 second")
+
+
+_notebook_sync_bridge = _ManagedAsyncBridge()
+
+
+def _ensure_notebook_sync_loop() -> asyncio.AbstractEventLoop:
+    return _notebook_sync_bridge.ensure_loop()
 
 
 def _stop_notebook_sync_loop() -> None:
-    global _notebook_sync_loop, _notebook_sync_loop_thread
-
-    with _notebook_sync_loop_lock:
-        loop = _notebook_sync_loop
-        thread = _notebook_sync_loop_thread
-        _notebook_sync_loop = None
-        _notebook_sync_loop_thread = None
-
-    if loop is not None and loop.is_running():
-        loop.call_soon_threadsafe(loop.stop)
-    if thread is not None and thread.is_alive() and thread is not threading.current_thread():
-        thread.join(timeout=1.0)
+    _notebook_sync_bridge.close()
 
 
 def _run_in_notebook_sync_bridge(
@@ -2231,34 +2470,7 @@ def _run_in_notebook_sync_bridge(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> Any:
-    if _notebook_sync_loop_thread is threading.current_thread():
-        raise RuntimeError("xbbg notebook sync bridge cannot be re-entered from its own event-loop thread")
-
-    loop = _ensure_notebook_sync_loop()
-    caller_context = contextvars.copy_context()
-    result: concurrent.futures.Future = concurrent.futures.Future()
-
-    def schedule() -> None:
-        try:
-            task = asyncio.ensure_future(async_func(*args, **kwargs))
-        except Exception as exc:
-            result.set_exception(exc)
-            return
-
-        def complete(task: asyncio.Future) -> None:
-            if result.cancelled():
-                return
-            try:
-                result.set_result(task.result())
-            except asyncio.CancelledError as exc:
-                result.set_exception(exc)
-            except Exception as exc:
-                result.set_exception(exc)
-
-        task.add_done_callback(complete)
-
-    loop.call_soon_threadsafe(schedule, context=caller_context)
-    return result.result()
+    return _notebook_sync_bridge.submit(async_func, args, kwargs)
 
 
 def _build_sync_wrapper(
@@ -2644,8 +2856,8 @@ async def asubscribe(
         conflate: If True, request Bloomberg conflated market data for //blp/mktdata.
             Quote updates are conflated by Bloomberg; trades are still delivered as received.
         tick_mode: If True, return native dict ticks without building Arrow (implies raw=True)
-        flush_threshold: Batch flush threshold (validation only in Wave 1)
-        stream_capacity: Stream channel capacity (validation only in Wave 1)
+        flush_threshold: Number of ticks to buffer before emitting a batch.
+        stream_capacity: Backpressure capacity of the native subscription stream.
         overflow_policy: Overflow policy for the stream: ``"drop_newest"``
             (default) or ``"block"``.
         output: Output selector: ``"record_batch"``, ``"backend"``, ``"dict"``,
@@ -2694,7 +2906,6 @@ async def asubscribe(
         elif normalized_output == "record_batch":
             raw = True
 
-    # Validate config parameters
     if flush_threshold is not None and flush_threshold < 1:
         raise ValueError("flush_threshold must be >= 1")
     if stream_capacity is not None and stream_capacity < 1:
@@ -2702,7 +2913,6 @@ async def asubscribe(
     if overflow_policy is not None and overflow_policy not in OVERFLOW_POLICIES:
         raise ValueError(f"overflow_policy must be one of {OVERFLOW_POLICY_VALUES}, got {overflow_policy!r}")
 
-    # tick_mode=True forces flush_threshold=1
     if tick_mode and flush_threshold is not None and flush_threshold > 1:
         warnings.warn(
             f"tick_mode=True forces flush_threshold=1, ignoring flush_threshold={flush_threshold}", stacklevel=2
@@ -2802,7 +3012,9 @@ async def astream(
         callback: Optional callback function to invoke on each batch
         tick_mode: If True, convert batches to dicts
         conflate: If True, request Bloomberg conflated market data for //blp/mktdata.
-        overflow_policy: Overflow policy for the stream: ``"drop_newest"``
+        flush_threshold: Number of ticks to buffer before emitting a batch.
+        stream_capacity: Capacity of the native subscription stream.
+        overflow_policy: Overflow policy for the native stream: ``"drop_newest"``
             (default) or ``"block"``.
 
     Yields:
@@ -2845,6 +3057,42 @@ async def astream(
             yield batch
 
 
+def _reserve_sync_stream_producer() -> tuple[object, object]:
+    scoped = _active_engine.get()
+    if scoped is not None:
+        scope: object = scoped
+        config = getattr(scoped, "_config_snapshot", None)
+    else:
+        scope = _GLOBAL_SYNC_STREAM_PRODUCER_SCOPE
+        with _engine_lock:
+            config = _config
+
+    try:
+        limit = int(getattr(config, "max_subscription_sessions", _DEFAULT_MAX_SYNC_STREAM_PRODUCERS))
+    except (TypeError, ValueError):
+        limit = _DEFAULT_MAX_SYNC_STREAM_PRODUCERS
+    limit = max(1, limit)
+
+    slot = object()
+    with _SYNC_STREAM_PRODUCERS_LOCK:
+        active = _ACTIVE_SYNC_STREAM_PRODUCERS.setdefault(scope, set())
+        if len(active) >= limit:
+            raise RuntimeError(f"sync stream producer limit reached ({limit})")
+        active.add(slot)
+    return scope, slot
+
+
+def _release_sync_stream_producer(reservation: tuple[object, object]) -> None:
+    scope, slot = reservation
+    with _SYNC_STREAM_PRODUCERS_LOCK:
+        active = _ACTIVE_SYNC_STREAM_PRODUCERS.get(scope)
+        if active is None:
+            return
+        active.discard(slot)
+        if not active:
+            _ACTIVE_SYNC_STREAM_PRODUCERS.pop(scope, None)
+
+
 def stream(
     tickers: str | list[str],
     fields: str | list[str],
@@ -2859,10 +3107,9 @@ def stream(
     stream_capacity: int | None = None,
     overflow_policy: str | None = None,
 ):
-    """High-level sync streaming using a background thread.
+    """High-level sync streaming using the managed background event loop.
 
-    Note: This is a generator that runs the async stream in a background
-    thread. Use astream() for async contexts.
+    Use astream() directly from async contexts.
 
     Args:
         tickers: Securities to subscribe to
@@ -2873,7 +3120,10 @@ def stream(
         callback: Optional callback function to invoke on each batch
         tick_mode: If True, convert batches to dicts
         conflate: If True, request Bloomberg conflated market data for //blp/mktdata.
-        overflow_policy: Overflow policy for the stream: ``"drop_newest"``
+        flush_threshold: Number of ticks to buffer before emitting a batch.
+        stream_capacity: Capacity of both the native subscription stream and the
+            sync bridge. Defaults to 256.
+        overflow_policy: Overflow policy for the native stream: ``"drop_newest"``
             (default) or ``"block"``.
 
     Yields:
@@ -2887,51 +3137,136 @@ def stream(
                 break
     """
     import queue
-    import threading
 
-    q: queue.Queue = queue.Queue()
+    bridge_capacity = _DEFAULT_SYNC_STREAM_CAPACITY if stream_capacity is None else stream_capacity
+    if bridge_capacity < 1:
+        raise ValueError("stream_capacity must be >= 1")
+
+    data_queue: queue.Queue[Any] = queue.Queue(maxsize=bridge_capacity)
     stop_event = threading.Event()
+    producer_done = threading.Event()
+    consumer_wakeup = threading.Event()
+    producer_loop: asyncio.AbstractEventLoop | None = None
+    producer_space_available: asyncio.Event | None = None
+    producer_error: BaseException | None = None
 
-    async def run_stream():
+    async def run_stream() -> None:
+        nonlocal producer_loop, producer_space_available
+        producer_loop = asyncio.get_running_loop()
+        space_available = asyncio.Event()
+        producer_space_available = space_available
+
+        source = astream(
+            tickers,
+            fields,
+            raw=raw,
+            all_fields=all_fields,
+            backend=backend,
+            callback=None,
+            tick_mode=tick_mode,
+            conflate=conflate,
+            flush_threshold=flush_threshold,
+            stream_capacity=stream_capacity,
+            overflow_policy=overflow_policy,
+        )
         try:
-            async for batch in astream(
-                tickers,
-                fields,
-                raw=raw,
-                all_fields=all_fields,
-                backend=backend,
-                callback=callback,
-                tick_mode=tick_mode,
-                conflate=conflate,
-                flush_threshold=flush_threshold,
-                stream_capacity=stream_capacity,
-                overflow_policy=overflow_policy,
-            ):
-                if stop_event.is_set():
+            async for batch in source:
+                while not stop_event.is_set():
+                    space_available.clear()
+                    try:
+                        data_queue.put_nowait(batch)
+                    except queue.Full:
+                        await space_available.wait()
+                    else:
+                        consumer_wakeup.set()
+                        break
+                else:
                     break
-                q.put(batch)
-        except Exception as e:
-            q.put(e)
         finally:
-            q.put(None)  # Sentinel
+            await source.aclose()
 
-    def thread_target():
-        asyncio.run(run_stream())
+    producer_slot = _reserve_sync_stream_producer()
+    try:
+        producer_call = _notebook_sync_bridge.start(run_stream, (), {})
+    except BaseException:
+        _release_sync_stream_producer(producer_slot)
+        raise
 
-    thread = threading.Thread(target=thread_target, daemon=True)
-    thread.start()
+    def producer_finished(result: concurrent.futures.Future[Any]) -> None:
+        nonlocal producer_error
+        try:
+            result.result()
+        except (asyncio.CancelledError, concurrent.futures.CancelledError) as error:
+            if not stop_event.is_set():
+                producer_error = error
+        except BaseException as error:
+            if not stop_event.is_set():
+                producer_error = error
+        finally:
+            _release_sync_stream_producer(producer_slot)
+            producer_done.set()
+            consumer_wakeup.set()
+
+    producer_call.result.add_done_callback(producer_finished)
 
     try:
         while True:
-            item = q.get()
-            if item is None:
-                break
-            if isinstance(item, Exception):
-                raise item
-            yield item
+            consumer_wakeup.clear()
+            try:
+                batch = data_queue.get_nowait()
+            except queue.Empty:
+                if not producer_done.is_set():
+                    consumer_wakeup.wait()
+                    continue
+                try:
+                    batch = data_queue.get_nowait()
+                except queue.Empty:
+                    break
+
+            loop = producer_loop
+            space_available = producer_space_available
+            if loop is not None and space_available is not None and loop.is_running():
+                try:
+                    loop.call_soon_threadsafe(space_available.set)
+                except RuntimeError:
+                    pass
+            if callback is not None:
+                try:
+                    callback(batch)
+                except Exception as error:
+                    logger.warning("callback raised exception: %s", error, exc_info=True)
+            yield batch
+
+        if producer_error is not None:
+            raise producer_error
     finally:
+        active_error = sys.exc_info()[1]
+        cancel_requested = not producer_done.is_set()
         stop_event.set()
-        thread.join(timeout=1.0)
+        if cancel_requested:
+            _notebook_sync_bridge.cancel(producer_call)
+        try:
+            producer_call.result.result(timeout=_SYNC_STREAM_CLOSE_TIMEOUT_SECONDS)
+        except (asyncio.CancelledError, concurrent.futures.CancelledError):
+            pass
+        except concurrent.futures.TimeoutError as timeout_error:
+            lifecycle_error = RuntimeError(
+                "stream producer did not stop before the close timeout; cancellation remains tracked"
+            )
+            if active_error is not None and not isinstance(active_error, GeneratorExit):
+                logger.error("%s", lifecycle_error)
+            else:
+                raise lifecycle_error from timeout_error
+        except BaseException as error:
+            if error is active_error:
+                pass
+            elif active_error is not None and not isinstance(active_error, GeneratorExit):
+                logger.error(
+                    "stream producer cleanup failed after cancellation",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+            else:
+                raise
 
 
 # =============================================================================

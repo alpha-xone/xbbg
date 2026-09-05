@@ -3,19 +3,25 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    RecordBatch, StringArray, StructArray, Time64MicrosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, UInt32Array, UInt64Array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+    DurationSecondArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, RecordBatch, RecordBatchOptions,
+    StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
-use chrono::{DateTime, Datelike, NaiveDate, Offset, Timelike};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Offset, Timelike};
 use pyo3::exceptions::{
-    PyImportError, PyIndexError, PyKeyError, PyRuntimeError, PyTypeError, PyValueError,
+    PyImportError, PyIndexError, PyKeyError, PyOverflowError, PyRuntimeError, PyTypeError,
+    PyValueError,
 };
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyAny, PyBool, PyCapsule, PyDate, PyDateTime, PyDict, PyIterator, PyList, PyTime, PyTuple,
-    PyType, PyTzInfo,
+    PyAny, PyBool, PyBytes, PyCapsule, PyDate, PyDateTime, PyDict, PyInt, PyIterator, PyList,
+    PyTime, PyTuple, PyType, PyTzInfo,
 };
 use pyo3::IntoPyObjectExt;
 use pyo3_arrow::ffi::{
@@ -38,7 +44,7 @@ fn core_err_to_py(err: ArrowCoreError) -> PyErr {
             PyKeyError::new_err(format!("unknown column: {name}"))
         }
         ArrowCoreError::ColumnIndexOutOfRange => PyIndexError::new_err("column index out of range"),
-        ArrowCoreError::RowIndexOutOfRange => PyIndexError::new_err("column index out of range"),
+        ArrowCoreError::RowIndexOutOfRange => PyIndexError::new_err("row index out of range"),
         ArrowCoreError::InvalidSortDirection { column, direction } => PyValueError::new_err(
             format!("unsupported sort direction for {column}: {direction}"),
         ),
@@ -121,11 +127,28 @@ fn py_value_to_cell(value: &Bound<'_, PyAny>) -> PyResult<CellValue> {
     if let Ok(v) = value.extract::<i64>() {
         return Ok(CellValue::Int(v));
     }
+    if value.is_instance_of::<PyInt>() {
+        return Err(PyOverflowError::new_err(
+            "Python integer is outside the supported signed 64-bit Arrow range",
+        ));
+    }
     if let Ok(v) = value.extract::<f64>() {
         return Ok(CellValue::Float(v));
     }
     if let Ok(v) = value.extract::<String>() {
         return Ok(CellValue::Text(v));
+    }
+    if value.is_instance_of::<PyDateTime>() {
+        let text = value.call_method0("isoformat")?.extract::<String>()?;
+        if let Ok(datetime) = DateTime::parse_from_rfc3339(&text) {
+            return Ok(CellValue::Timestamp(datetime.timestamp_micros()));
+        }
+        if let Ok(datetime) = NaiveDateTime::parse_from_str(&text, "%Y-%m-%dT%H:%M:%S%.f") {
+            return Ok(CellValue::Timestamp(datetime.and_utc().timestamp_micros()));
+        }
+        return Err(PyValueError::new_err(format!(
+            "unsupported Python datetime representation: {text}"
+        )));
     }
     if let Ok(isoformat) = value.getattr("isoformat") {
         if let Ok(text) = isoformat.call0()?.extract::<String>() {
@@ -138,6 +161,41 @@ fn py_value_to_cell(value: &Bound<'_, PyAny>) -> PyResult<CellValue> {
         }
     }
     Ok(CellValue::Text(value.str()?.to_string()))
+}
+fn filter_value_supported(data_type: &DataType, needle: &CellValue) -> bool {
+    matches!(
+        (data_type, needle),
+        (_, CellValue::Null)
+            | (DataType::Boolean, CellValue::Bool(_))
+            | (
+                DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt8
+                    | DataType::UInt16
+                    | DataType::UInt32
+                    | DataType::UInt64
+                    | DataType::Float16
+                    | DataType::Float32
+                    | DataType::Float64,
+                CellValue::Int(_) | CellValue::Float(_)
+            )
+            | (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                CellValue::Text(_)
+            )
+            | (DataType::Date32 | DataType::Date64, CellValue::Date(_))
+            | (
+                DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond)
+                    | DataType::Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond),
+                CellValue::Int(_)
+            )
+            | (
+                DataType::Timestamp(_, _),
+                CellValue::Timestamp(_) | CellValue::Int(_)
+            )
+    )
 }
 
 fn rows_to_batch(rows: &Bound<'_, PyAny>) -> PyResult<RecordBatch> {
@@ -174,8 +232,9 @@ fn rows_to_batch(rows: &Bound<'_, PyAny>) -> PyResult<RecordBatch> {
         row_count += 1;
     }
 
-    if row_count == 0 {
-        return RecordBatch::try_new(Arc::new(Schema::empty()), vec![])
+    if columns.is_empty() {
+        let options = RecordBatchOptions::new().with_row_count(Some(row_count));
+        return RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options)
             .map_err(|e| PyValueError::new_err(e.to_string()));
     }
 
@@ -198,18 +257,18 @@ fn py_sequence_to_cells(values: &Bound<'_, PyAny>) -> PyResult<Vec<CellValue>> {
         .collect()
 }
 
-fn normalize_index(index: isize, len: usize) -> PyResult<usize> {
+fn normalize_index(index: isize, len: usize, axis: &str) -> PyResult<usize> {
     let len = len as isize;
     let idx = if index < 0 { len + index } else { index };
     if !(0..len).contains(&idx) {
-        return Err(PyIndexError::new_err("column index out of range"));
+        return Err(PyIndexError::new_err(format!("{axis} index out of range")));
     }
     Ok(idx as usize)
 }
 
 fn column_index_arg(value: &Bound<'_, PyAny>, schema: &SchemaRef) -> PyResult<usize> {
     if let Ok(index) = value.extract::<isize>() {
-        return normalize_index(index, schema.fields().len());
+        return normalize_index(index, schema.fields().len(), "column");
     }
     if let Ok(name) = value.extract::<String>() {
         return schema
@@ -234,9 +293,11 @@ fn column_indices_arg(value: &Bound<'_, PyAny>, schema: &SchemaRef) -> PyResult<
 }
 
 fn date32_to_py(py: Python<'_>, days: i32) -> PyResult<Py<PyAny>> {
-    let Some(date) = xbbg_arrow::scalar::date_from_days(days) else {
-        return Ok(py.None());
-    };
+    let date = xbbg_arrow::scalar::date_from_days(days).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "Arrow date32 value {days} is outside Python's date range"
+        ))
+    })?;
     Ok(
         PyDate::new(py, date.year(), date.month() as u8, date.day() as u8)?
             .into_any()
@@ -244,10 +305,22 @@ fn date32_to_py(py: Python<'_>, days: i32) -> PyResult<Py<PyAny>> {
     )
 }
 
+fn date64_to_py(py: Python<'_>, millis: i64) -> PyResult<Py<PyAny>> {
+    let days = millis.div_euclid(86_400_000);
+    let days = i32::try_from(days).map_err(|_| {
+        PyValueError::new_err(format!(
+            "Arrow date64 value {millis} is outside Python's date range"
+        ))
+    })?;
+    date32_to_py(py, days)
+}
+
 fn timestamp_to_py(py: Python<'_>, micros: i64, timezone: Option<&str>) -> PyResult<Py<PyAny>> {
-    let Some(dt) = DateTime::from_timestamp_micros(micros) else {
-        return Ok(py.None());
-    };
+    let dt = DateTime::from_timestamp_micros(micros).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "Arrow timestamp value {micros}us is outside Python's datetime range"
+        ))
+    })?;
 
     let utc = PyTzInfo::utc(py)?;
     let utc_datetime = PyDateTime::new(
@@ -300,9 +373,42 @@ fn timestamp_to_py(py: Python<'_>, micros: i64, timezone: Option<&str>) -> PyRes
         .unbind())
 }
 
-fn time64_micros_to_py(py: Python<'_>, micros: i64) -> PyResult<Py<PyAny>> {
+fn timestamp_unit_to_py(
+    py: Python<'_>,
+    value: i64,
+    unit: &TimeUnit,
+    timezone: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let micros = match unit {
+        TimeUnit::Second => value.checked_mul(1_000_000),
+        TimeUnit::Millisecond => value.checked_mul(1_000),
+        TimeUnit::Microsecond => Some(value),
+        TimeUnit::Nanosecond => Some(value.div_euclid(1_000)),
+    }
+    .ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "Arrow timestamp value {value} {unit:?} overflows microsecond conversion"
+        ))
+    })?;
+    timestamp_to_py(py, micros, timezone)
+}
+
+fn time_unit_to_py(py: Python<'_>, value: i64, unit: &TimeUnit) -> PyResult<Py<PyAny>> {
+    let micros = match unit {
+        TimeUnit::Second => value.checked_mul(1_000_000),
+        TimeUnit::Millisecond => value.checked_mul(1_000),
+        TimeUnit::Microsecond => Some(value),
+        TimeUnit::Nanosecond => Some(value.div_euclid(1_000)),
+    }
+    .ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "Arrow time value {value} {unit:?} overflows microsecond conversion"
+        ))
+    })?;
     if !(0..86_400_000_000).contains(&micros) {
-        return Ok(py.None());
+        return Err(PyValueError::new_err(format!(
+            "Arrow time value {value} {unit:?} is outside Python's time range"
+        )));
     }
     let seconds = micros / 1_000_000;
     let microsecond = (micros % 1_000_000) as u32;
@@ -314,40 +420,68 @@ fn time64_micros_to_py(py: Python<'_>, micros: i64) -> PyResult<Py<PyAny>> {
         .unbind())
 }
 
+fn duration_to_py(py: Python<'_>, value: i64, unit: &TimeUnit) -> PyResult<Py<PyAny>> {
+    let (seconds, micros) = match unit {
+        TimeUnit::Second => (value, 0),
+        TimeUnit::Millisecond => (value.div_euclid(1_000), value.rem_euclid(1_000) * 1_000),
+        TimeUnit::Microsecond => (value.div_euclid(1_000_000), value.rem_euclid(1_000_000)),
+        TimeUnit::Nanosecond => {
+            let total_micros = value / 1_000;
+            (
+                total_micros.div_euclid(1_000_000),
+                total_micros.rem_euclid(1_000_000),
+            )
+        }
+    };
+    Ok(py
+        .import("datetime")?
+        .getattr("timedelta")?
+        .call1((0, seconds, micros))?
+        .unbind())
+}
+
+fn decimal_to_py(py: Python<'_>, unscaled: String, scale: i8) -> PyResult<Py<PyAny>> {
+    let exact = format!("{unscaled}E{}", -i32::from(scale));
+    Ok(py
+        .import("decimal")?
+        .getattr("Decimal")?
+        .call1((exact,))?
+        .unbind())
+}
+
 fn scalar_to_py(py: Python<'_>, array: &dyn Array, row: usize) -> PyResult<Py<PyAny>> {
     if array.is_null(row) {
         return Ok(py.None());
     }
+
+    macro_rules! native_scalar {
+        ($array_ty:ty, $expect:literal) => {
+            array
+                .as_any()
+                .downcast_ref::<$array_ty>()
+                .expect($expect)
+                .value(row)
+                .into_py_any(py)
+        };
+    }
+
     match array.data_type() {
-        DataType::Boolean => array
+        DataType::Null => Ok(py.None()),
+        DataType::Boolean => native_scalar!(BooleanArray, "BooleanArray"),
+        DataType::Int8 => native_scalar!(Int8Array, "Int8Array"),
+        DataType::Int16 => native_scalar!(Int16Array, "Int16Array"),
+        DataType::Int32 => native_scalar!(Int32Array, "Int32Array"),
+        DataType::Int64 => native_scalar!(Int64Array, "Int64Array"),
+        DataType::UInt8 => native_scalar!(UInt8Array, "UInt8Array"),
+        DataType::UInt16 => native_scalar!(UInt16Array, "UInt16Array"),
+        DataType::UInt32 => native_scalar!(UInt32Array, "UInt32Array"),
+        DataType::UInt64 => native_scalar!(UInt64Array, "UInt64Array"),
+        DataType::Float16 => (array
             .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("BooleanArray")
+            .downcast_ref::<Float16Array>()
+            .expect("Float16Array")
             .value(row)
-            .into_py_any(py),
-        DataType::Int32 => array
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("Int32Array")
-            .value(row)
-            .into_py_any(py),
-        DataType::Int64 => array
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("Int64Array")
-            .value(row)
-            .into_py_any(py),
-        DataType::UInt32 => array
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .expect("UInt32Array")
-            .value(row)
-            .into_py_any(py),
-        DataType::UInt64 => array
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .expect("UInt64Array")
-            .value(row)
+            .to_f32() as f64)
             .into_py_any(py),
         DataType::Float32 => (array
             .as_any()
@@ -355,18 +489,55 @@ fn scalar_to_py(py: Python<'_>, array: &dyn Array, row: usize) -> PyResult<Py<Py
             .expect("Float32Array")
             .value(row) as f64)
             .into_py_any(py),
-        DataType::Float64 => array
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("Float64Array")
-            .value(row)
-            .into_py_any(py),
+        DataType::Float64 => native_scalar!(Float64Array, "Float64Array"),
         DataType::Utf8 => array
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("StringArray")
             .value(row)
             .into_py_any(py),
+        DataType::LargeUtf8 => array
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .expect("LargeStringArray")
+            .value(row)
+            .into_py_any(py),
+        DataType::Utf8View => array
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .expect("StringViewArray")
+            .value(row)
+            .into_py_any(py),
+        DataType::Binary => Ok(PyBytes::new(
+            py,
+            array
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .expect("BinaryArray")
+                .value(row),
+        )
+        .into_any()
+        .unbind()),
+        DataType::LargeBinary => Ok(PyBytes::new(
+            py,
+            array
+                .as_any()
+                .downcast_ref::<LargeBinaryArray>()
+                .expect("LargeBinaryArray")
+                .value(row),
+        )
+        .into_any()
+        .unbind()),
+        DataType::BinaryView => Ok(PyBytes::new(
+            py,
+            array
+                .as_any()
+                .downcast_ref::<BinaryViewArray>()
+                .expect("BinaryViewArray")
+                .value(row),
+        )
+        .into_any()
+        .unbind()),
         DataType::Date32 => date32_to_py(
             py,
             array
@@ -375,36 +546,117 @@ fn scalar_to_py(py: Python<'_>, array: &dyn Array, row: usize) -> PyResult<Py<Py
                 .expect("Date32Array")
                 .value(row),
         ),
-        DataType::Timestamp(TimeUnit::Microsecond, timezone) => timestamp_to_py(
+        DataType::Date64 => date64_to_py(
             py,
             array
                 .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .expect("TimestampMicrosecondArray")
+                .downcast_ref::<Date64Array>()
+                .expect("Date64Array")
                 .value(row),
-            timezone.as_deref(),
         ),
-        DataType::Time64(TimeUnit::Microsecond) => time64_micros_to_py(
+        DataType::Time32(TimeUnit::Second) => time_unit_to_py(
+            py,
+            i64::from(
+                array
+                    .as_any()
+                    .downcast_ref::<Time32SecondArray>()
+                    .expect("Time32SecondArray")
+                    .value(row),
+            ),
+            &TimeUnit::Second,
+        ),
+        DataType::Time32(TimeUnit::Millisecond) => time_unit_to_py(
+            py,
+            i64::from(
+                array
+                    .as_any()
+                    .downcast_ref::<Time32MillisecondArray>()
+                    .expect("Time32MillisecondArray")
+                    .value(row),
+            ),
+            &TimeUnit::Millisecond,
+        ),
+        DataType::Time64(TimeUnit::Microsecond) => time_unit_to_py(
             py,
             array
                 .as_any()
                 .downcast_ref::<Time64MicrosecondArray>()
                 .expect("Time64MicrosecondArray")
                 .value(row),
+            &TimeUnit::Microsecond,
         ),
-        DataType::Timestamp(TimeUnit::Millisecond, timezone) => timestamp_to_py(
+        DataType::Time64(TimeUnit::Nanosecond) => time_unit_to_py(
             py,
             array
                 .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .expect("TimestampMillisecondArray")
-                .value(row)
-                * 1_000,
-            timezone.as_deref(),
+                .downcast_ref::<Time64NanosecondArray>()
+                .expect("Time64NanosecondArray")
+                .value(row),
+            &TimeUnit::Nanosecond,
         ),
-        // Unsupported dtype: surface None (absent) instead of Debug-dumping
-        // the entire array into every cell.
-        _ => Ok(py.None()),
+        DataType::Timestamp(unit, timezone) => {
+            let value = match unit {
+                TimeUnit::Second => array
+                    .as_any()
+                    .downcast_ref::<TimestampSecondArray>()
+                    .expect("TimestampSecondArray")
+                    .value(row),
+                TimeUnit::Millisecond => array
+                    .as_any()
+                    .downcast_ref::<TimestampMillisecondArray>()
+                    .expect("TimestampMillisecondArray")
+                    .value(row),
+                TimeUnit::Microsecond => array
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .expect("TimestampMicrosecondArray")
+                    .value(row),
+                TimeUnit::Nanosecond => array
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("TimestampNanosecondArray")
+                    .value(row),
+            };
+            timestamp_unit_to_py(py, value, unit, timezone.as_deref())
+        }
+        DataType::Duration(unit) => {
+            let value = match unit {
+                TimeUnit::Second => array
+                    .as_any()
+                    .downcast_ref::<DurationSecondArray>()
+                    .expect("DurationSecondArray")
+                    .value(row),
+                TimeUnit::Millisecond => array
+                    .as_any()
+                    .downcast_ref::<DurationMillisecondArray>()
+                    .expect("DurationMillisecondArray")
+                    .value(row),
+                TimeUnit::Microsecond => array
+                    .as_any()
+                    .downcast_ref::<DurationMicrosecondArray>()
+                    .expect("DurationMicrosecondArray")
+                    .value(row),
+                TimeUnit::Nanosecond => array
+                    .as_any()
+                    .downcast_ref::<DurationNanosecondArray>()
+                    .expect("DurationNanosecondArray")
+                    .value(row),
+            };
+            duration_to_py(py, value, unit)
+        }
+        DataType::Decimal128(_, scale) if *scale >= 0 => decimal_to_py(
+            py,
+            array
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .expect("Decimal128Array")
+                .value(row)
+                .to_string(),
+            *scale,
+        ),
+        data_type => Err(PyTypeError::new_err(format!(
+            "Arrow dtype {data_type} cannot be materialized to a Python scalar without PyArrow"
+        ))),
     }
 }
 
@@ -489,6 +741,7 @@ pub struct ArrowField {
     field: FieldRef,
 }
 
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl ArrowField {
     #[getter]
@@ -523,6 +776,7 @@ pub struct ArrowSchema {
     schema: SchemaRef,
 }
 
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl ArrowSchema {
     #[getter]
@@ -545,8 +799,9 @@ impl ArrowSchema {
             .collect()
     }
 
-    fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyCapsule>> {
+    fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         to_schema_pycapsule(py, self.schema.as_ref())
+            .map(Bound::into_any)
             .map_err(|e| PyRuntimeError::new_err(format!("Arrow schema export failed: {e}")))
     }
 
@@ -568,6 +823,7 @@ impl ArrowColumn {
     }
 }
 
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl ArrowColumn {
     #[getter]
@@ -602,6 +858,11 @@ impl ArrowColumn {
         Self::new(self.data.slice(offset, length))
     }
 
+    /// Copy logical values into independent, right-sized Arrow buffers.
+    fn compact(&self) -> PyResult<Self> {
+        map_core(self.data.compact()).map(Self::new)
+    }
+
     fn to_pylist(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let values = PyList::empty(py);
         for value in column_to_pylist(py, &self.data)? {
@@ -625,7 +886,7 @@ impl ArrowColumn {
     }
 
     fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<Py<PyAny>> {
-        let idx = normalize_index(index, self.data.len())?;
+        let idx = normalize_index(index, self.data.len(), "row")?;
         let (chunk, row) = map_core(self.data.chunk_for_index(idx))?;
         scalar_to_py(py, chunk.as_ref(), row)
     }
@@ -694,6 +955,7 @@ impl ArrowRecordBatch {
     }
 }
 
+#[cfg_attr(feature = "stub-gen", gen_stub_pymethods)]
 #[pymethods]
 impl ArrowRecordBatch {
     #[getter]
@@ -749,13 +1011,18 @@ impl ArrowRecordBatch {
     fn __arrow_c_array__<'py>(
         &self,
         py: Python<'py>,
-        requested_schema: Option<Bound<'py, PyCapsule>>,
+        requested_schema: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyTuple>> {
+        let requested_schema = requested_schema
+            .as_ref()
+            .map(|value| value.cast::<PyCapsule>().cloned())
+            .transpose()?;
         Self::to_array_pycapsules(py, self.batch.clone(), requested_schema)
     }
 
-    fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyCapsule>> {
+    fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         to_schema_pycapsule(py, self.batch.schema_ref().as_ref())
+            .map(Bound::into_any)
             .map_err(|e| PyRuntimeError::new_err(format!("Arrow schema export failed: {e}")))
     }
 
@@ -810,6 +1077,17 @@ impl ArrowRecordBatch {
             .unwrap_or(self.batch.num_rows() - offset)
             .min(self.batch.num_rows() - offset);
         Self::new(self.batch.slice(offset, take))
+    }
+
+    /// Copy logical values into independent, right-sized Arrow buffers.
+    fn compact(&self) -> PyResult<Self> {
+        let table = map_core(self.table_data()?.compact())?;
+        let batch = table
+            .batches
+            .into_iter()
+            .next()
+            .expect("compacting one record batch preserves its physical batch");
+        Ok(Self::new(batch))
     }
 
     fn __len__(&self) -> usize {
@@ -1132,11 +1410,17 @@ impl ArrowTable {
         map_core(self.data.slice(offset, length)).map(Self::from_data)
     }
 
+    /// Copy logical values into independent, right-sized Arrow buffers.
+    fn compact(&self) -> PyResult<Self> {
+        map_core(self.data.compact()).map(Self::from_data)
+    }
+
     fn tail(&self, n: usize) -> PyResult<Self> {
         map_core(self.data.tail(n)).map(Self::from_data)
     }
 
-    fn sort_by(&self, sort_keys: Vec<(String, String)>) -> PyResult<Self> {
+    #[pyo3(signature = (sort_keys, *, nulls_last=true))]
+    fn sort_by(&self, sort_keys: Vec<(String, String)>, nulls_last: bool) -> PyResult<Self> {
         let keys = sort_keys
             .into_iter()
             .map(|(name, direction)| {
@@ -1149,11 +1433,18 @@ impl ArrowTable {
                     })
             })
             .collect::<PyResult<Vec<_>>>()?;
-        map_core(self.data.sort_by(&keys)).map(Self::from_data)
+        map_core(self.data.sort_by(&keys, !nulls_last)).map(Self::from_data)
     }
 
     fn filter_eq(&self, column: &str, value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let needle = py_value_to_cell(value)?;
+        let column_index = map_core(self.data.column_index(column))?;
+        let data_type = self.data.schema.field(column_index).data_type();
+        if !filter_value_supported(data_type, &needle) {
+            return Err(PyTypeError::new_err(format!(
+                "cannot compare Python value to Arrow column {column:?} with dtype {data_type}"
+            )));
+        }
         map_core(self.data.filter_eq(column, &needle)).map(Self::from_data)
     }
 
@@ -1212,7 +1503,7 @@ impl ArrowTable {
                 if result.data.schema.index_of("field").is_ok() {
                     sort_keys.push(("field".to_string(), "ascending".to_string()));
                 }
-                result = result.sort_by(sort_keys)?;
+                result = result.sort_by(sort_keys, true)?;
             }
         }
 
@@ -1404,6 +1695,159 @@ mod tests {
                 .expect("iso string");
 
             assert_eq!(iso, "1970-01-01T00:00:00+00:00");
+        });
+    }
+
+    #[test]
+    fn scalar_to_py_materializes_the_full_legacy_dtype_surface() {
+        Python::initialize();
+        Python::attach(|py| {
+            let int8 = Int8Array::from(vec![-7_i8]);
+            assert_eq!(
+                scalar_to_py(py, &int8, 0)
+                    .unwrap()
+                    .extract::<i64>(py)
+                    .unwrap(),
+                -7
+            );
+
+            let large_text = LargeStringArray::from(vec!["wide"]);
+            assert_eq!(
+                scalar_to_py(py, &large_text, 0)
+                    .unwrap()
+                    .extract::<String>(py)
+                    .unwrap(),
+                "wide"
+            );
+
+            let binary = BinaryArray::from(vec![b"\x00\xff".as_slice()]);
+            let value = scalar_to_py(py, &binary, 0).unwrap();
+            assert_eq!(
+                value.bind(py).cast::<PyBytes>().unwrap().as_bytes(),
+                b"\x00\xff"
+            );
+
+            let date64 = Date64Array::from(vec![86_400_000_i64]);
+            let date_iso: String = scalar_to_py(py, &date64, 0)
+                .unwrap()
+                .bind(py)
+                .call_method0("isoformat")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(date_iso, "1970-01-02");
+
+            let time = Time32SecondArray::from(vec![3_661_i32]);
+            let time_iso: String = scalar_to_py(py, &time, 0)
+                .unwrap()
+                .bind(py)
+                .call_method0("isoformat")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(time_iso, "01:01:01");
+
+            let timestamp = TimestampNanosecondArray::from(vec![1_234_567_000_i64]);
+            let timestamp_iso: String = scalar_to_py(py, &timestamp, 0)
+                .unwrap()
+                .bind(py)
+                .call_method0("isoformat")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(timestamp_iso, "1970-01-01T00:00:01.234567+00:00");
+
+            let duration = DurationMillisecondArray::from(vec![1_500_i64]);
+            let seconds: f64 = scalar_to_py(py, &duration, 0)
+                .unwrap()
+                .bind(py)
+                .call_method0("total_seconds")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(seconds, 1.5);
+
+            let decimal = Decimal128Array::from(vec![
+                12_345_678_901_234_567_890_123_456_789_012_345_678_i128,
+            ])
+            .with_precision_and_scale(38, 2)
+            .unwrap();
+            assert_eq!(
+                scalar_to_py(py, &decimal, 0)
+                    .unwrap()
+                    .bind(py)
+                    .str()
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "123456789012345678901234567890123456.78"
+            );
+        });
+    }
+
+    #[test]
+    fn empty_rows_and_python_datetimes_keep_valid_native_types() {
+        Python::initialize();
+        Python::attach(|py| {
+            let rows = PyList::empty(py).into_any();
+            let empty = rows_to_batch(&rows).unwrap();
+            assert_eq!(empty.num_rows(), 0);
+            assert_eq!(empty.num_columns(), 0);
+
+            let rows = PyList::empty(py);
+            rows.append(PyDict::new(py)).unwrap();
+            rows.append(PyDict::new(py)).unwrap();
+            let empty_columns = rows_to_batch(&rows.into_any()).unwrap();
+            assert_eq!(empty_columns.num_rows(), 2);
+            assert_eq!(empty_columns.num_columns(), 0);
+
+            let datetime = py
+                .import("datetime")
+                .unwrap()
+                .getattr("datetime")
+                .unwrap()
+                .call1((2024, 1, 2, 3, 4, 5, 123_456))
+                .unwrap();
+            let expected = NaiveDate::from_ymd_opt(2024, 1, 2)
+                .unwrap()
+                .and_hms_micro_opt(3, 4, 5, 123_456)
+                .unwrap()
+                .and_utc()
+                .timestamp_micros();
+            let cell = py_value_to_cell(&datetime).unwrap();
+            assert_eq!(cell, CellValue::Timestamp(expected));
+            let (field, array) = build_array("timestamp", std::slice::from_ref(&cell));
+            assert_eq!(
+                field.data_type(),
+                &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+            );
+            assert!(xbbg_arrow::cell_matches(array.as_ref(), 0, &cell));
+        });
+    }
+
+    #[test]
+    fn python_integer_overflow_is_not_rounded_to_float() {
+        Python::initialize();
+        Python::attach(|py| {
+            let huge = py
+                .import("builtins")
+                .unwrap()
+                .getattr("pow")
+                .unwrap()
+                .call1((2, 63))
+                .unwrap();
+            let err = py_value_to_cell(&huge).unwrap_err();
+            assert!(err.is_instance_of::<PyOverflowError>(py));
+        });
+    }
+
+    #[test]
+    fn scalar_to_py_fails_closed_for_non_null_unsupported_types() {
+        Python::initialize();
+        Python::attach(|py| {
+            let unsupported = StructArray::new_empty_fields(1, None);
+            let err = scalar_to_py(py, &unsupported, 0).unwrap_err();
+            assert!(err.is_instance_of::<PyTypeError>(py));
         });
     }
 

@@ -129,6 +129,12 @@ fn main() {
     let warmup_iterations = env_usize("BENCH_WARMUP", DEFAULT_WARMUP);
 
     let dense_strings: Vec<String> = (0..1024).map(|idx| format!("SECURITY_{idx:04}")).collect();
+    let long_strings: Vec<String> = (0..10_000)
+        .map(|idx| {
+            let prefix = format!("SECURITY_{idx:08}_");
+            format!("{prefix}{}", "X".repeat(256 - prefix.len()))
+        })
+        .collect();
     let mixed_hints = vec![
         ("ticker".to_string(), ArrowType::String),
         ("px_last".to_string(), ArrowType::Float64),
@@ -166,12 +172,28 @@ fn main() {
             || bench_sparse_float64_null(rows),
         ),
         run_scenario(
+            "clustered_50pct_float64_null",
+            rows,
+            1,
+            iterations,
+            warmup_iterations,
+            || bench_clustered_float64_null(rows),
+        ),
+        run_scenario(
             "dense_string",
             rows,
             1,
             iterations,
             warmup_iterations,
             || bench_dense_string(rows, &dense_strings),
+        ),
+        run_scenario(
+            "long_high_cardinality_string_256b_10k",
+            rows,
+            1,
+            iterations,
+            warmup_iterations,
+            || bench_dense_string(rows, &long_strings),
         ),
         run_scenario(
             "mixed_5_column_rows",
@@ -290,11 +312,25 @@ fn bench_sparse_float64_null(rows: usize) -> usize {
     rows
 }
 
+fn bench_clustered_float64_null(rows: usize) -> usize {
+    let mut builder = TypedBuilder::new(ArrowType::Float64);
+    for row in 0..rows {
+        if row < rows / 2 {
+            builder.append_null();
+        } else {
+            builder.append_value(Some(Value::Float64(row as f64 * 0.5)));
+        }
+    }
+    let array = builder.finish();
+    black_box(array.null_count());
+    rows
+}
+
 fn bench_dense_string(rows: usize, values: &[String]) -> usize {
     let mut builder = TypedBuilder::new(ArrowType::String);
 
     for row in 0..rows {
-        builder.append_value(Some(Value::String(values[row & 1023].as_str())));
+        builder.append_value(Some(Value::String(values[row % values.len()].as_str())));
     }
 
     let array = builder.finish();
@@ -452,21 +488,37 @@ fn results_json(
     warmup_iterations: usize,
     timestamp: u64,
 ) -> String {
-    let build_mode = xbbg_bench::build_mode();
+    let input_descriptor = format!(
+        "rows={rows};iterations={iterations};warmup={warmup_iterations};scenarios={}",
+        results.len()
+    );
+    let provenance = xbbg_bench::benchmark_provenance_json(&input_descriptor);
     let mut json = String::new();
     writeln!(&mut json, "{{").unwrap();
     writeln!(&mut json, "  \"benchmark\": \"arrow_builder_append\",").unwrap();
+    writeln!(&mut json, "  \"schema_version\": 2,").unwrap();
+    writeln!(&mut json, "  \"offline\": true,").unwrap();
+    writeln!(
+        &mut json,
+        "  \"coverage\": \"synthetic TypedBuilder and RecordBatch paths; no Bloomberg SDK or network\","
+    )
+    .unwrap();
     writeln!(&mut json, "  \"timestamp_unix\": {timestamp},").unwrap();
     writeln!(&mut json, "  \"rows\": {rows},").unwrap();
     writeln!(&mut json, "  \"iterations\": {iterations},").unwrap();
     writeln!(&mut json, "  \"warmup_iterations\": {warmup_iterations},").unwrap();
     writeln!(
         &mut json,
-        "  \"target_cpu\": {{ \"native\": {} }},",
-        build_mode.target_cpu_native
+        "  \"timing_scope\": \"warm uninstrumented append plus finalization; fixture strings allocated before timing\","
     )
     .unwrap();
-    writeln!(&mut json, "  \"debug_build\": {},", build_mode.debug_build).unwrap();
+    writeln!(
+        &mut json,
+        "  \"percentile_policy\": \"p50 reported from {} samples; p95 requires at least 20 and p99 at least 100\",",
+        iterations
+    )
+    .unwrap();
+    writeln!(&mut json, "  \"provenance\": {provenance},").unwrap();
     writeln!(&mut json, "  \"results\": [").unwrap();
 
     for (idx, result) in results.iter().enumerate() {

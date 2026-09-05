@@ -1,6 +1,7 @@
 // Allow large error types - BlpError contains rich context for debugging
 #![allow(clippy::result_large_err)]
 
+mod cache_io;
 pub mod engine;
 mod errors;
 pub mod field_cache;
@@ -12,7 +13,7 @@ pub mod services;
 pub use errors::BlpAsyncError;
 
 // Worker-pool Engine — the primary API
-pub use engine::{Engine, EngineConfig, OverflowPolicy, SlabKey, ValidationMode};
+pub use engine::{Engine, EngineConfig, OverflowPolicy, RequestStream, SlabKey, ValidationMode};
 
 // Identity / entitlement types surfaced by Engine::seat_type and
 // Engine::check_entitlements.

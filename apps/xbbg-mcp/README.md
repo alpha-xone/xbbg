@@ -1,5 +1,7 @@
 # xbbg-mcp
 
+Last updated: 2026-09-04.
+
 Stdio MCP server for Bloomberg request/response workflows backed by `xbbg-async`.
 
 This binary is intended for coding agents such as Claude Code and OpenCode that can launch a local MCP server process and call tools over stdio.
@@ -18,7 +20,7 @@ The current server exposes request/response tools only:
 - `check_entitlements` - entitlement-ID check for a Bloomberg service
 - `request` - generic raw/custom request path
 
-Responses are returned as bounded structured JSON with Arrow schema metadata so an agent can inspect the shape without receiving an unbounded payload.
+Responses are returned as bounded structured JSON with Arrow schema metadata so an agent can inspect the shape without receiving an unbounded payload. Limits cover rows, cells, strings, metadata inspection/retention, and the final serialized payload; a row limit alone is not the output bound.
 
 ## Entitlement IDs
 
@@ -46,13 +48,13 @@ The dedicated `bdp`, `bds`, `bdh`, and `bdib` tools advertise `return_eids` dire
 }
 ```
 
-Bounded results expose the EID map as structured JSON at `metadata["xbbg.eid_data"]`, alongside `schema`, `row_count`, `returned_rows`, `truncated`, and `rows`. Pass the collected IDs to the read-only `check_entitlements` tool; `service` defaults to `//blp/refdata`:
+When retained within the metadata and output budgets, results expose the EID map as structured JSON at `metadata["xbbg.eid_data"]`, alongside `schema`, `row_count`, `returned_rows`, `truncated`, and `rows`. `truncated` is an object of flags, not a single boolean. Consult `metadata_counts["xbbg.eid_data"]` when present for total/returned EID and security counts, `valid`, and `counts_complete`; an unknown total is `null`, not zero. `truncation_counts.omitted_priority_metadata` identifies priority metadata that could not be retained. Pass the collected IDs to the read-only `check_entitlements` tool; `service` defaults to `//blp/refdata`:
 
 ```json
 { "eids": [101, 202], "service": "//blp/refdata" }
 ```
 
-The check result includes `service`, `eids`, `entitled`, and `failed_eids`.
+The check result includes `service`, `eids`, `entitled`, and `failed_eids`, plus total, returned, and omitted counts for both ID lists and per-component `truncated` flags. Failed IDs receive the shared cell/byte allowance before the echoed input IDs. A shortened list must not be interpreted as the full entitlement result.
 
 ## Install from GitHub Releases
 
@@ -165,8 +167,6 @@ Common settings:
 - `XBBG_MCP_IP_ADDRESS`
 - `XBBG_MCP_TOKEN`
 - `XBBG_MCP_REQUEST_POOL_SIZE`
-- `XBBG_MCP_MAX_ROWS`
-- `XBBG_MCP_MAX_STRING_CHARS`
 - `XBBG_MCP_VALIDATION_MODE` / `XBBG_VALIDATION_MODE` – `disabled` (default), `lenient`, `strict`
 - `XBBG_MCP_SDK_LOG_LEVEL` / `XBBG_SDK_LOG_LEVEL` – `off` (default), `fatal`, `error`, `warn`, `info`, `debug`, `trace`
 - `XBBG_MCP_OVERFLOW_POLICY` / `XBBG_OVERFLOW_POLICY` – `drop_newest` (default), `block`
@@ -181,6 +181,59 @@ Supported auth methods:
 - `directory`
 - `manual`
 - `token`
+
+### Result budgets
+
+These MCP-only environment settings use integer values; unset settings use the defaults below. Values below the minimum or invalid integers cause configuration to fail rather than silently disabling a limit.
+
+| Setting | Default | Minimum | Scope |
+| --- | ---: | ---: | --- |
+| `XBBG_MCP_MAX_ROWS` | 500 | 1 | Returned rows |
+| `XBBG_MCP_MAX_CELLS` | 50,000 | 1 | Returned cells and inspected schema columns; also shared entitlement-list items and validation-error record count |
+| `XBBG_MCP_MAX_METADATA_PROPERTIES` | 50,000 | 1 | Aggregate retained metadata properties/array items and metadata-entry inspection |
+| `XBBG_MCP_MAX_METADATA_BYTES` | 65,536 | 1 | Aggregate raw metadata inspection bytes before parsing, and retained metadata plus its count summaries |
+| `XBBG_MCP_MAX_STRING_CHARS` | 2,048 | 1 | Unicode characters per string |
+| `XBBG_MCP_MAX_STRING_BYTES` | 8,192 | 3 | UTF-8 bytes per string, including a truncation marker when needed |
+| `XBBG_MCP_MAX_RESULT_BYTES` | 1,048,576 | 2,048 | Final serialized structured JSON payload, including schema, metadata, and diagnostics; also bounds serialized error results |
+
+The final-byte limit includes JSON escaping and envelope overhead; it is not just a sum of raw string lengths and does not describe the surrounding MCP transport framing. The limits are ceilings: metadata and schema consume space before rows, so a payload may return fewer rows or columns than their individual limits allow. The cell allowance applies across returned rows and columns, not separately to every row. Even zero-row batches have bounded schema output.
+
+String values are shortened on Unicode boundaries. Column names and metadata keys are identities: oversized names are omitted rather than shortened, and duplicate column names are not silently overwritten in JSON rows. Nested Arrow values are represented by a bounded omission marker instead of recursively formatting an unbounded cell; omission counts distinguish this from an ordinary scalar value. Integer values outside JavaScript's safe range are returned as strings rather than rounded numbers.
+
+Metadata inspection is bounded before JSON parsing. Oversized entries and generic metadata that cannot be inspected within the aggregate allowance may be omitted without a full scan. `xbbg.security_errors`, `xbbg.field_exceptions`, and `xbbg.eid_data` are prioritized before generic metadata and rows. Diagnostic records are retained with their structure rather than arbitrary property fragments, but string contents and the number of records remain bounded; even priority metadata can be omitted when it cannot fit.
+
+### Output diagnostics and errors
+
+Result envelopes are extensible. For example, a one-row result can include the following excerpt (additional counters are omitted here):
+
+```json
+{
+  "schema": [{ "name": "PX_LAST", "data_type": "Float64", "nullable": true }],
+  "row_count": 1,
+  "column_count": 1,
+  "returned_rows": 1,
+  "returned_columns": 1,
+  "returned_cells": 1,
+  "result_budget_bytes": 1048576,
+  "truncated": {
+    "rows": false,
+    "columns": false,
+    "cells": false,
+    "values": false,
+    "metadata": false,
+    "output": false
+  },
+  "rows": [{ "PX_LAST": 190.1 }]
+}
+```
+
+`row_count` and `column_count` describe the source batch; the `returned_*` fields describe what was emitted. `truncation_counts` reports omissions and inspection completeness, including `omitted_rows`, `omitted_columns`, `omitted_cells`, `known_omitted_value_bytes`, `omitted_complex_values`, and `known_omitted_metadata_properties`. Treat `known_*` counts as lower bounds unless completeness is established, not as evidence of an exhaustive scan. In particular, `schema_column_count_complete`, `metadata_input_count_complete`, and `metadata_property_count_complete` qualify the related diagnostics; `omitted_metadata_input_bytes` is `null` when the input count is incomplete. Optional `metadata_counts` supplies additional per-key diagnostics.
+
+Errors are bounded too: request/validation/internal failures remain errors, not success-shaped empty results. Error messages respect string and escaped-JSON byte limits; `message_truncated` indicates shortening. Existing adapter error codes are preserved, while omitted auxiliary error data is marked with `error_data_omitted`. Validation errors return bounded structured `errors` records with `path`, `message`, and a per-record `truncated` flag, plus `total_errors`, `returned_errors`, and `omitted_errors`. Space is reserved for the primary validation diagnostic even at the 2,048-byte minimum result budget: its path/message take priority over a long summary or optional `suggestion`. The path and message can be shortened and suggestions or later records omitted, but a later error does not displace the primary diagnostic.
+
+### Serialization concurrency
+
+The server uses two async runtime workers. Small result conversions stay inline; larger or expensive conversions are offloaded to blocking workers. A shared permit limit allows at most two offloaded serializations at once, with the permit held until conversion finishes. This bounds serialization concurrency, not the total process thread count: Bloomberg engine work and stdio handling have their own lifecycle.
 
 ## Privacy Policy
 

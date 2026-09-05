@@ -74,6 +74,8 @@ arrow-arith = "59.2.0"
 # arrow-array declares no `default` feature, so disabling defaults is a no-op
 # and simply keeps every member's inherit line uniform.
 arrow-array = { version = "59.2.0", default-features = false }
+arrow-buffer = "59.2.0"
+arrow-data = "59.2.0"
 arrow-ord = "59.2.0"
 arrow-schema = "59.2.0"
 arrow-select = "59.2.0"

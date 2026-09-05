@@ -336,7 +336,7 @@ mod tests {
             }],
         );
 
-        cache.insert(service, schema);
+        cache.insert_memory(service, schema);
         cache
     }
 

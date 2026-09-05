@@ -77,21 +77,41 @@ await bdh('AAPL US Equity', 'PX_LAST', { start: new Date('2024-01-01'), end: '20
 await bdtick('AAPL US Equity', new Date('2024-12-01T09:30Z'), Date.UTC(2024, 11, 1, 16, 0));
 ```
 
-Subscriptions use a NAPI Arrow zero-copy transfer path for supported primitive/string/time/timestamp columns, constructing Apache Arrow JS tables directly from native Arrow buffers instead of serializing every update through Arrow IPC. Unsupported or sliced Arrow subscription schemas now fail fast with a column-level diagnostic so schema gaps are visible instead of silently switching transport paths.
+Subscriptions yield scalar `Tick` objects by default. Choose `sub.arrow()` to construct Apache Arrow JS tables directly from native descriptors without Arrow IPC for supported primitive, binary/string, date/time, timestamp, and null columns. The exposed mutable buffers are JS-owned snapshots: exclusive, bounded native allocations can transfer ownership, while shared, sliced, or oversized storage is copied or canonicalized before exposure. JS mutation therefore cannot change a retained Rust Arrow source. No-IPC construction does **not** imply a universal zero-copy Rust/JS boundary. Unsupported types fail with column-level diagnostics rather than silently changing transport.
 Pass `{ allFields: true }` to `stream()` / `subscribe()` / service stream helpers to expose every top-level scalar field Bloomberg sends, matching Python's `all_fields=True`. The default remains filtered mode: requested fields plus `MKTDATA_EVENT_TYPE` and `MKTDATA_EVENT_SUBTYPE`.
+
+### Subscription lifecycle
+
+- Choose scalar iteration (`sub.next()` / `for await`) or Arrow iteration (`sub.arrow()`) once per native subscription. The first read or draining close fixes the format; mixing formats raises `TypeError`. Reads are serialized across views, not independent consumers.
+- `unsubscribe()` discards unread values. `unsubscribe(true)` returns buffered values in the selected format, including pending JS values, an in-flight batch, and the native drain; use the Arrow view's `unsubscribe(true)` after Arrow reads. Draining through the wrong view closes without draining and reports the format error.
+- Close is shared across scalar/Arrow views and wakes pending reads. Concurrent closes share cleanup rather than unsubscribing twice; repeated closes do not replay drained values. Consumed and discarded pending values are released.
+- `return()` and an early `for await` exit await non-draining cleanup. For manual reads, close in `finally`. `next({ signal })` accepts an `AbortSignal`; abort closes the whole subscription, not just that read, and waits for cleanup before rejecting.
+- Read/conversion failures trigger cleanup. If cleanup also fails, an `AggregateError` preserves both failures instead of silently hiding the cleanup error.
 
 ### Subscription replay benchmark
 
-`npm run bench:subscription-replay` is a TypeScript benchmark script for one-update-at-a-time subscription processing. It does not change the production streaming API and does not batch updates by default. Use `--path legacy` for the original encode+decode measurement, `--path arrow-decode-only` to exclude benchmark-only IPC encoding from timed results, and `--path subscription-wrapper` to time the current JS `Subscription.next()` wrapper with fake native zero-copy descriptors. `--consume rows|vector|schema|none` controls how much decoded output is touched; `rows` remains the default for continuity with prior results. Use `--warmup-iterations N` for untimed replay warmup. Live capture exercises the default native subscription path and prints `sub.stats` telemetry; unsupported-schema diagnostics are surfaced when the native stream returns a schema the zero-copy bridge cannot describe.
+`npm run bench:subscription-replay` measures offline synthetic/JSONL replay, not Bloomberg end-to-end latency. Replay batches default to **64 rows**; use `--batch-rows 1` for one-update-at-a-time comparisons. Timing scopes differ:
+
+- `--path legacy`: row-array construction, IPC encoding, IPC decoding, and the selected consumer.
+- `--path arrow-decode-only`: decoding prebuilt IPC plus the consumer; IPC encoding is outside the timed loop.
+- `--path subscription-wrapper`: an autonomous bounded **synthetic** native-descriptor queue, `ArrowSubscription.next()`, descriptor-to-Arrow construction, and the consumer. It does not measure Rust descriptor production, the native ownership boundary, SDK events, or network latency.
+
+`--consume rows|vector|schema|none` selects consumption (`rows` is the default; `rows` and `vector` touch every cell). Setup and `--warmup-iterations N` are separate from measured replay. Per-batch service timings include the selected read/conversion/consumer path; `--consumer-delay-ms` is excluded from those samples but included in elapsed throughput. The wrapper reports queue counts, drops, and high-water marks in **batches**; `--queue-capacity`, `--producer-burst`, `--cancel-after-rows`, and `--drain-on-cancel` exercise bounded queue/cancellation behavior.
+
+Duration summaries report their sample count: **p95 requires at least 20 samples**, **p99 at least 100**, otherwise the value is `null`. These are per-batch samples, not a claim of independent live-event latency observations. Memory is sampled before/after one **separate untimed replay** using heap, external, ArrayBuffer, and RSS counters; it is not peak memory or an allocation total.
+
+Keep the result's provenance with any comparison: input/fixture hash, Node/V8, OS/CPU, package/Arrow versions, and the resolved native artifact path/hash. When available, `.native-build-info.json` records the producing Rust compiler, build profile/optimization, target CPU/features, flags, allocator, commit, Bloomberg SDK header version and library hash, and artifact hash. Check the reported attestation/hash-match status; missing or unattested build information is not verified compiler/SDK provenance.
+
+Live capture requires an available, authorized Bloomberg endpoint, writes ticks to JSONL, and reports existing `sub.stats` telemetry. Its elapsed time starts after connection/subscription setup and includes native waits, the JS wrapper, `toObject()`, JSON serialization, file backpressure, and cleanup—not just Bloomberg latency. Replaying a capture remains offline work. No live latency gain is established by these benchmarks.
 
 ```bash
-# Synthetic one-update replay, no Bloomberg connection needed; row materialization is the default
+# Synthetic 64-row batches, no Bloomberg connection needed; rows consumer is the default
 npm run bench:subscription-replay -- --rows 100000 --iterations 3
 
 # Time JS Arrow decode only, with IPC buffers precomputed outside the timed loop
 npm run bench:subscription-replay -- --path arrow-decode-only --rows 100000 --iterations 3
 
-# Time the current JS Subscription wrapper around fake native zero-copy descriptors
+# Time the ArrowSubscription wrapper around a synthetic bounded descriptor queue
 npm run build:ts
 npm run bench:subscription-replay -- --path subscription-wrapper --rows 100000 --iterations 3
 
@@ -99,7 +119,7 @@ npm run bench:subscription-replay -- --path subscription-wrapper --rows 100000 -
 npm run bench:subscription-replay -- --capture-live "XBTUSD Curncy" --capture-ms 10000 --out tmp/xbtusd-ticks.jsonl
 
 # Replay captured ticks one update at a time with schema-only consumption after one warmup iteration
-npm run bench:subscription-replay -- --fixture tmp/xbtusd-ticks.jsonl --iterations 10 --warmup-iterations 1 --consume schema
+npm run bench:subscription-replay -- --fixture tmp/xbtusd-ticks.jsonl --batch-rows 1 --iterations 10 --warmup-iterations 1 --consume schema
 ```
 
 ## Usage
@@ -301,13 +321,20 @@ const px = await engine.currencyConversion('700 HK Equity', 'USD', '20240101', '
 - `socks5` for proxied access to already-provisioned direct Bloomberg endpoints
 - `retryPolicy`, `numStartAttempts`, and recovery settings for reconnect behavior
 - `shardRequests`, `shardThreshold`, `shardChunkSize`, and `shardMaxConcurrent` for opt-in sharding of wide multi-security `bdp`/`bdh` requests
+- `runtimeWorkerThreads`: shared Tokio runtime threads, default **2**, minimum **1**; this is not the total process thread count
+- `subscriptionPoolSize`: pre-warmed subscription sessions, default **1**, minimum **0**
+- `maxSubscriptionSessions`: concurrent subscription-session cap, default **32**, minimum **1**, and at least `subscriptionPoolSize`; native admission waits for capacity instead of allocating unbounded sessions
 
 The JS binding forwards these fields directly to the Rust engine, so Node can configure the same auth and transport features already available in the core runtime. Invalid transport combinations such as `zfpRemote` plus direct hosts fail during configuration instead of silently connecting to `localhost:8194`.
+
+Engine shutdown closes admission and signals idle and checked-out subscription sessions so blocked operations can terminate. Await subscription cleanup while the engine is still available.
+
+Field-cache publication on Windows uses `FileRenameInfoEx` with POSIX rename semantics (Windows 10 1607+ and a supporting filesystem). Existing readers retain the old snapshot while new opens see the complete replacement. Unsupported filesystems report persistence errors and retain the prior snapshot, with no unsafe replacement fallback.
 
 ## Features
 
 - Native N-API bindings (no HTTP overhead)
-- Zero-copy Arrow buffers via `apache-arrow`
+- No-IPC subscription Arrow construction via `apache-arrow`, with JS-owned mutable buffer snapshots
 - Async/await with proper backpressure
 - TypeScript-first with full type definitions
 - Cross-platform prebuilt addon packaging: macOS arm64, Linux x64 (glibc 2.28+), Windows x64

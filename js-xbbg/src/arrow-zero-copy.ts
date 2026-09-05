@@ -40,46 +40,53 @@ import type { NativeArrowColumn, NativeArrowZeroCopyBatch } from './napi';
 const NATIVE_ARROW_BUFFERS = Symbol('@xbbg/nativeArrowBuffers');
 const EMPTY_BUFFER = Buffer.alloc(0);
 
-interface CachedArrowSchema {
+interface CachedArrowLayout {
   readonly fields: Field[];
   readonly types: DataType[];
-  readonly schema: Schema;
   readonly structType: Struct;
 }
 
-const schemaCache = new Map<string, CachedArrowSchema>();
+export const NATIVE_ARROW_LAYOUT_CACHE_LIMIT = 128;
 
-function schemaFingerprint(batch: NativeArrowZeroCopyBatch): string {
-  const columns = batch.columns
+const layoutCache = new Map<string, CachedArrowLayout>();
+
+function layoutFingerprint(columns: readonly NativeArrowColumn[]): string {
+  return columns
     .map((column) =>
       [column.name, column.type, column.nullable ? '1' : '0', column.timezone ?? ''].join('\u0000'),
     )
     .join('\u0001');
-  const metadata = Object.entries(batch.metadata)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}\u0000${value}`)
-    .join('\u0001');
-  return `${columns}\u0002${metadata}`;
 }
 
-function cachedSchema(batch: NativeArrowZeroCopyBatch): CachedArrowSchema {
-  const fingerprint = schemaFingerprint(batch);
-  const cached = schemaCache.get(fingerprint);
+function cachedLayout(columns: readonly NativeArrowColumn[]): CachedArrowLayout {
+  const fingerprint = layoutFingerprint(columns);
+  const cached = layoutCache.get(fingerprint);
   if (cached !== undefined) {
+    layoutCache.delete(fingerprint);
+    layoutCache.set(fingerprint, cached);
     return cached;
   }
-  const types = batch.columns.map(arrowType);
-  const fields = batch.columns.map((column, index) => {
+  const types = columns.map(arrowType);
+  const fields = columns.map((column, index) => {
     const type = types[index];
     if (type === undefined) {
       throw new Error(`Missing Arrow type for column ${column.name}`);
     }
     return new Field(column.name, type, column.nullable);
   });
-  const schema = new Schema(fields, new Map(Object.entries(batch.metadata)));
-  const created = { fields, schema, structType: new Struct(fields), types };
-  schemaCache.set(fingerprint, created);
+  const created = { fields, structType: new Struct(fields), types };
+  if (layoutCache.size >= NATIVE_ARROW_LAYOUT_CACHE_LIMIT) {
+    const oldest = layoutCache.keys().next().value;
+    if (oldest !== undefined) {
+      layoutCache.delete(oldest);
+    }
+  }
+  layoutCache.set(fingerprint, created);
   return created;
+}
+
+export function nativeArrowLayoutCacheSize(): number {
+  return layoutCache.size;
 }
 
 function unsupportedNativeArrowType(type: never): never {
@@ -93,7 +100,7 @@ interface TypedArrayConstructor<T extends ArrayBufferView> {
 
 export function tableFromNativeArrowBatch(batch: NativeArrowZeroCopyBatch): Table {
   const retainedBuffers: Buffer[] = [];
-  const cached = cachedSchema(batch);
+  const cached = cachedLayout(batch.columns);
   const children = batch.columns.map((column, index) => {
     const type = cached.types[index];
     if (type === undefined) {
@@ -102,12 +109,13 @@ export function tableFromNativeArrowBatch(batch: NativeArrowZeroCopyBatch): Tabl
     return dataFromColumn(column, retainedBuffers, type);
   });
 
+  const schema = new Schema(cached.fields, new Map(Object.entries(batch.metadata)));
   const structData = makeData({
     children,
     length: batch.numRows,
     type: cached.structType,
   });
-  const table = new Table(cached.schema, new RecordBatch(cached.schema, structData));
+  const table = new Table(schema, new RecordBatch(schema, structData));
 
   // Keep the original Node Buffer views alive. Numeric Arrow vectors retain typed
   // Views over the same backing ArrayBuffers, but keeping these Buffer objects on

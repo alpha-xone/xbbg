@@ -189,35 +189,20 @@ pub async fn recipe_etf_nav_history(
     let px_targets = px_history_targets(&resolutions);
     let fallback_sources = missing_nav_sources(&resolutions);
 
-    let mut px_history = HistorySeries::new();
-    if !px_targets.is_empty() {
-        let batch = engine
-            .request(build_history_request(
-                px_targets.clone(),
-                FIELD_PX_LAST,
-                &start,
-                &end,
-            ))
-            .await?;
-        let diagnostics = parse_response_diagnostics(&batch)?;
-        check_value_source_diagnostics(&px_targets, &diagnostics)?;
-        px_history = strict_history_value_map(&batch)?;
-    }
-
-    let mut fund_history = HistorySeries::new();
-    if !fallback_sources.is_empty() {
-        let batch = engine
-            .request(build_history_request(
-                fallback_sources.clone(),
-                FIELD_FUND_NET_ASSET_VAL,
-                &start,
-                &end,
-            ))
-            .await?;
-        let diagnostics = parse_response_diagnostics(&batch)?;
-        check_value_source_diagnostics(&fallback_sources, &diagnostics)?;
-        fund_history = strict_history_value_map(&batch)?;
-    }
+    // Relationship and target validation have completed, so these disjoint
+    // value requests can run concurrently. Results are unwrapped in request
+    // order below so PX_LAST retains deterministic error precedence.
+    let (px_result, fund_result) = tokio::join!(
+        request_history_series(engine, px_targets, FIELD_PX_LAST, &start, &end),
+        request_history_series(
+            engine,
+            fallback_sources,
+            FIELD_FUND_NET_ASSET_VAL,
+            &start,
+            &end
+        )
+    );
+    let (px_history, fund_history) = ordered_history_results(px_result, fund_result)?;
 
     let rows = build_history_rows(&resolutions, &px_history, &fund_history);
     build_history_batch(&rows)
@@ -646,6 +631,39 @@ fn build_history_request(
         )]),
         ..Default::default()
     }
+}
+
+async fn request_history_series(
+    engine: &Engine,
+    securities: Vec<String>,
+    field: &str,
+    start_date: &str,
+    end_date: &str,
+) -> Result<HistorySeries> {
+    if securities.is_empty() {
+        return Ok(HistorySeries::new());
+    }
+
+    let batch = engine
+        .request(build_history_request(
+            securities.clone(),
+            field,
+            start_date,
+            end_date,
+        ))
+        .await?;
+    let diagnostics = parse_response_diagnostics(&batch)?;
+    check_value_source_diagnostics(&securities, &diagnostics)?;
+    strict_history_value_map(&batch)
+}
+
+fn ordered_history_results(
+    px_result: Result<HistorySeries>,
+    fund_result: Result<HistorySeries>,
+) -> Result<(HistorySeries, HistorySeries)> {
+    let px_history = px_result?;
+    let fund_history = fund_result?;
+    Ok((px_history, fund_history))
 }
 
 // --- Response parsing -----------------------------------------------------
@@ -1413,6 +1431,18 @@ mod tests {
             )])
         );
         assert!(history.options.is_none());
+    }
+
+    #[test]
+    fn concurrent_history_errors_keep_px_last_precedence() {
+        let px_result: Result<HistorySeries> =
+            Err(RecipeError::Other("PX_LAST request failed".to_string()));
+        let fund_result: Result<HistorySeries> = Err(RecipeError::Other(
+            "FUND_NET_ASSET_VAL request failed".to_string(),
+        ));
+
+        let error = ordered_history_results(px_result, fund_result).unwrap_err();
+        assert_eq!(error.to_string(), "Recipe error: PX_LAST request failed");
     }
 
     #[test]

@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import builtins
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timezone
 import importlib.util
+import os
 from typing import Any
+from uuid import uuid4
 
 import narwhals.stable.v1 as nw
 import pytest
@@ -120,26 +124,8 @@ class TestConvertBackendPyArrow:
 
 
 class TestConvertBackendPandas:
-    def test_convert_pandas_prefers_pyarrow_when_available(self, arrow_table: Any, monkeypatch: pytest.MonkeyPatch):
+    def test_convert_pandas_preserves_values(self, arrow_table: Any):
         pd = pytest.importorskip("pandas")
-        pa = pytest.importorskip("pyarrow")
-        import xbbg.backend as backend_module
-
-        real_import_backend = backend_module._import_backend_module
-        calls: list[str] = []
-
-        class PyArrowProxy:
-            def table(self, value: Any) -> Any:
-                calls.append("pyarrow.table")
-                return pa.table(value)
-
-        def import_backend(backend: Backend | str, *, feature: str | None = None) -> Any:
-            if Backend(backend) is Backend.PYARROW:
-                calls.append("import pyarrow")
-                return PyArrowProxy()
-            return real_import_backend(backend, feature=feature)
-
-        monkeypatch.setattr(backend_module, "_import_backend_module", import_backend)
 
         result = convert_backend_frame(arrow_table, Backend.PANDAS)
 
@@ -148,7 +134,6 @@ class TestConvertBackendPandas:
         assert list(result.columns) == arrow_table.column_names
         assert result["ticker"].tolist() == ["AAPL US Equity", "MSFT US Equity"]
         assert result["px_last"].tolist() == [150.0, 380.0]
-        assert calls == ["import pyarrow", "pyarrow.table"]
 
     def test_attach_xbbg_metadata_attrs_copies_present_native_metadata(self):
         pd = pytest.importorskip("pandas")
@@ -178,12 +163,9 @@ class TestConvertBackendPandas:
         import xbbg.backend as backend_module
 
         real_import_backend = backend_module._import_backend_module
-        attempted_pyarrow = False
 
         def import_backend(backend: Backend | str, *, feature: str | None = None) -> Any:
-            nonlocal attempted_pyarrow
             if Backend(backend) is Backend.PYARROW:
-                attempted_pyarrow = True
                 raise ImportError("pyarrow unavailable")
             return real_import_backend(backend, feature=feature)
 
@@ -191,7 +173,6 @@ class TestConvertBackendPandas:
 
         result = convert_backend_frame(arrow_table, Backend.PANDAS)
 
-        assert attempted_pyarrow is True
         assert isinstance(result, pd.DataFrame)
         assert result.shape == (arrow_table.num_rows, arrow_table.num_columns)
         assert list(result.columns) == arrow_table.column_names
@@ -207,6 +188,78 @@ class TestConvertBackendPolars:
         result = convert_backend_frame(arrow_table, Backend.POLARS)
         assert isinstance(result, pl.DataFrame)
         assert result.columns == arrow_table.column_names
+
+    def test_convert_polars_preserves_native_arrow_chunks(self):
+        pl = pytest.importorskip("polars")
+        if not check_backend(Backend.POLARS, raise_on_error=False):
+            pytest.skip("polars package is not usable in this environment")
+        table = ArrowTable.from_batches(
+            [
+                ArrowTable.from_pylist([{"value": 1}]).to_batches()[0],
+                ArrowTable.from_pylist([{"value": 2}]).to_batches()[0],
+            ]
+        )
+
+        result = convert_backend_frame(table, Backend.POLARS)
+
+        assert isinstance(result, pl.DataFrame)
+        assert result["value"].n_chunks() == 2
+
+    def test_legacy_polars_without_pyarrow_preserves_schema_and_batches(self, monkeypatch: pytest.MonkeyPatch):
+        pl = pytest.importorskip("polars")
+        import xbbg.backend as backend_module
+
+        timestamp = datetime(2024, 1, 1, 12, 30, 1, 123456, tzinfo=timezone.utc)
+        source = ArrowTable.from_pylist(
+            [
+                {"value": 1, "when": date(2024, 1, 1), "timestamp": timestamp},
+                {"value": None, "when": None, "timestamp": None},
+            ]
+        )
+        table = ArrowTable.from_batches(
+            [
+                source.slice(0, 1).to_batches()[0],
+                source.slice(1, 1).to_batches()[0],
+            ]
+        )
+        assert nw.from_native(table).schema["timestamp"] == nw.Datetime("us", "UTC")
+        real_import_backend = backend_module._import_backend_module
+
+        def import_backend(backend: Backend | str, *, feature: str | None = None) -> Any:
+            if Backend(backend) is Backend.PYARROW:
+                raise ImportError("pyarrow unavailable")
+            return real_import_backend(backend, feature=feature)
+
+        monkeypatch.setattr(backend_module, "_import_backend_module", import_backend)
+        monkeypatch.setattr(backend_module, "_get_module_version", lambda _module: (0, 20, 4))
+
+        result = backend_module._to_polars_frame(table)
+        empty = backend_module._to_polars_frame(source.slice(0, 0))
+
+        assert result.schema == pl.Schema({"value": pl.Int64, "when": pl.Date, "timestamp": pl.Datetime("us", "UTC")})
+        assert result.to_dicts() == [
+            {"value": 1, "when": date(2024, 1, 1), "timestamp": timestamp},
+            {"value": None, "when": None, "timestamp": None},
+        ]
+        assert result["value"].n_chunks() == 2
+        assert empty.schema == result.schema
+        assert empty.height == 0
+
+        class UnsupportedField:
+            name = "nested"
+            data_type = 'List(Field { name: "item", data_type: Int64 })'
+
+        class UnsupportedSchema:
+            fields = [UnsupportedField()]
+
+        class UnsupportedTable:
+            schema = UnsupportedSchema()
+
+            def to_batches(self) -> list[Any]:
+                raise AssertionError("unsupported schemas must fail before materializing rows")
+
+        with pytest.raises(TypeError):
+            backend_module._to_polars_frame(UnsupportedTable())
 
     def test_convert_polars_lazy_returns_lazyframe(self, arrow_table: Any):
         pl = pytest.importorskip("polars")
@@ -224,13 +277,79 @@ class TestConvertBackendDuckDB:
         assert result.columns == arrow_table.column_names
         del duckdb
 
+    def test_retained_relations_keep_distinct_sources(self):
+        pytest.importorskip("duckdb")
+        first_table = ArrowTable.from_pylist([{"value": "first"}])
+        second_table = ArrowTable.from_pylist([{"value": "second"}])
+
+        first = convert_backend_frame(first_table, Backend.DUCKDB)
+        second = convert_backend_frame(second_table, Backend.DUCKDB)
+
+        assert first.fetchall() == [("first",)]
+        assert second.fetchall() == [("second",)]
+
+    def test_relations_share_one_reusable_database(self):
+        pytest.importorskip("duckdb")
+        first = convert_backend_frame(ArrowTable.from_pylist([{"value": 7}]), Backend.DUCKDB)
+        second = convert_backend_frame(ArrowTable.from_pylist([{"value": 8}]), Backend.DUCKDB)
+        table_name = f"xbbg_backend_test_{uuid4().hex}"
+
+        first.create(table_name)
+
+        assert second.query("source", f"select * from {table_name}").fetchall() == [(7,)]
+
+    def test_concurrent_relations_keep_distinct_sources(self):
+        pytest.importorskip("duckdb")
+
+        def convert(value: int) -> Any:
+            table = ArrowTable.from_pylist([{"value": value}])
+            return convert_backend_frame(table, Backend.DUCKDB)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            relations = list(executor.map(convert, range(16)))
+
+        assert [relation.fetchone()[0] for relation in relations] == list(range(16))
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX fork")
+    def test_initialized_database_is_rejected_in_forked_child(self):
+        pytest.importorskip("duckdb")
+        parent_relation = convert_backend_frame(
+            ArrowTable.from_pylist([{"value": "parent"}]),
+            Backend.DUCKDB,
+        )
+        read_fd, write_fd = os.pipe()
+        child_pid = os.fork()
+        if child_pid == 0:
+            os.close(read_fd)
+            try:
+                convert_backend_frame(
+                    ArrowTable.from_pylist([{"value": "child"}]),
+                    Backend.DUCKDB,
+                )
+            except Exception as exc:
+                message = f"{type(exc).__name__}: {exc}"
+            else:
+                message = "conversion unexpectedly succeeded"
+            os.write(write_fd, message.encode())
+            os.close(write_fd)
+            os._exit(0)
+
+        os.close(write_fd)
+        _, status = os.waitpid(child_pid, 0)
+        message = os.read(read_fd, 8192).decode()
+        os.close(read_fd)
+
+        assert os.waitstatus_to_exitcode(status) == 0
+        assert message.startswith("RuntimeError:")
+        assert parent_relation.fetchall() == [("parent",)]
+
 
 class TestConvertBackendNarwhals:
     def _block_dataframe_backend_imports(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _block_imports(monkeypatch, "pyarrow", "pandas", "polars", "arro3")
         import xbbg.backend as backend_module
 
-        backend_module._best_narwhals_backend.cache_clear()
+        monkeypatch.setattr(backend_module, "_best_narwhals_backend", lambda: None)
         monkeypatch.setattr("xbbg.backend._native_narwhals_fallback_warned", True)
 
     def test_convert_narwhals_prefers_pyarrow_when_available(self, arrow_table: Any):
@@ -263,15 +382,151 @@ class TestConvertBackendNarwhals:
             {"ticker": "MSFT US Equity", "px_last": 380.0},
         ]
 
-    def test_convert_narwhals_lazy_collects_to_xbbg_plugin_when_native_fallback(
-        self, arrow_table: Any, monkeypatch: pytest.MonkeyPatch
-    ):
-        self._block_dataframe_backend_imports(monkeypatch)
+    def test_convert_narwhals_lazy_requires_polars(self, arrow_table: Any, monkeypatch: pytest.MonkeyPatch):
+        _block_imports(monkeypatch, "polars")
+
+        with pytest.raises(ImportError):
+            convert_backend_frame(arrow_table, Backend.NARWHALS_LAZY)
+
+    def test_convert_narwhals_lazy_is_polars_lazy_and_defers_operations(self, arrow_table: Any):
+        pl = pytest.importorskip("polars")
+        if not check_backend(Backend.NARWHALS_LAZY, raise_on_error=False):
+            pytest.skip("polars package is not usable in this environment")
+
         result = convert_backend_frame(arrow_table, Backend.NARWHALS_LAZY)
-        collected = result.select("ticker").collect()
-        native = collected.to_native()
-        assert native.column_names == ["ticker"]
-        assert native.column("ticker") == ["AAPL US Equity", "MSFT US Equity"]
+        native = result.to_native()
+        executions: list[int] = []
+        planned = native.map_batches(lambda batch: executions.append(batch.height) or batch)
+
+        assert isinstance(result, nw.LazyFrame)
+        assert isinstance(native, pl.LazyFrame)
+        assert executions == []
+        assert planned.collect().height == arrow_table.num_rows
+        assert executions == [arrow_table.num_rows]
+
+    def test_native_plugin_row_item_and_iteration_are_bounded(self):
+        materialized: list[tuple[str, int, int]] = []
+
+        class Column:
+            def __init__(
+                self,
+                name: str,
+                values: list[Any],
+                *,
+                materializable: bool = False,
+            ) -> None:
+                self._name = name
+                self._values = values
+                self._materializable = materializable
+
+            def __getitem__(self, index: int) -> Any:
+                return self._values[index]
+
+            def slice(self, offset: int, length: int) -> Column:
+                materialized.append((self._name, offset, length))
+                return Column(
+                    self._name,
+                    self._values[offset : offset + length],
+                    materializable=True,
+                )
+
+            def to_pylist(self) -> list[Any]:
+                if not self._materializable:
+                    raise AssertionError("iteration must materialize bounded column slices")
+                return list(self._values)
+
+        class ArrowTable:
+            __module__ = "xbbg.testing"
+            column_names = ["ticker", "value"]
+            num_rows = 2
+            num_columns = 2
+            _columns = {
+                "ticker": Column("ticker", ["AAPL US Equity", "MSFT US Equity"]),
+                "value": Column("value", [150.0, 380.0]),
+            }
+
+            def __arrow_c_stream__(self, requested_schema: object | None = None) -> object:
+                del requested_schema
+                raise AssertionError("row access must not consume the Arrow stream")
+
+            def column(self, name: str) -> Column:
+                return self._columns[name]
+
+            def to_pylist(self) -> list[dict[str, Any]]:
+                raise AssertionError("row access must not materialize the table")
+
+        result = nw.from_native(ArrowTable())
+
+        assert result.row(1) == ("MSFT US Equity", 380.0)
+        assert result.item(row=0, column=1) == 150.0
+        with pytest.raises(ValueError, match="buffer_size must be positive"):
+            next(result.iter_rows(named=False, buffer_size=0))
+        rows = result.iter_rows(named=True, buffer_size=1)
+        assert next(rows) == {"ticker": "AAPL US Equity", "value": 150.0}
+        assert materialized == [("ticker", 0, 1), ("value", 0, 1)]
+
+    def test_native_plugin_zero_width_rows_preserve_cardinality_and_bounds(self):
+        two_rows = nw.from_native(ArrowTable.from_pylist([{}, {}]))
+
+        assert two_rows.shape == (2, 0)
+        assert list(two_rows.iter_rows(named=False)) == [(), ()]
+        assert list(two_rows.iter_rows(named=True)) == [{}, {}]
+        assert two_rows.row(0) == ()
+        assert two_rows.row(-1) == ()
+        with pytest.raises(IndexError):
+            two_rows.row(2)
+        with pytest.raises(IndexError):
+            two_rows.row(-3)
+        with pytest.raises(TypeError):
+            two_rows.row(0.0)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            two_rows.row(slice(None))  # type: ignore[arg-type]
+
+        no_rows = nw.from_native(ArrowTable.from_pylist([]))
+
+        assert no_rows.shape == (0, 0)
+        assert list(no_rows.iter_rows(named=False)) == []
+        assert list(no_rows.iter_rows(named=True)) == []
+        with pytest.raises(IndexError):
+            no_rows.row(0)
+
+    def test_native_plugin_matches_head_item_and_null_sort_contract(self):
+        table = ArrowTable.from_pylist(
+            [
+                {"label": "first", "value": 2},
+                {"label": "missing", "value": None},
+                {"label": "last", "value": 1},
+            ]
+        )
+        result = nw.from_native(table)
+
+        assert result.head(-1).to_native().to_pylist() == table.head(2).to_pylist()
+        with pytest.raises(ValueError, match="requires a 1x1 dataframe"):
+            result.item()
+        assert result.select("value").head(1).item() == 2
+        with pytest.raises(ValueError, match="one value per sort column"):
+            result.sort("label", "value", descending=[False])
+        assert result.select("value").sort("value", nulls_last=False).to_native().column("value").to_pylist() == [
+            None,
+            1,
+            2,
+        ]
+        assert result.select("value").sort("value", nulls_last=True).to_native().column("value").to_pylist() == [
+            1,
+            2,
+            None,
+        ]
+
+    def test_native_plugin_lazy_rejects_unsupported_backend_and_session(self, arrow_table: Any):
+        pytest.importorskip("polars")
+        result = nw.from_native(arrow_table)
+
+        with pytest.raises(NotImplementedError, match="only become lazy through Polars"):
+            result.lazy(backend="duckdb")
+        with pytest.raises(ValueError, match="session is not supported"):
+            result.lazy(session=object())
+
+        assert isinstance(result.lazy(backend="polars"), nw.LazyFrame)
 
 
 class TestConvertBackendInvalid:
@@ -287,6 +542,7 @@ class TestConvertBackendInvalid:
             (Backend.POLARS, "polars", "xbbg[polars]"),
             (Backend.POLARS_LAZY, "polars", "xbbg[polars]"),
             (Backend.DUCKDB, "duckdb", "xbbg[duckdb]"),
+            (Backend.NARWHALS_LAZY, "polars", "xbbg[polars]"),
         ],
     )
     def test_missing_explicit_backend_raises_actionable_error(

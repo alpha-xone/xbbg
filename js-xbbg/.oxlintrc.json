@@ -111,6 +111,7 @@
     "eslint-plugin-vitest/expect-expect": "off",
     "eslint-plugin-vitest/max-expects": "off",
     "eslint-plugin-vitest/no-conditional-in-test": "off",
+    "eslint-plugin-vitest/prefer-called-once": "off",
     "eslint-plugin-vitest/prefer-expect-assertions": "off",
     "eslint-plugin-vitest/require-hook": "off",
     "eslint-plugin-vitest/require-test-timeout": "off",
@@ -188,6 +189,12 @@
     {
       "files": ["src/index.ts"],
       "rules": {
+        "typescript/promise-function-async": [
+          "error",
+          {
+            "checkMethodDeclarations": false
+          }
+        ],
         "unicorn/prefer-export-from": "off"
       }
     },

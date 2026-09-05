@@ -5,11 +5,13 @@
 //! compatibility adapter in `update_arrow`.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use smallvec::SmallVec;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use xbbg_core::{BlpError, DataType as BlpDataType, Message, Name};
 
@@ -27,6 +29,107 @@ pub struct SubscriptionMetrics {
     pub data_loss_events: Arc<AtomicU64>,
     pub last_message_us: Arc<AtomicU64>,
     pub last_data_loss_us: Arc<AtomicU64>,
+}
+
+const BLOCK_FORWARD_TIMEOUT: Duration = Duration::from_millis(50);
+
+struct ForwardedSubscriptionUpdate {
+    stream: mpsc::Sender<Result<SubscriptionUpdate, BlpError>>,
+    update: SubscriptionUpdate,
+    metrics: Arc<SubscriptionMetrics>,
+    topic: Arc<str>,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Keep the common update inline: boxing would allocate on every SDK callback; drain barriers are rare"
+)]
+enum ForwarderCommand {
+    Update(ForwardedSubscriptionUpdate),
+    Drain(oneshot::Sender<()>),
+}
+
+/// Bounded, non-blocking ingress from Bloomberg's callback into an async
+/// forwarding task. One forwarder is shared by every topic on a session.
+#[derive(Clone)]
+pub(crate) struct SubscriptionForwarder {
+    tx: mpsc::Sender<ForwarderCommand>,
+}
+
+pub(crate) fn subscription_forwarder_channel(
+    capacity: usize,
+) -> (
+    SubscriptionForwarder,
+    impl Future<Output = ()> + Send + 'static,
+) {
+    let (tx, mut rx) = mpsc::channel::<ForwarderCommand>(capacity);
+    let future = async move {
+        while let Some(command) = rx.recv().await {
+            let item = match command {
+                ForwarderCommand::Update(item) => item,
+                ForwarderCommand::Drain(done) => {
+                    let _ = done.send(());
+                    continue;
+                }
+            };
+            let ForwardedSubscriptionUpdate {
+                stream,
+                update,
+                metrics,
+                topic,
+            } = item;
+            match tokio::time::timeout(BLOCK_FORWARD_TIMEOUT, stream.send(Ok(update))).await {
+                Ok(Ok(())) => {
+                    metrics.batches_sent.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(Err(_)) => {}
+                Err(_) => {
+                    let dropped = metrics.dropped_batches.fetch_add(1, Ordering::Relaxed) + 1;
+                    metrics.slow_consumer.store(true, Ordering::Relaxed);
+                    if dropped == 1 || dropped.is_multiple_of(1024) {
+                        xbbg_log::warn!(
+                            topic = %topic,
+                            dropped,
+                            policy = "Block",
+                            "bounded forwarding timed out - dropping update"
+                        );
+                    }
+                }
+            }
+        }
+    };
+    (SubscriptionForwarder { tx }, future)
+}
+
+impl SubscriptionForwarder {
+    fn try_forward(
+        &self,
+        stream: mpsc::Sender<Result<SubscriptionUpdate, BlpError>>,
+        update: SubscriptionUpdate,
+        metrics: Arc<SubscriptionMetrics>,
+        topic: Arc<str>,
+    ) -> Result<(), mpsc::error::TrySendError<()>> {
+        self.tx
+            .try_send(ForwarderCommand::Update(ForwardedSubscriptionUpdate {
+                stream,
+                update,
+                metrics,
+                topic,
+            }))
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => mpsc::error::TrySendError::Full(()),
+                mpsc::error::TrySendError::Closed(_) => mpsc::error::TrySendError::Closed(()),
+            })
+    }
+
+    pub(crate) async fn drain(&self) -> Result<(), ()> {
+        let (done_tx, done_rx) = oneshot::channel();
+        self.tx
+            .send(ForwarderCommand::Drain(done_tx))
+            .await
+            .map_err(|_| ())?;
+        done_rx.await.map_err(|_| ())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -67,6 +170,8 @@ pub struct SubscriptionState {
     layout: Arc<FieldLayout>,
     /// Stream to send native updates (or errors for subscription failures).
     pub stream: mpsc::Sender<Result<SubscriptionUpdate, BlpError>>,
+    /// Session-scoped off-callback forwarding for `OverflowPolicy::Block`.
+    forwarder: Option<SubscriptionForwarder>,
     /// Retained for option/status compatibility. Updates are emitted immediately.
     pub flush_threshold: usize,
     /// Slow consumer flag (DATALOSS received)
@@ -124,6 +229,26 @@ impl SubscriptionState {
         flush_threshold: usize,
         overflow_policy: OverflowPolicy,
         capture_all_fields: bool,
+    ) -> Self {
+        Self::with_policy_and_forwarder(
+            topic,
+            fields,
+            stream,
+            flush_threshold,
+            overflow_policy,
+            capture_all_fields,
+            None,
+        )
+    }
+
+    pub(crate) fn with_policy_and_forwarder(
+        topic: String,
+        fields: Vec<String>,
+        stream: mpsc::Sender<Result<SubscriptionUpdate, BlpError>>,
+        flush_threshold: usize,
+        overflow_policy: OverflowPolicy,
+        capture_all_fields: bool,
+        forwarder: Option<SubscriptionForwarder>,
     ) -> Self {
         let mut field_strings =
             Vec::with_capacity(fields.len() + Self::EVENT_METADATA_FIELDS.len());
@@ -197,6 +322,7 @@ impl SubscriptionState {
             layout_version: 1,
             layout,
             stream,
+            forwarder,
             flush_threshold,
             slow_consumer: false,
             overflow_policy,
@@ -547,39 +673,46 @@ impl SubscriptionState {
     fn send_update(&mut self, update: SubscriptionUpdate) {
         match self.overflow_policy {
             OverflowPolicy::Block => {
-                let mut item = Ok(update);
-                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
-                loop {
-                    match self.stream.try_send(item) {
-                        Ok(()) => {
-                            self.metrics.batches_sent.fetch_add(1, Ordering::Relaxed);
-                            break;
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            if !self.suppress_closed_warning {
-                                xbbg_log::warn!(topic = %self.topic, "stream closed");
+                let result = match &self.forwarder {
+                    Some(forwarder) => forwarder.try_forward(
+                        self.stream.clone(),
+                        update,
+                        Arc::clone(&self.metrics),
+                        Arc::clone(&self.topic),
+                    ),
+                    None => self
+                        .stream
+                        .try_send(Ok(update))
+                        .map_err(|error| match error {
+                            mpsc::error::TrySendError::Full(_) => {
+                                mpsc::error::TrySendError::Full(())
                             }
-                            break;
-                        }
-                        Err(mpsc::error::TrySendError::Full(returned)) => {
-                            item = returned;
-                            if std::time::Instant::now() >= deadline {
-                                self.dropped_batches += 1;
-                                self.metrics.dropped_batches.fetch_add(1, Ordering::Relaxed);
-                                self.metrics.slow_consumer.store(true, Ordering::Relaxed);
-                                if self.dropped_batches == 1
-                                    || self.dropped_batches.is_multiple_of(1024)
-                                {
-                                    xbbg_log::warn!(
-                                        topic = %self.topic,
-                                        dropped = self.dropped_batches,
-                                        policy = "Block",
-                                        "stream full after bounded producer backoff - dropping update"
-                                    );
-                                }
-                                break;
+                            mpsc::error::TrySendError::Closed(_) => {
+                                mpsc::error::TrySendError::Closed(())
                             }
-                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }),
+                };
+                match result {
+                    Ok(()) if self.forwarder.is_none() => {
+                        self.metrics.batches_sent.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(())) => {
+                        self.dropped_batches += 1;
+                        self.metrics.dropped_batches.fetch_add(1, Ordering::Relaxed);
+                        self.metrics.slow_consumer.store(true, Ordering::Relaxed);
+                        if self.dropped_batches == 1 || self.dropped_batches.is_multiple_of(1024) {
+                            xbbg_log::warn!(
+                                topic = %self.topic,
+                                dropped = self.dropped_batches,
+                                policy = "Block",
+                                "bounded forwarding queue full - dropping update"
+                            );
+                        }
+                    }
+                    Err(mpsc::error::TrySendError::Closed(())) => {
+                        if !self.suppress_closed_warning {
+                            xbbg_log::warn!(topic = %self.topic, "stream closed");
                         }
                     }
                 }
@@ -684,5 +817,85 @@ mod tests {
         );
 
         assert!(state.invalid_dateortime_fields[0]);
+    }
+    fn test_update(topic_id: TopicId) -> SubscriptionUpdate {
+        SubscriptionUpdate {
+            timestamp_us: topic_id as i64,
+            topic_id,
+            topic: Arc::from("TEST"),
+            layout: Arc::new(FieldLayout::new(1, Vec::new())),
+            values: SmallVec::new(),
+        }
+    }
+
+    fn test_metrics() -> Arc<SubscriptionMetrics> {
+        Arc::new(SubscriptionMetrics {
+            messages_received: Arc::new(AtomicU64::new(0)),
+            dropped_batches: Arc::new(AtomicU64::new(0)),
+            batches_sent: Arc::new(AtomicU64::new(0)),
+            slow_consumer: Arc::new(AtomicBool::new(false)),
+            data_loss_events: Arc::new(AtomicU64::new(0)),
+            last_message_us: Arc::new(AtomicU64::new(0)),
+            last_data_loss_us: Arc::new(AtomicU64::new(0)),
+        })
+    }
+
+    #[test]
+    fn block_policy_never_waits_when_forwarding_queue_is_full() {
+        let (consumer_tx, _consumer_rx) = mpsc::channel(1);
+        let (forwarder, _task) = subscription_forwarder_channel(1);
+        forwarder
+            .try_forward(
+                consumer_tx.clone(),
+                test_update(1),
+                test_metrics(),
+                Arc::from("TEST"),
+            )
+            .expect("fill forwarding queue");
+        let mut state = SubscriptionState::with_policy_and_forwarder(
+            "TEST".to_string(),
+            Vec::new(),
+            consumer_tx,
+            1,
+            OverflowPolicy::Block,
+            false,
+            Some(forwarder),
+        );
+
+        let started = std::time::Instant::now();
+        state.send_update(test_update(2));
+
+        assert!(started.elapsed() < Duration::from_millis(10));
+        assert_eq!(state.metrics.dropped_batches.load(Ordering::Relaxed), 1);
+        assert!(state.metrics.slow_consumer.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn block_forwarder_preserves_enqueue_order() {
+        let (consumer_tx, mut consumer_rx) = mpsc::channel(4);
+        let (forwarder, task) = subscription_forwarder_channel(4);
+        let handle = tokio::spawn(task);
+        let metrics = test_metrics();
+        for topic_id in [10, 11, 12] {
+            forwarder
+                .try_forward(
+                    consumer_tx.clone(),
+                    test_update(topic_id),
+                    Arc::clone(&metrics),
+                    Arc::from("TEST"),
+                )
+                .expect("enqueue update");
+        }
+        forwarder.drain().await.unwrap();
+        for expected in [10, 11, 12] {
+            let update = consumer_rx
+                .try_recv()
+                .expect("forwarded item")
+                .expect("successful update");
+            assert_eq!(update.topic_id, expected);
+        }
+        drop(forwarder);
+        handle.await.expect("forwarder task");
+        assert_eq!(metrics.batches_sent.load(Ordering::Relaxed), 3);
     }
 }

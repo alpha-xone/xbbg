@@ -1,119 +1,93 @@
-"""Repro for GitHub issue #270: tokio worker thread panic during interpreter shutdown.
+"""Live regression for ordinary engine shutdown versus interpreter finalization.
 
-When asubscribe() is used with tick_mode=True and ticks are flowing, a tokio worker
-thread panics at pyo3::interpreter_lifecycle.rs because Python::attach() is called
-after Py_Finalize.
+Run with an available Bloomberg connection:
+    python py-xbbg/tests/repro_270_shutdown_panic.py
 
-Strategy: Run the event loop in a daemon thread so it's still actively iterating
-the subscription (with pending __anext__ tokio futures) when the main thread exits
-and triggers Py_Finalize. This widens the race window to near-certain reproduction.
-
-Usage:
-    DYLD_LIBRARY_PATH=vendor/blpapi-sdk/3.26.1.1/Darwin .venv/bin/python3 py-xbbg/tests/repro_270_shutdown_panic.py
-
-Pass --safe to call shutdown() properly (should never panic).
+Each scenario runs in its own process because the interpreter-finalization signal
+is irreversible. Non-global engines ensure the exit hook cannot depend on blp's
+global engine. Timeouts, missing data, native panics, and child failures fail the
+runner instead of silently counting an unavailable Bloomberg session as success.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
-import os
+import json
+from pathlib import Path
+import subprocess
 import sys
-import threading
-import time
 
-sys.path.insert(0, "py-xbbg/src")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 TICKER = "XBTUSD Curncy"
-FIELDS = ["LAST_PRICE", "BID", "ASK"]
-WARMUP_TICKS = 20
-STREAM_SECONDS = 2
+SCENARIOS = ("engine-shutdown", "interpreter-finalization")
 
 
-async def stream_forever(ready_event):
-    """Subscribe and keep iterating -- never unsubscribe, never stop."""
-    import xbbg
+async def run_scenario(scenario: str) -> None:
+    from xbbg import blp
 
-    print(f"[repro] subscribing to {TICKER} tick_mode=True, all_fields=True")
+    engine = blp.Engine(
+        pool_size=1,
+        subscription_pool_size=1,
+        max_subscription_sessions=1,
+        runtime_worker_threads=2,
+    )
     try:
-        sub = await xbbg.asubscribe(
-            TICKER,
-            FIELDS,
-            tick_mode=True,
-            all_fields=True,
+        with engine:
+            sub = await blp.asubscribe(TICKER, ["LAST_PRICE"], tick_mode=True, stream_capacity=4)
+        first = await asyncio.wait_for(anext(sub), timeout=30)
+        assert first.get("LAST_PRICE") is not None, first
+        assert blp._engine is None, "scenario must exercise a non-global engine"
+
+        # An empty removal completes without waiting on SDK acknowledgements.
+        await asyncio.wait_for(sub.remove([]), timeout=2)
+        if scenario == "engine-shutdown":
+            engine.shutdown()
+            drained = await asyncio.wait_for(sub.unsubscribe(drain=True), timeout=5)
+            assert isinstance(drained, list)
+            try:
+                await asyncio.wait_for(anext(sub), timeout=2)
+            except StopAsyncIteration:
+                pass
+            else:
+                raise AssertionError("closed subscription yielded after engine shutdown")
+            print(json.dumps({"scenario": scenario, "drained_batches": len(drained), "closed": True}))
+        else:
+            # Exercise the actual atexit entry point while Python is still alive
+            # so suppression is observable, rather than relying on a timing race.
+            blp._atexit_cleanup()
+            try:
+                await asyncio.wait_for(sub.remove([]), timeout=0.25)
+            except asyncio.TimeoutError:
+                print(json.dumps({"scenario": scenario, "native_completion_suppressed": True}))
+            else:
+                raise AssertionError("native future completed after interpreter shutdown was signalled")
+    finally:
+        engine.shutdown()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--scenario", choices=SCENARIOS)
+    args = parser.parse_args()
+    if args.scenario is not None:
+        asyncio.run(run_scenario(args.scenario))
+        return
+
+    for scenario in SCENARIOS:
+        completed = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--scenario", scenario],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=45,
         )
-    except Exception as e:
-        print(f"[repro] subscription failed (Bloomberg not connected?): {e}")
-        ready_event.set()
-        return
-
-    count = 0
-    async for _tick in sub:
-        count += 1
-        if count == WARMUP_TICKS:
-            print(f"[repro] warmed up with {count} ticks, signaling main thread")
-            ready_event.set()
-        if count % 10 == 0:
-            print(f"[repro] received {count} ticks (still streaming)")
-    # This line should never be reached -- main thread exits first
-    print(f"[repro] stream ended after {count} ticks")
-
-
-def run_loop(ready_event):
-    """Run the event loop in a daemon thread."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(stream_forever(ready_event))
-
-
-def main():
-    safe = "--safe" in sys.argv
-    mode = "SAFE (with shutdown)" if safe else "UNSAFE (no shutdown -- may panic)"
-    print(f"[repro] issue #270 repro -- mode: {mode}")
-    print(f"[repro] pid={os.getpid()}")
-
-    if safe:
-        # Safe mode: normal asyncio.run with explicit shutdown
-        async def safe_run():
-            import xbbg
-
-            sub = await xbbg.asubscribe(TICKER, FIELDS, tick_mode=True, all_fields=True)
-            count = 0
-            async for _tick in sub:
-                count += 1
-                if count >= WARMUP_TICKS:
-                    break
-            print(f"[repro] received {count} ticks, unsubscribing and shutting down")
-            await sub.unsubscribe()
-            xbbg.shutdown()
-
-        asyncio.run(safe_run())
-        print("[repro] clean exit")
-        return
-
-    # UNSAFE mode: run event loop in daemon thread, exit main thread while streaming.
-    # The daemon thread has an active __anext__ tokio future calling Python::attach()
-    # to convert RecordBatches. When the main thread exits, Py_Finalize races with
-    # the tokio worker thread's Python::attach() call.
-    ready = threading.Event()
-    t = threading.Thread(target=run_loop, args=(ready,), daemon=True)
-    t.start()
-
-    print(f"[repro] waiting for {WARMUP_TICKS} ticks to confirm active streaming...")
-    if not ready.wait(timeout=60):
-        print("[repro] timeout waiting for ticks -- Bloomberg may not be streaming")
-        sys.exit(0)
-
-    # Stream is actively receiving ticks. The daemon thread has a pending __anext__
-    # on the tokio runtime. Now let more data flow in to keep the tokio task busy.
-    print(f"[repro] streaming for {STREAM_SECONDS}s more to keep tokio tasks active...")
-    time.sleep(STREAM_SECONDS)
-
-    # Exit main thread. This triggers:
-    # 1. atexit -> signal_shutdown() (non-blocking)
-    # 2. Py_Finalize -> interpreter teardown
-    # 3. Daemon thread's tokio future calls Python::attach() -> PANIC
-    print("[repro] main thread exiting -- Py_Finalize will race with tokio workers...")
+        print(completed.stdout, end="")
+        print(completed.stderr, end="", file=sys.stderr)
+        completed.check_returncode()
+        if "panicked at" in completed.stderr or "Fatal Python error" in completed.stderr:
+            raise AssertionError(f"native shutdown failure in {scenario}")
 
 
 if __name__ == "__main__":

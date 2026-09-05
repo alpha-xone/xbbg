@@ -49,6 +49,14 @@ fn main() {
 
     // Emit link search path
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    // Consumers use Cargo's resolved SDK rather than maintaining another locator.
+    println!(
+        "cargo:rustc-env=XBBG_SDK_INCLUDE_DIR={}",
+        include_dir
+            .canonicalize()
+            .expect("resolved SDK include directory must be readable")
+            .display()
+    );
 
     // Enforce mutually exclusive static/dynamic features
     let want_static = env::var_os("CARGO_FEATURE_STATIC").is_some();
@@ -70,9 +78,10 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
     let bindings_out = out_dir.join("bindings.rs");
 
-    // Track the concrete headers we compile against so SDK swaps under the
-    // same env vars retrigger generation.
+    // Track SDK headers and link inputs so an in-place SDK replacement rebuilds
+    // dependent artifacts rather than stamping new provenance onto old bytes.
     println!("cargo:rerun-if-changed={}", include_dir.display());
+    println!("cargo:rerun-if-changed={}", lib_dir.display());
 
     if let Some(pregenerated_bindings) = env::var_os("BLPAPI_PREGENERATED_BINDINGS") {
         let pregenerated_bindings = PathBuf::from(pregenerated_bindings);
@@ -237,6 +246,8 @@ fn resolve_include_and_lib_dirs() -> Result<(PathBuf, PathBuf), String> {
     // 2) Root
     if let Some(root) = env::var_os("BLPAPI_ROOT") {
         let root = resolve_env_path(root);
+        // Adding a newer version beneath a container must invalidate discovery.
+        println!("cargo:rerun-if-changed={}", root.display());
         let (inc, lib) = resolve_sdk_layout(&root)?;
         validate_header_exists(&inc)?;
         return Ok((inc, lib));

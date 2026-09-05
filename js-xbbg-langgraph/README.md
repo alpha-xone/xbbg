@@ -1,5 +1,7 @@
 # @xbbg/langgraph
 
+Last updated: 2026-09-04.
+
 LangChain/LangGraph-compatible Bloomberg tools backed by [`@xbbg/core`](../js-xbbg/README.md).
 
 This package is a reusable tool adapter. It is not a chat app, HTTP server, MCP server, browser package, or agent framework.
@@ -119,7 +121,7 @@ const graph = new StateGraph(MessagesAnnotation)
   .compile();
 ```
 
-All tools use LangChain `responseFormat: "content_and_artifact"`. In `ToolNode`, the tool message content starts with a compact summary and then includes bounded model-readable JSON; `artifact` contains the structured bounded envelope for application code.
+All tools use LangChain `responseFormat: "content_and_artifact"`. In `ToolNode`, the tool message content is a separately bounded model-facing preview; `artifact` is the structured, independently bounded projection for application code. Content normally starts with a compact summary followed by JSON, but very small byte budgets can reduce it to a compact summary alone.
 
 ## Tool factories
 
@@ -151,10 +153,11 @@ Core Bloomberg request tools:
 
 The `xbbg_bdp`, `xbbg_bds`, `xbbg_bdh`, `xbbg_bdib`, and `xbbg_bdtick` inputs accept `returnEids: true`. These map only to Bloomberg's EID-capable `ReferenceDataRequest` (including BDS), `HistoricalDataRequest`, `IntradayBarRequest`, and `IntradayTickRequest` operations.
 
-When EIDs are requested, bounded tool artifacts retain result metadata alongside the bounded rows:
+When EIDs are requested, bounded tool artifacts can retain result metadata alongside the bounded rows. For example, an untruncated zero-row artifact can include:
 
 ```json
 {
+  "tool": "xbbg_bdp",
   "data": {
     "rows": [],
     "eidData": { "<TICKER> <MARKET_SECTOR>": [101, 202] },
@@ -165,7 +168,7 @@ When EIDs are requested, bounded tool artifacts retain result metadata alongside
 }
 ```
 
-Row bounding does not discard `eidData`, `metadata`, `securityErrors`, or `fieldExceptions`. Pass the collected IDs to `xbbg_check_entitlements`:
+The row limit alone does not discard attached `eidData`, `metadata`, `securityErrors`, or `fieldExceptions`; byte, node, string, and entitlement limits still apply. Diagnostics and EID metadata are prioritized over ordinary properties. When present, `eidDataTruncation` reports retained IDs and securities, omissions, and whether original totals are complete; an unknown original count is not zero. Metadata may itself be omitted under tighter budgets, so inspect the truncation diagnostics before treating an EID map as complete. Pass the collected IDs to `xbbg_check_entitlements`:
 
 ```json
 { "eids": [101, 202], "service": "//blp/refdata" }
@@ -177,6 +180,8 @@ BQL is passed as one complete expression string. Use placeholder shapes such as 
 Dealer quote / BQR workflows in xbbg use fixed-income identifiers with a quote source, for example `/isin/<ISIN>@<QUOTE_SOURCE> <MARKET_SECTOR>`; use `xbbg_bqr` for that workflow and `xbbg_bdtick` for raw intraday ticks.
 
 Streaming surfaces are intentionally exposed only as bounded snapshot tools. Each snapshot requires `maxUpdates`, applies the configured `maxStreamUpdates`/`maxStreamWaitMs` caps, stops on count, timeout, or stream completion, and calls `unsubscribe(false)` unless `drain: true` is explicitly provided. The package does not expose open-ended async subscription iterators as agent tools. If collection succeeds but releasing the subscription fails, the snapshot result still returns the collected updates and reports the failure in an `unsubscribeError` field instead of discarding data.
+
+Arrow snapshot rows share one materialization allowance across all updates, not a fresh allowance for each table: at most `min(max(maxRows, maxContentRows), floor(maxResultNodes / 3))` rows are read before projection. Materialized rows are charged to the same aggregate node budget used for result bounding. An update cut short at this stage carries `rowCount`, `rows`, `truncated`, and a `truncation` diagnostic with `reason: "max_rows"` and `omittedRowsAtLeast`. A collection failure remains the primary thrown error even if unsubscribe also fails.
 
 ```ts
 import { createBloombergTools, createBdpTool } from "@xbbg/langgraph";
@@ -256,14 +261,26 @@ Tools honor the LangChain/LangGraph `AbortSignal` (`graph.invoke(input, { signal
 
 ## Limits and outputs
 
-Defaults:
+Numeric options must be positive safe integers. Defaults and minima:
 
-- `maxSecurities = 25`
-- `maxFields = 25`
-- `maxRows = 500`
-- `maxStringChars = 2000`
-- `maxStreamUpdates = 10`
-- `maxStreamWaitMs = 15000`
+| Option               |   Default | Minimum | Scope                                                                                         |
+| -------------------- | --------: | ------: | --------------------------------------------------------------------------------------------- |
+| `maxSecurities`      |        25 |       1 | Securities per request                                                                        |
+| `maxFields`          |        25 |       1 | Fields per request                                                                            |
+| `maxRows`            |       500 |       1 | Aggregate primary rows in the application artifact                                            |
+| `maxResultBytes`     | 1,048,576 |     256 | UTF-8 bytes of the serialized artifact, including its envelope                                |
+| `maxContentRows`     |        50 |       1 | Aggregate primary rows in model-facing content                                                |
+| `maxContentBytes`    |    65,536 |     256 | UTF-8 bytes of the complete model-facing content, including summary and JSON                  |
+| `maxResultNodes`     |    50,000 |      10 | Aggregate inspection work across materialization, canonical preparation, and both projections |
+| `maxStringChars`     |     2,000 |       1 | String bounding before the two projections                                                    |
+| `maxBqlQueryChars`   |     4,000 |       1 | BQL input length                                                                              |
+| `maxSearchSpecChars` |     1,000 |       1 | Search specification input length                                                             |
+| `maxStreamUpdates`   |        10 |       1 | Snapshot updates                                                                              |
+| `maxStreamWaitMs`    |    15,000 |       1 | Snapshot wait in milliseconds                                                                 |
+
+Artifact and content limits are independent, not successive cuts of the artifact. A smaller model preview does not shrink the application artifact; conversely, `maxRows: 1` and `maxContentRows: 3` can retain one artifact row and three model rows when the other budgets permit. Both projections come from a shared bounded preparation of the original result, so exhausted shared node or string limits can affect both. These are ceilings, not promises to fill every row or byte allowance.
+
+The node budget is aggregate across the whole result, including nested properties and both projections; it does not reset for each object or array. Primary row collections likewise share the relevant projection's row allowance. Depth is capped at 32. Cycles, accessors, binary data, unsupported values, upstream truncation, and exhausted row/string/node/byte budgets produce explicit truncation reasons rather than unbounded traversal or raw binary output.
 
 Date inputs accept `YYYY-MM-DD` or `YYYYMMDD` strings, integer `YYYYMMDD` values (parsed as calendar dates), and epoch milliseconds; ambiguous numbers between those ranges and ambiguous `MM/DD/YYYY` strings are rejected with actionable schema errors. `Date` instances are deliberately not part of the wire contract: JSON tool calls cannot carry them and `z.date()` breaks JSON Schema conversion in zod v4.
 
@@ -271,23 +288,29 @@ Schemas only advertise parameters the engine accepts: `format` exists on `xbbg_b
 
 Empty results are called out in the model-facing summary (`empty result; verify identifiers, fields, and date range before concluding no data exists`) so agents distinguish "no rows" from silent failure instead of inventing data.
 
-Each tool uses `backend: "json"` for finite request results and LangChain `content_and_artifact` output. The model-facing content starts with a short summary and then includes bounded JSON data:
+Finite request results use `backend: "json"`. For a small untruncated result, model-facing content can look like:
 
 ```text
-xbbg_bdp: 1 row; truncated=false
-{"tool":"xbbg_bdp","rowCount":1,"truncated":false,"data":[{"security":"<TICKER> <MARKET_SECTOR>","field":"<FIELD>","value":"<VALUE>"}]}
+xbbg_bdp: 1 row; artifactTruncated=false; contentTruncated=false; artifactReasons=none; contentReasons=none
+{"tool":"xbbg_bdp","rowCount":1,"truncated":false,"contentTruncated":false,"data":[{"security":"AAPL US Equity","field":"PX_LAST","value":190.1}]}
 ```
 
-The artifact is the same bounded structured envelope for application code:
+The corresponding application artifact has its own envelope and budget:
 
 ```json
 {
   "tool": "xbbg_bdp",
   "rowCount": 1,
   "truncated": false,
-  "data": [{ "security": "<TICKER> <MARKET_SECTOR>", "field": "<FIELD>", "value": "<VALUE>" }]
+  "data": [{ "security": "AAPL US Equity", "field": "PX_LAST", "value": 190.1 }]
 }
 ```
+
+These examples illustrate the current shape, not an exhaustive field list. `data` varies by tool and can include a metadata-bearing object with `rows` rather than a bare array. `rowCount` describes the source count when known (or is `null`), not necessarily the number of rows retained. `truncated` in the artifact and normal content payload refers to the artifact; `contentTruncated` and the summary's separate reason lists describe model-preview limits.
+
+When available, `truncation` includes `reasons`, `inspectedNodes`, `retainedNodes`, `omittedRows`, and `omittedPropertiesAtLeast`. Lower-bound counts deliberately do not claim an exhaustive scan. Small budgets can omit counters or data while retaining a compact truncation indication. Check diagnostics rather than inferring completeness from a short result.
+
+Bloomberg errors are prioritized ahead of ordinary properties, and model content can expose them separately under `diagnostics` even when the relevant data rows are omitted. `hasErrors: true` marks detected errors; tight content budgets use a compact summary to retain that signal. Bounded primary diagnostics are retained in small-budget previews where they fit, rather than replaced by an apparent success or empty result. This does not guarantee every error record or its full text survives every budget. Thrown `Error` instances keep the original error as `cause` and preserve its name when wrapped with tool context; snapshot cleanup failures do not replace a primary collection error.
 
 When invoking tools outside an agent graph and you need the artifact, invoke with a tool-call id (or use LangGraph `ToolNode`) so LangChain returns a `ToolMessage` with `artifact`.
 

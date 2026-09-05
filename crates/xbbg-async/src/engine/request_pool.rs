@@ -6,12 +6,15 @@
 //! sessions are thread-safe), so there is no command queue; a single
 //! timeout-scanner thread enforces `request_timeout_ms` across all workers.
 
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
+use std::task::{Context, Poll};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use arrow_array::RecordBatch;
+use futures_util::Stream;
 use tokio::sync::{mpsc, oneshot};
 
 use xbbg_core::BlpError;
@@ -25,32 +28,158 @@ const TIMEOUT_SCAN_INTERVAL: Duration = Duration::from_secs(1);
 /// Polling granularity for scanner shutdown responsiveness.
 const TIMEOUT_SCAN_TICK: Duration = Duration::from_millis(100);
 
-/// Cancels the in-flight request when the caller's future is dropped before
-/// the reply arrives.
+/// Cancellation target retained by an in-flight request owner.
+enum RequestCancellation {
+    Worker {
+        worker: Arc<AsyncRequestWorker>,
+        ticket: RequestTicket,
+    },
+    #[cfg(test)]
+    Counter(Arc<AtomicUsize>),
+}
+
+impl RequestCancellation {
+    fn cancel(self) {
+        match self {
+            Self::Worker { worker, ticket } => worker.cancel_request(ticket),
+            #[cfg(test)]
+            Self::Counter(counter) => {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+/// Cancels the in-flight request when its future or stream is dropped before
+/// Bloomberg finishes the response.
 struct RequestCancelGuard {
-    worker: Arc<AsyncRequestWorker>,
-    ticket: RequestTicket,
-    armed: bool,
+    cancellation: Option<RequestCancellation>,
 }
 
 impl RequestCancelGuard {
     fn new(worker: Arc<AsyncRequestWorker>, ticket: RequestTicket) -> Self {
         Self {
-            worker,
-            ticket,
-            armed: true,
+            cancellation: Some(RequestCancellation::Worker { worker, ticket }),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_counter(counter: Arc<AtomicUsize>) -> Self {
+        Self {
+            cancellation: Some(RequestCancellation::Counter(counter)),
         }
     }
 
     fn disarm(&mut self) {
-        self.armed = false;
+        self.cancellation = None;
+    }
+
+    fn cancel(&mut self) {
+        if let Some(cancellation) = self.cancellation.take() {
+            cancellation.cancel();
+        }
     }
 }
 
 impl Drop for RequestCancelGuard {
     fn drop(&mut self) {
-        if self.armed {
-            self.worker.cancel_request(self.ticket);
+        self.cancel();
+    }
+}
+
+/// Owned streaming Bloomberg request.
+///
+/// The cancellation guard cannot be separated from the receiver: dropping or
+/// closing the stream removes the request from its worker and sends Bloomberg
+/// a cancellation when the response is still in flight.
+pub struct RequestStream {
+    rx: mpsc::Receiver<Result<RecordBatch, BlpError>>,
+    cancel_guard: Option<RequestCancelGuard>,
+    output_timezone: Option<String>,
+}
+
+impl RequestStream {
+    fn new(
+        rx: mpsc::Receiver<Result<RecordBatch, BlpError>>,
+        cancel_guard: Option<RequestCancelGuard>,
+    ) -> Self {
+        Self {
+            rx,
+            cancel_guard,
+            output_timezone: None,
+        }
+    }
+
+    pub(crate) fn with_output_timezone(mut self, timezone: Option<String>) -> Self {
+        self.output_timezone = timezone;
+        self
+    }
+
+    fn finish(&mut self) {
+        if let Some(guard) = &mut self.cancel_guard {
+            guard.disarm();
+        }
+        self.cancel_guard = None;
+    }
+
+    fn map_item(&self, item: Result<RecordBatch, BlpError>) -> Result<RecordBatch, BlpError> {
+        let Some(timezone) = self.output_timezone.as_deref() else {
+            return item;
+        };
+        item.and_then(|batch| {
+            super::intraday_timezone::apply_output_timezone_batch(batch, timezone).map_err(
+                |error| BlpError::Internal {
+                    detail: format!("intraday output timezone: {error}"),
+                },
+            )
+        })
+    }
+
+    /// Receive the next response batch.
+    pub async fn recv(&mut self) -> Option<Result<RecordBatch, BlpError>> {
+        match self.rx.recv().await {
+            Some(item) => Some(self.map_item(item)),
+            None => {
+                self.finish();
+                None
+            }
+        }
+    }
+
+    /// Try to receive a response batch without waiting.
+    pub fn try_recv(&mut self) -> Result<Result<RecordBatch, BlpError>, mpsc::error::TryRecvError> {
+        match self.rx.try_recv() {
+            Ok(item) => Ok(self.map_item(item)),
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                self.finish();
+                Err(mpsc::error::TryRecvError::Disconnected)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Stop the Bloomberg request while retaining already-buffered batches for
+    /// subsequent `recv`/`try_recv` calls.
+    pub fn close(&mut self) {
+        self.rx.close();
+        if let Some(mut guard) = self.cancel_guard.take() {
+            guard.cancel();
+        }
+    }
+}
+
+impl Stream for RequestStream {
+    type Item = Result<RecordBatch, BlpError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.rx).poll_recv(cx) {
+            Poll::Ready(Some(item)) => Poll::Ready(Some(this.map_item(item))),
+            Poll::Ready(None) => {
+                this.finish();
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -62,7 +191,10 @@ struct TimeoutScanner {
 }
 
 impl TimeoutScanner {
-    fn spawn(workers: Vec<Weak<AsyncRequestWorker>>, request_timeout_ms: u64) -> Self {
+    fn spawn(
+        workers: Vec<Weak<AsyncRequestWorker>>,
+        request_timeout_ms: u64,
+    ) -> Result<Self, BlpAsyncError> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
         let thread = std::thread::Builder::new()
@@ -89,11 +221,15 @@ impl TimeoutScanner {
                     }
                 }
             })
-            .ok();
-        if thread.is_none() {
-            xbbg_log::error!("failed to spawn request timeout scanner thread");
-        }
-        Self { stop, thread }
+            .map_err(|error| {
+                BlpAsyncError::Internal(format!(
+                    "failed to spawn request timeout scanner thread: {error}"
+                ))
+            })?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
     }
 
     fn signal_stop(&self) {
@@ -126,6 +262,8 @@ pub struct RequestWorkerPool {
     workers: Vec<Arc<AsyncRequestWorker>>,
     /// Round-robin counter.
     next_worker: AtomicUsize,
+    /// Monotonic pool lifecycle gate.
+    shutting_down: AtomicBool,
     /// Configuration.
     config: Arc<EngineConfig>,
     /// Slow-request / hard-timeout enforcement. `None` only in unit tests.
@@ -160,19 +298,25 @@ impl RequestWorkerPool {
         let scanner = TimeoutScanner::spawn(
             workers.iter().map(Arc::downgrade).collect(),
             config.request_timeout_ms,
-        );
+        )?;
 
         xbbg_log::info!(pool_size = size, "request worker pool ready");
 
         Ok(Self {
             workers,
             next_worker: AtomicUsize::new(0),
+            shutting_down: AtomicBool::new(false),
             config,
             scanner: Some(scanner),
         })
     }
 
     fn next_healthy_worker(&self) -> Result<&Arc<AsyncRequestWorker>, BlpAsyncError> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(BlpAsyncError::ConfigError {
+                detail: "request worker pool is shut down".to_string(),
+            });
+        }
         let len = self.workers.len();
         let start = self.next_worker.fetch_add(1, Ordering::Relaxed) % len;
 
@@ -287,27 +431,27 @@ impl RequestWorkerPool {
 
     /// Dispatch a prepared streaming request to an available worker.
     ///
-    /// Returns a receiver that will receive batches as they arrive.
+    /// The returned stream owns its cancellation guard. Dropping the stream
+    /// cannot leave a decoder registered in the worker slab.
     pub(crate) async fn request_stream(
         &self,
         request: PreparedRequest,
-    ) -> Result<mpsc::Receiver<Result<RecordBatch, BlpError>>, BlpAsyncError> {
+    ) -> Result<RequestStream, BlpAsyncError> {
         let params = request.params();
         let (stream_tx, stream_rx) = mpsc::channel(self.config.subscription_stream_capacity);
 
-        let worker = self.next_healthy_worker()?;
+        let worker = Arc::clone(self.next_healthy_worker()?);
         xbbg_log::debug!(
             worker_id = worker.id,
             service = %params.service,
             operation = %params.operation,
             "dispatching stream request"
         );
-        // Stream errors (including submit failures) arrive through the
-        // stream itself; stream requests are not cancel-guarded (parity with
-        // the previous design).
-        let _ticket = worker.submit_stream(request, stream_tx).await;
+        let ticket = worker.submit_stream(request, stream_tx).await;
+        let cancel_guard =
+            ticket.map(|ticket| RequestCancelGuard::new(Arc::clone(&worker), ticket));
 
-        Ok(stream_rx)
+        Ok(RequestStream::new(stream_rx, cancel_guard))
     }
 
     /// Get the number of workers in the pool.
@@ -339,6 +483,9 @@ impl RequestWorkerPool {
     /// Sessions begin stopping asynchronously; used by Drop to avoid blocking
     /// during interpreter shutdown.
     pub fn signal_shutdown(&self) {
+        if self.shutting_down.swap(true, Ordering::AcqRel) {
+            return;
+        }
         xbbg_log::info!(
             pool_size = self.workers.len(),
             "signaling request pool shutdown"
@@ -355,6 +502,7 @@ impl RequestWorkerPool {
     ///
     /// Use this for clean shutdown when you can afford to wait.
     pub fn shutdown_blocking(&mut self) {
+        self.shutting_down.store(true, Ordering::Release);
         xbbg_log::info!(
             pool_size = self.workers.len(),
             "shutting down request pool (blocking)"
@@ -390,6 +538,7 @@ mod tests {
         RequestWorkerPool {
             workers: Vec::new(),
             next_worker: AtomicUsize::new(0),
+            shutting_down: AtomicBool::new(false),
             config,
             scanner: None,
         }
@@ -440,5 +589,79 @@ mod tests {
             detail: "invalid field".to_string(),
         }));
         assert!(!pool.is_retryable(&BlpError::Timeout));
+    }
+
+    fn stream_with_cancel_counter() -> (RequestStream, Arc<AtomicUsize>) {
+        let (_tx, rx) = mpsc::channel(1);
+        let counter = Arc::new(AtomicUsize::new(0));
+        let guard = RequestCancelGuard::with_counter(Arc::clone(&counter));
+        (RequestStream::new(rx, Some(guard)), counter)
+    }
+
+    #[test]
+    fn dropping_request_stream_cancels_once() {
+        let (stream, counter) = stream_with_cancel_counter();
+
+        drop(stream);
+
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn closing_request_stream_cancels_once_and_drop_does_not_repeat() {
+        let (mut stream, counter) = stream_with_cancel_counter();
+
+        stream.close();
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+        drop(stream);
+
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn closing_request_stream_preserves_buffered_batches_for_drain() {
+        let (tx, rx) = mpsc::channel(1);
+        tx.try_send(Ok(RecordBatch::new_empty(Arc::new(
+            arrow_schema::Schema::empty(),
+        ))))
+        .expect("buffer batch");
+        let counter = Arc::new(AtomicUsize::new(0));
+        let guard = RequestCancelGuard::with_counter(Arc::clone(&counter));
+        let mut stream = RequestStream::new(rx, Some(guard));
+
+        stream.close();
+
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+        assert!(stream.try_recv().expect("buffered batch").is_ok());
+        assert!(matches!(
+            stream.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
+    }
+    #[tokio::test]
+    async fn terminal_request_stream_disarms_cancellation() {
+        let (tx, rx) = mpsc::channel(1);
+        let counter = Arc::new(AtomicUsize::new(0));
+        let guard = RequestCancelGuard::with_counter(Arc::clone(&counter));
+        let mut stream = RequestStream::new(rx, Some(guard));
+        drop(tx);
+
+        assert!(stream.recv().await.is_none());
+        drop(stream);
+
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+    }
+    #[test]
+    fn shutdown_is_monotonic_and_rejects_dispatch() {
+        let pool = pool_with_retry_policy(RetryPolicy::default());
+
+        pool.signal_shutdown();
+        pool.signal_shutdown();
+
+        let error = match pool.next_healthy_worker() {
+            Ok(_) => panic!("shutdown pool must reject worker selection"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("pool is shut down"));
     }
 }

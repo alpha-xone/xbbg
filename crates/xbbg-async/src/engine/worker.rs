@@ -229,7 +229,23 @@ impl UnifiedRequestState {
 }
 
 fn send_stream_error(stream: mpsc::Sender<Result<RecordBatch, BlpError>>, error: BlpError) {
-    let _ = stream.blocking_send(Err(error));
+    let _ = stream.try_send(Err(error));
+}
+
+fn correlation_invariant_failure(
+    expected: DispatchKey,
+    actual: &CorrelationId,
+    slab_key: usize,
+) -> Option<String> {
+    match DispatchKey::from_correlation_id(actual) {
+        None => Some(format!(
+            "Bloomberg returned non-dispatch correlation ID for request: {actual:?}"
+        )),
+        Some(actual_dispatch_key) if actual_dispatch_key != expected => Some(format!(
+            "Bloomberg returned unexpected dispatch correlation ID {actual:?} for slab key {slab_key}"
+        )),
+        Some(_) => None,
+    }
 }
 
 /// Identifies one in-flight request on a specific worker: slab slot plus the
@@ -413,6 +429,69 @@ pub(super) struct WorkerShared {
     /// Set before an intentional stop so terminal SDK status events are logged
     /// as normal teardown instead of unexpected worker death.
     shutting_down: AtomicBool,
+    /// Dispatches take a shared guard; shutdown takes the exclusive guard so
+    /// no SDK request can be sent after the lifecycle gate becomes terminal.
+    lifecycle: RwLock<()>,
+}
+
+struct PendingServiceWaiter<'a> {
+    shared: &'a WorkerShared,
+    service: &'a str,
+    attempt_cid: i64,
+    receiver: Option<oneshot::Receiver<Result<(), BlpError>>>,
+}
+
+impl<'a> PendingServiceWaiter<'a> {
+    fn new(
+        shared: &'a WorkerShared,
+        service: &'a str,
+        attempt_cid: i64,
+        receiver: oneshot::Receiver<Result<(), BlpError>>,
+    ) -> Self {
+        Self {
+            shared,
+            service,
+            attempt_cid,
+            receiver: Some(receiver),
+        }
+    }
+
+    fn receiver(&mut self) -> &mut oneshot::Receiver<Result<(), BlpError>> {
+        self.receiver.as_mut().expect("receiver is present")
+    }
+}
+
+impl Drop for PendingServiceWaiter<'_> {
+    fn drop(&mut self) {
+        self.receiver.take();
+        self.shared
+            .prune_pending_service_waiters(self.service, self.attempt_cid);
+    }
+}
+
+struct PendingIdentityWaiter<'a> {
+    shared: &'a WorkerShared,
+    receiver: Option<oneshot::Receiver<Result<(), BlpError>>>,
+}
+
+impl<'a> PendingIdentityWaiter<'a> {
+    fn new(shared: &'a WorkerShared, receiver: oneshot::Receiver<Result<(), BlpError>>) -> Self {
+        Self {
+            shared,
+            receiver: Some(receiver),
+        }
+    }
+
+    fn receiver(&mut self) -> &mut oneshot::Receiver<Result<(), BlpError>> {
+        self.receiver.as_mut().expect("receiver is present")
+    }
+}
+
+impl Drop for PendingIdentityWaiter<'_> {
+    fn drop(&mut self) {
+        self.receiver.take();
+        self.shared.prune_pending_identity_waiters();
+    }
 }
 
 impl WorkerShared {
@@ -431,6 +510,7 @@ impl WorkerShared {
             pending_identity_auth: Mutex::new(None),
             health,
             shutting_down: AtomicBool::new(false),
+            lifecycle: RwLock::new(()),
         }
     }
 
@@ -539,6 +619,28 @@ impl WorkerShared {
             reason = reason,
             "drained in-flight requests"
         );
+    }
+
+    fn prune_pending_service_waiters(&self, service: &str, attempt_cid: i64) {
+        let mut pending = self.pending_service_opens.lock();
+        let remove_attempt = if let Some(open) = pending.get_mut(service) {
+            if open.cid != attempt_cid {
+                return;
+            }
+            open.waiters.retain(|waiter| !waiter.is_closed());
+            open.waiters.is_empty()
+        } else {
+            false
+        };
+        if remove_attempt {
+            pending.remove(service);
+        }
+    }
+
+    fn prune_pending_identity_waiters(&self) {
+        if let IdentityAuthState::Pending(waiters) = &mut *self.identity.lock() {
+            waiters.retain(|waiter| !waiter.is_closed());
+        }
     }
 
     fn fail_pending_service_opens(&self, reason: &str) {
@@ -869,7 +971,9 @@ impl WorkerShared {
         let msg_type = msg.type_str();
         match msg_type {
             "SessionStarted" => {
-                self.health.store(0, Ordering::Release);
+                if !self.shutting_down.load(Ordering::Acquire) {
+                    self.health.store(0, Ordering::Release);
+                }
                 self.resolve_startup(Ok(()));
                 xbbg_log::info!(worker_id = self.id, "session started");
             }
@@ -887,6 +991,7 @@ impl WorkerShared {
                 // SDK has given up reconnecting. The session is dead. Drain
                 // everything and mark the worker so the pool evicts it.
                 let reason = extract_reason_description(msg);
+                let shutdown_requested = self.shutting_down.swap(true, Ordering::AcqRel);
                 self.resolve_startup(Err(session_start_error(
                     "session terminated during startup",
                     reason.clone(),
@@ -895,7 +1000,7 @@ impl WorkerShared {
                 self.fail_pending_service_opens("Bloomberg session terminated");
                 self.fail_pending_identity("Bloomberg session terminated");
                 self.health.store(2, Ordering::Release);
-                if self.shutting_down.load(Ordering::Acquire) {
+                if shutdown_requested {
                     xbbg_log::info!(
                         worker_id = self.id,
                         reason = %reason.as_deref().unwrap_or(""),
@@ -921,6 +1026,7 @@ impl WorkerShared {
                 // will now fail. Drain + mark Dead so the pool evicts this
                 // worker.
                 let reason = extract_reason_description(msg);
+                self.shutting_down.store(true, Ordering::Release);
                 self.resolve_startup(Err(session_start_error(
                     "session identity authorization revoked",
                     reason.clone(),
@@ -949,13 +1055,16 @@ impl WorkerShared {
                 // Degraded (not Dead) — the worker resumes full service on the
                 // subsequent SessionConnectionUp.
                 let reason = extract_reason_description(msg);
+                let shutdown_requested = self.shutting_down.load(Ordering::Acquire);
                 self.drain_in_flight(
                     reason
                         .as_deref()
                         .unwrap_or("Bloomberg session connection lost (transient)"),
                 );
-                self.health.store(1, Ordering::Release);
-                if self.shutting_down.load(Ordering::Acquire) {
+                if !shutdown_requested {
+                    self.health.store(1, Ordering::Release);
+                }
+                if shutdown_requested {
                     xbbg_log::info!(
                         worker_id = self.id,
                         reason = %reason.as_deref().unwrap_or(""),
@@ -970,13 +1079,21 @@ impl WorkerShared {
                 }
             }
             "SessionConnectionUp" => {
-                self.health.store(0, Ordering::Release);
                 let reason = extract_reason_description(msg);
-                xbbg_log::info!(
-                    worker_id = self.id,
-                    reason = %reason.as_deref().unwrap_or(""),
-                    "SessionConnectionUp — worker healthy"
-                );
+                if self.shutting_down.load(Ordering::Acquire) {
+                    xbbg_log::info!(
+                        worker_id = self.id,
+                        reason = %reason.as_deref().unwrap_or(""),
+                        "SessionConnectionUp during shutdown"
+                    );
+                } else {
+                    self.health.store(0, Ordering::Release);
+                    xbbg_log::info!(
+                        worker_id = self.id,
+                        reason = %reason.as_deref().unwrap_or(""),
+                        "SessionConnectionUp — worker healthy"
+                    );
+                }
             }
             _ => {
                 xbbg_log::debug!(worker_id = self.id, msg_type = msg_type, "session status");
@@ -1068,6 +1185,9 @@ pub(crate) struct AsyncRequestWorker {
     /// Serializes classic per-call identity authorization: WorkerShared's
     /// pending-waiter slots hold exactly one in-flight sender each.
     identity_flow_lock: tokio::sync::Mutex<()>,
+    /// Guards the actual SDK stop request independently from terminal events,
+    /// which may mark the shared lifecycle closed before pool cleanup runs.
+    stop_started: AtomicBool,
 }
 
 impl AsyncRequestWorker {
@@ -1096,6 +1216,7 @@ impl AsyncRequestWorker {
             shared,
             config,
             identity_flow_lock: tokio::sync::Mutex::new(()),
+            stop_started: AtomicBool::new(false),
         };
         worker.warmup();
         xbbg_log::info!(worker_id = id, "AsyncRequestWorker started");
@@ -1146,7 +1267,11 @@ impl AsyncRequestWorker {
             return Ok(());
         }
 
-        let rx = {
+        let (attempt_cid, rx) = {
+            let _lifecycle = self.shared.lifecycle.read();
+            if self.is_shutting_down() {
+                return Err(Self::shutdown_error());
+            }
             let mut pending = self.shared.pending_service_opens.lock();
             // Re-check under the pending lock: the dispatcher inserts into
             // open_services before resolving waiters.
@@ -1154,8 +1279,13 @@ impl AsyncRequestWorker {
                 return Ok(());
             }
             let (tx, rx) = oneshot::channel();
-            match pending.entry(name.to_string()) {
-                Entry::Occupied(mut entry) => entry.get_mut().waiters.push(tx),
+            let attempt_cid = match pending.entry(name.to_string()) {
+                Entry::Occupied(mut entry) => {
+                    let open = entry.get_mut();
+                    open.waiters.retain(|waiter| !waiter.is_closed());
+                    open.waiters.push(tx);
+                    open.cid
+                }
                 Entry::Vacant(entry) => {
                     let id = self
                         .shared
@@ -1171,17 +1301,42 @@ impl AsyncRequestWorker {
                         cid: cid_int,
                         waiters: vec![tx],
                     });
+                    cid_int
                 }
-            }
-            rx
+            };
+            (attempt_cid, rx)
         };
+        let mut waiter = PendingServiceWaiter::new(&self.shared, name, attempt_cid, rx);
 
-        match tokio::time::timeout(Duration::from_millis(SERVICE_OPEN_TIMEOUT_MS), rx).await {
+        match tokio::time::timeout(
+            Duration::from_millis(SERVICE_OPEN_TIMEOUT_MS),
+            waiter.receiver(),
+        )
+        .await
+        {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(BlpError::Internal {
                 detail: format!("service open for {name} dropped without resolution"),
             }),
-            Err(_) => Err(BlpError::Timeout),
+            Err(_) => {
+                let timed_out = {
+                    let mut pending = self.shared.pending_service_opens.lock();
+                    if pending
+                        .get(name)
+                        .is_some_and(|open| open.cid == attempt_cid)
+                    {
+                        pending.remove(name)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(open) = timed_out {
+                    for waiter in open.waiters {
+                        let _ = waiter.send(Err(BlpError::Timeout));
+                    }
+                }
+                Err(BlpError::Timeout)
+            }
         }
     }
 
@@ -1194,10 +1349,15 @@ impl AsyncRequestWorker {
     /// re-issues rather than piling waiters onto a zombie attempt.
     async fn ensure_identity(&self, auth_config: &AuthConfig) -> Result<(), BlpError> {
         let rx = {
+            let _lifecycle = self.shared.lifecycle.read();
+            if self.is_shutting_down() {
+                return Err(Self::shutdown_error());
+            }
             let mut state = self.shared.identity.lock();
             match &mut *state {
                 IdentityAuthState::Ready => return Ok(()),
                 IdentityAuthState::Pending(waiters) => {
+                    waiters.retain(|waiter| !waiter.is_closed());
                     let (tx, rx) = oneshot::channel();
                     waiters.push(tx);
                     rx
@@ -1228,8 +1388,14 @@ impl AsyncRequestWorker {
                 }
             }
         };
+        let mut waiter = PendingIdentityWaiter::new(&self.shared, rx);
 
-        match tokio::time::timeout(Duration::from_millis(IDENTITY_AUTH_TIMEOUT_MS), rx).await {
+        match tokio::time::timeout(
+            Duration::from_millis(IDENTITY_AUTH_TIMEOUT_MS),
+            waiter.receiver(),
+        )
+        .await
+        {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(BlpError::Internal {
                 detail: "identity authorization dropped without resolution".to_string(),
@@ -1284,6 +1450,10 @@ impl AsyncRequestWorker {
     ) -> Result<T, BlpError> {
         // Step 1: token for the logged-in user.
         let token_rx = {
+            let _lifecycle = self.shared.lifecycle.read();
+            if self.is_shutting_down() {
+                return Err(Self::shutdown_error());
+            }
             let mut pending = self.shared.pending_token.lock();
             let (tx, rx) = std::sync::mpsc::sync_channel(1);
             *pending = Some(tx);
@@ -1307,6 +1477,10 @@ impl AsyncRequestWorker {
         let mut identity = self.session.create_identity()?;
 
         let auth_rx = {
+            let _lifecycle = self.shared.lifecycle.read();
+            if self.is_shutting_down() {
+                return Err(Self::shutdown_error());
+            }
             let mut pending = self.shared.pending_identity_auth.lock();
             let (tx, rx) = std::sync::mpsc::sync_channel(1);
             *pending = Some(tx);
@@ -1326,6 +1500,10 @@ impl AsyncRequestWorker {
             "authorization",
         )
         .map_err(hint_entitlement_requirements)?;
+        let _lifecycle = self.shared.lifecycle.read();
+        if self.is_shutting_down() {
+            return Err(Self::shutdown_error());
+        }
 
         op(self, &identity)
     }
@@ -1346,6 +1524,10 @@ impl AsyncRequestWorker {
         match &self.config.auth {
             Some(auth_config) => {
                 self.ensure_identity(auth_config).await?;
+                let _lifecycle = self.shared.lifecycle.read();
+                if self.is_shutting_down() {
+                    return Err(Self::shutdown_error());
+                }
                 let identity = self
                     .session
                     .authorized_identity(&CorrelationId::Int(IDENTITY_CID))?;
@@ -1403,6 +1585,16 @@ impl AsyncRequestWorker {
         .await
     }
 
+    fn shutdown_error() -> BlpError {
+        BlpError::Internal {
+            detail: "request worker is shut down".to_string(),
+        }
+    }
+
+    fn is_shutting_down(&self) -> bool {
+        self.shared.shutting_down.load(Ordering::Acquire)
+    }
+
     /// Submit a unified request. Failures are delivered through `reply`;
     /// `Some(ticket)` is returned only when the request is in flight and
     /// cancellable.
@@ -1411,6 +1603,10 @@ impl AsyncRequestWorker {
         request: PreparedRequest,
         reply: oneshot::Sender<Result<RecordBatch, BlpError>>,
     ) -> Option<RequestTicket> {
+        if self.is_shutting_down() {
+            let _ = reply.send(Err(Self::shutdown_error()));
+            return None;
+        }
         let params = request.params();
         let t0 = Instant::now();
         if let Err(error) = self.ensure_service(&params.service).await {
@@ -1439,6 +1635,10 @@ impl AsyncRequestWorker {
         request: PreparedRequest,
         stream: mpsc::Sender<Result<RecordBatch, BlpError>>,
     ) -> Option<RequestTicket> {
+        if self.is_shutting_down() {
+            send_stream_error(stream, Self::shutdown_error());
+            return None;
+        }
         let params = request.params();
         let fields = params.fields.clone().unwrap_or_default();
         let ticker = params.security.clone().unwrap_or_default();
@@ -1483,12 +1683,17 @@ impl AsyncRequestWorker {
         request: PreparedRequest,
         state: UnifiedRequestState,
     ) -> Option<RequestTicket> {
+        let lifecycle = self.shared.lifecycle.read();
+        if self.is_shutting_down() {
+            state.fail(Self::shutdown_error());
+            return None;
+        }
         let generation = self.shared.next_generation();
         let key = self.shared.insert_slot(generation, state);
         let dispatch_key = DispatchKey::with_generation(key, generation);
         let cid = dispatch_key.to_correlation_id();
 
-        let result = (|| -> Result<(), BlpError> {
+        let send_result = (|| -> Result<CorrelationId, BlpError> {
             let params = request.params();
             // Build the request from a short-lived service view borrowed from
             // this worker's session. Do not cache the SDK service handle;
@@ -1503,49 +1708,57 @@ impl AsyncRequestWorker {
                 "building request"
             );
             let blp_request = build_request_from_params(self.id, &service, &request)?;
-
-            let actual_cid = self.session.send_request_with_label(
+            self.session.send_request_with_label(
                 &blp_request,
                 Some(&cid),
                 params.request_id.as_deref(),
-            )?;
-            let actual_dispatch_key =
-                DispatchKey::from_correlation_id(&actual_cid).ok_or_else(|| {
-                    BlpError::Internal {
-                        detail: format!(
-                            "Bloomberg returned non-dispatch correlation ID for request: {:?}",
-                            actual_cid
-                        ),
-                    }
-                })?;
-            if actual_dispatch_key != dispatch_key {
-                return Err(BlpError::Internal {
-                    detail: format!(
-                        "Bloomberg returned unexpected dispatch correlation ID {:?} for slab key {}",
-                        actual_cid, key
-                    ),
-                });
-            }
-
-            xbbg_log::debug!(
-                worker_id = self.id,
-                key = key,
-                service = %params.service,
-                operation = %request.effective_operation(),
-                "request sent"
-            );
-            Ok(())
+            )
         })();
 
-        match result {
-            Ok(()) => Some(RequestTicket { key, generation }),
-            Err(err) => {
+        let actual_cid = match send_result {
+            Ok(actual_cid) => actual_cid,
+            Err(error) => {
                 if let Some(slot) = self.shared.take_slot(dispatch_key) {
-                    slot.cell.fail(err);
+                    slot.cell.fail(error);
                 }
-                None
+                return None;
             }
+        };
+
+        if let Some(detail) = correlation_invariant_failure(dispatch_key, &actual_cid, key) {
+            if let Some(slot) = self.shared.take_slot(dispatch_key) {
+                slot.cell.fail(BlpError::Internal {
+                    detail: detail.clone(),
+                });
+            }
+            if let Err(cancel_error) = self.session.cancel(&actual_cid) {
+                xbbg_log::error!(
+                    worker_id = self.id,
+                    error = %cancel_error,
+                    actual_cid = ?actual_cid,
+                    "failed to cancel request after correlation invariant violation"
+                );
+            }
+            xbbg_log::error!(
+                worker_id = self.id,
+                actual_cid = ?actual_cid,
+                detail = %detail,
+                "quarantining request worker after correlation invariant violation"
+            );
+            drop(lifecycle);
+            self.signal_shutdown();
+            return None;
         }
+
+        let params = request.params();
+        xbbg_log::debug!(
+            worker_id = self.id,
+            key,
+            service = %params.service,
+            operation = %request.effective_operation(),
+            "request sent"
+        );
+        Some(RequestTicket { key, generation })
     }
 
     /// Cancel an in-flight request (caller dropped the awaitable). The
@@ -1563,12 +1776,11 @@ impl AsyncRequestWorker {
                 worker_id = self.id,
                 key = ticket.key,
                 error = %error,
-                "failed to cancel Bloomberg request"
+                "failed to cancel Bloomberg request; quarantining worker"
             );
             slot.cell.discard();
             self.shared.health.store(2, Ordering::Release);
-            self.shared
-                .drain_in_flight("Bloomberg request cancellation failed");
+            self.signal_shutdown();
             return;
         }
 
@@ -1589,14 +1801,16 @@ impl AsyncRequestWorker {
         };
         let cid = dispatch_key.to_correlation_id();
         if let Err(error) = self.session.cancel(&cid) {
-            // Cancel failed — session is probably terminal. We still must fail
-            // the caller's oneshot; the request is not coming back.
             xbbg_log::warn!(
                 worker_id = self.id,
                 key = ticket.key,
                 error = %error,
-                "timeout_request: Bloomberg cancel failed"
+                "timeout_request: Bloomberg cancel failed; quarantining worker"
             );
+            slot.cell.fail(BlpError::Timeout);
+            self.shared.health.store(2, Ordering::Release);
+            self.signal_shutdown();
+            return;
         }
         slot.cell.fail(BlpError::Timeout);
         xbbg_log::warn!(
@@ -1621,6 +1835,10 @@ impl AsyncRequestWorker {
         xbbg_log::debug!(worker_id = self.id, service = %service_uri, "introspecting schema");
 
         self.ensure_service(service_uri).await?;
+        let _lifecycle = self.shared.lifecycle.read();
+        if self.is_shutting_down() {
+            return Err(Self::shutdown_error());
+        }
 
         let service = self.session.get_service(service_uri)?;
         let schema = crate::schema::introspect_service(&service, service_uri);
@@ -1637,14 +1855,26 @@ impl AsyncRequestWorker {
 
     /// Begin stopping the session without blocking (Drop-friendly).
     pub(crate) fn signal_shutdown(&self) {
+        if self.stop_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let _lifecycle = self.shared.lifecycle.write();
         self.shared.shutting_down.store(true, Ordering::Release);
+        self.shared.health.store(2, Ordering::Release);
+        self.shared
+            .fail_pending_service_opens("request worker shutdown");
+        self.shared.fail_pending_identity("request worker shutdown");
+        self.shared.drain_in_flight("request worker shutdown");
         self.session.stop_async();
     }
 
     /// Stop the session (blocks until in-flight callbacks drain) and fail
     /// anything still registered.
     pub(crate) fn shutdown_blocking(&self) {
+        self.stop_started.store(true, Ordering::Release);
+        let _lifecycle = self.shared.lifecycle.write();
         self.shared.shutting_down.store(true, Ordering::Release);
+        self.shared.health.store(2, Ordering::Release);
         xbbg_log::info!(worker_id = self.id, "AsyncRequestWorker shutting down");
         self.session.stop();
         self.shared.fail_pending_service_opens("worker shutdown");
@@ -1983,5 +2213,50 @@ mod tests {
                 ("returnEids".to_string(), "true".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn correlation_invariant_rejects_foreign_and_non_dispatch_ids() {
+        let expected = DispatchKey::with_generation(3, 7);
+        assert!(
+            correlation_invariant_failure(expected, &expected.to_correlation_id(), 3).is_none()
+        );
+
+        let foreign = DispatchKey::with_generation(4, 7).to_correlation_id();
+        assert!(correlation_invariant_failure(expected, &foreign, 3).is_some());
+        assert!(correlation_invariant_failure(expected, &CorrelationId::Unset, 3).is_some());
+    }
+
+    #[test]
+    fn cancelled_service_waiter_removes_its_empty_generation() {
+        let shared = shared();
+        let service = "//blp/refdata";
+        let attempt_cid = SERVICE_OPEN_CID_TAG | 1;
+        let (tx, rx) = oneshot::channel();
+        shared.pending_service_opens.lock().insert(
+            service.to_string(),
+            PendingServiceOpen {
+                cid: attempt_cid,
+                waiters: vec![tx],
+            },
+        );
+
+        drop(PendingServiceWaiter::new(&shared, service, attempt_cid, rx));
+
+        assert!(!shared.pending_service_opens.lock().contains_key(service));
+    }
+
+    #[test]
+    fn cancelled_identity_waiter_is_pruned_immediately() {
+        let shared = shared();
+        let (tx, rx) = oneshot::channel();
+        *shared.identity.lock() = IdentityAuthState::Pending(vec![tx]);
+
+        drop(PendingIdentityWaiter::new(&shared, rx));
+
+        match &*shared.identity.lock() {
+            IdentityAuthState::Pending(waiters) => assert!(waiters.is_empty()),
+            _ => panic!("pending identity generation must remain"),
+        };
     }
 }

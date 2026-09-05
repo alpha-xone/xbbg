@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 # ============================================================================
 # Test Data Configuration
 # ============================================================================
@@ -30,6 +33,17 @@ def _recent_trading_day() -> str:
     return day.isoformat()
 
 
+def intraday_window_utc(date_value: str, start_time: str, end_time: str) -> tuple[datetime, datetime]:
+    """Convert configured New York wall times to naive UTC for clients that assume UTC."""
+    market_tz = ZoneInfo(BENCH_TZ)
+
+    def to_utc(time_value: str) -> datetime:
+        local = datetime.fromisoformat(f"{date_value}T{time_value}").replace(tzinfo=market_tz)
+        return local.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return to_utc(start_time), to_utc(end_time)
+
+
 # Intraday data (dynamic date: Bloomberg retains intraday history ~6 months)
 BDIB_DATE = _recent_trading_day()
 BDIB_START_TIME = "09:30"
@@ -53,10 +67,9 @@ BQL_MULTI = "get(px_last, px_volume) for(['IBM US Equity', 'AAPL US Equity'])"
 # Benchmark Settings
 # ============================================================================
 
-# Number of iterations per benchmark (first is cold, rest are warm)
+# Warm-session samples. Fresh-process first-result timing is measured separately
+# in a dedicated child process for every package and scenario.
 ITERATIONS = 5
-
-# Warmup iterations (discarded from results)
 WARMUP_ITERATIONS = 1
 
 # Time limit per benchmark (seconds)
@@ -79,21 +92,6 @@ PACKAGES = {
         "import": "xbbg_legacy",  # Install xbbg==0.10.3 as xbbg_legacy
         "version_check": lambda: __import__("xbbg_legacy").__version__,
         "install_cmd": "pip install xbbg==0.10.3",
-    },
-    "blpapi": {
-        "name": "blpapi (Official)",
-        "enabled": True,
-        "import": "blpapi",
-        "version_check": lambda: __import__("blpapi").version,
-        "install_cmd": "pip install --index-url=https://blpapi.bloomberg.com/repository/releases/python/simple/ blpapi",
-        "requires_wrapper": True,  # Needs custom wrapper for consistent API
-    },
-    "bbg-fetch": {
-        "name": "bbg-fetch",
-        "enabled": True,
-        "import": "bbg_fetch",
-        "version_check": lambda: __import__("bbg_fetch").__version__,
-        "install_cmd": "pip install bbg-fetch",
     },
     "pdblp": {
         "name": "pdblp",
@@ -122,14 +120,17 @@ GENERATE_HTML = False
 # ============================================================================
 
 METRICS = [
-    "cold_start_ms",  # First call time
-    "warm_mean_ms",  # Average of warm calls
-    "warm_median_ms",  # Median of warm calls
-    "warm_p95_ms",  # 95th percentile
-    "warm_p99_ms",  # 99th percentile
-    "warm_std_ms",  # Standard deviation
-    "memory_peak_mb",  # Peak memory usage
-    "data_shape",  # Result shape validation
+    "fresh_process_first_result_ms",
+    "fresh_process_sample_count",
+    "warm_first_ms",
+    "warm_mean_ms",
+    "warm_median_ms",
+    "warm_max_ms",
+    "warm_sample_count",
+    "warm_p95_ms",  # null unless at least 20 warm samples
+    "warm_p99_ms",  # null unless at least 100 warm samples
+    "python_tracemalloc_peak_mb",  # separate untimed call; Python-visible allocations only
+    "data_shape",
 ]
 
 # ============================================================================

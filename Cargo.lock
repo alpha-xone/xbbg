@@ -2891,6 +2891,8 @@ name = "xbbg-arrow"
 version = "1.4.7"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
  "arrow-ord",
  "arrow-schema",
  "arrow-select",

@@ -11,9 +11,6 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 
 from dataclasses import dataclass
-import statistics
-import time
-import tracemalloc
 
 logger = logging.getLogger(__name__)
 
@@ -25,95 +22,31 @@ from config import (
     TICKERS_SINGLE,
     WARMUP_ITERATIONS,
 )
+from benchmark_contracts import LiveMeasurement, measure_live_call, reused_pdblp_connection
 
 
 @dataclass
-class BenchmarkResult:
-    """Result from a benchmark run."""
-
+class BenchmarkResult(LiveMeasurement):
     package: str
     operation: str
-    cold_start_ms: float
-    warm_mean_ms: float
-    warm_median_ms: float
-    warm_p95_ms: float
-    warm_p99_ms: float
-    warm_std_ms: float
-    memory_peak_mb: float
-    data_shape: tuple
     iterations: int
 
 
 def benchmark_bdp(package_name: str, bdp_func, tickers, fields) -> BenchmarkResult | None:
-    """Benchmark BDP operation.
-
-    Args:
-        package_name: Name of package being benchmarked
-        bdp_func: Function to call for bdp(tickers, fields)
-        tickers: List of tickers or single ticker
-        fields: List of fields or single field
-
-    Returns:
-        BenchmarkResult with timing and memory stats
-    """
-    times = []
-    result = None
-
-    # Start memory tracking
-    tracemalloc.start()
-
-    # Warmup (discarded). A None result means the package is not installed
-    # (or errored) - skip the lane instead of timing a no-op.
-    for _ in range(WARMUP_ITERATIONS):
-        if bdp_func(tickers, fields) is None:
-            tracemalloc.stop()
-            return None
-
-    # Measured iterations
-    for _i in range(ITERATIONS):
-        start = time.perf_counter()
-        result = bdp_func(tickers, fields)
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        times.append(elapsed_ms)
-
-    # Get memory usage
-    _current, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    memory_mb = peak / 1024 / 1024
-
-    # Get result shape
-    if hasattr(result, "shape"):
-        shape = result.shape
-    elif hasattr(result, "__len__"):
-        shape = (len(result),)
-    else:
-        shape = (1,)
-
-    # Calculate statistics
-    cold_start = times[0]
-    warm_times = times[1:] if len(times) > 1 else times
-    warm_mean = statistics.mean(warm_times)
-    warm_median = statistics.median(warm_times)
-    warm_std = statistics.stdev(warm_times) if len(warm_times) > 1 else 0
-
-    # Percentiles
-    sorted_times = sorted(warm_times)
-    p95_idx = int(len(sorted_times) * 0.95)
-    p99_idx = int(len(sorted_times) * 0.99)
-    warm_p95 = sorted_times[p95_idx] if sorted_times else warm_mean
-    warm_p99 = sorted_times[p99_idx] if sorted_times else warm_mean
-
+    measurement = measure_live_call(
+        bdp_func,
+        (tickers, fields),
+        iterations=ITERATIONS,
+        warmup_iterations=WARMUP_ITERATIONS,
+    )
+    if measurement is None:
+        return None
+    ticker_count = len(tickers) if isinstance(tickers, list) else 1
+    field_count = len(fields) if isinstance(fields, list) else 1
     return BenchmarkResult(
+        **vars(measurement),
         package=package_name,
-        operation=f"bdp({len(tickers) if isinstance(tickers, list) else 1}t, {len(fields) if isinstance(fields, list) else 1}f)",
-        cold_start_ms=cold_start,
-        warm_mean_ms=warm_mean,
-        warm_median_ms=warm_median,
-        warm_p95_ms=warm_p95,
-        warm_p99_ms=warm_p99,
-        warm_std_ms=warm_std,
-        memory_peak_mb=memory_mb,
-        data_shape=shape,
+        operation=f"bdp({ticker_count}t, {field_count}f)",
         iterations=ITERATIONS,
     )
 
@@ -138,79 +71,15 @@ def run_xbbg_legacy(tickers, fields):
         return None
 
 
-def run_blpapi_raw(tickers, fields):
-    """Benchmark raw blpapi (with minimal wrapper)."""
-    import blpapi
-
-    # Minimal wrapper for consistent API
-    session_options = blpapi.SessionOptions()
-    session_options.setServerHost("localhost")
-    session_options.setServerPort(8194)
-
-    session = blpapi.Session(session_options)
-    if not session.start():
-        raise RuntimeError("Failed to start session")
-
-    if not session.openService("//blp/refdata"):
-        raise RuntimeError("Failed to open service")
-
-    ref_data_service = session.getService("//blp/refdata")
-    request = ref_data_service.createRequest("ReferenceDataRequest")
-
-    # Add tickers and fields
-    ticker_list = tickers if isinstance(tickers, list) else [tickers]
-    field_list = fields if isinstance(fields, list) else [fields]
-
-    for ticker in ticker_list:
-        request.append("securities", ticker)
-    for field in field_list:
-        request.append("fields", field)
-
-    session.sendRequest(request)
-
-    # Collect results
-    results = []
-    while True:
-        event = session.nextEvent(500)
-        if event.eventType() == blpapi.Event.RESPONSE:
-            results.extend(list(event))
-            break
-
-    session.stop()
-    return results
-
-
 def run_pdblp(tickers, fields):
-    """Benchmark pdblp."""
     try:
-        import pdblp
-
-        con = pdblp.BCon(debug=False, timeout=5000)
-        con.start()
-
+        con = reused_pdblp_connection()
         ticker_list = tickers if isinstance(tickers, list) else [tickers]
         field_list = fields if isinstance(fields, list) else [fields]
-
-        result = con.ref(ticker_list, field_list)
-        con.stop()
-        return result
+        return con.ref(ticker_list, field_list)
     except ImportError:
         logger.warning("pdblp not installed (pip install pdblp)")
         return None
-
-
-def run_bbg_fetch(tickers, fields):
-    """Benchmark bbg-fetch."""
-    try:
-        import bbg_fetch  # noqa: F401
-
-        # bbg-fetch has different API, adapt as needed
-        # This is a placeholder - adjust based on actual bbg-fetch API
-        logger.warning("bbg-fetch wrapper not implemented yet")
-        return
-    except ImportError:
-        logger.warning("bbg-fetch not installed (pip install bbg-fetch)")
-        return
 
 
 def main():
@@ -233,7 +102,7 @@ def main():
             result = benchmark_bdp("xbbg-rust", run_xbbg_rust, TICKERS_SINGLE[0], FIELDS_SINGLE[0])
             if result:
                 results.append(result)
-                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB")
+                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB")
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
 
@@ -243,7 +112,7 @@ def main():
             result = benchmark_bdp("xbbg-legacy", run_xbbg_legacy, TICKERS_SINGLE[0], FIELDS_SINGLE[0])
             if result:
                 results.append(result)
-                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB")
+                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB")
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
 
@@ -253,7 +122,7 @@ def main():
             result = benchmark_bdp("pdblp", run_pdblp, TICKERS_SINGLE[0], FIELDS_SINGLE[0])
             if result:
                 results.append(result)
-                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB")
+                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB")
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
 
@@ -267,7 +136,7 @@ def main():
             result = benchmark_bdp("xbbg-rust", run_xbbg_rust, TICKERS_MULTI, FIELDS_MULTI)
             if result:
                 results.append(result)
-                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB")
+                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB")
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
 
@@ -277,7 +146,7 @@ def main():
             result = benchmark_bdp("xbbg-legacy", run_xbbg_legacy, TICKERS_MULTI, FIELDS_MULTI)
             if result:
                 results.append(result)
-                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB")
+                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB")
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
 
@@ -287,7 +156,7 @@ def main():
             result = benchmark_bdp("pdblp", run_pdblp, TICKERS_MULTI, FIELDS_MULTI)
             if result:
                 results.append(result)
-                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.memory_peak_mb:.2f}MB")
+                logger.info(f"  ✓ {result.warm_mean_ms:.2f}ms (mean), {result.python_tracemalloc_peak_mb:.2f}MB")
         except Exception as e:
             logger.error(f"  ✗ Error: {e}")
 
@@ -298,10 +167,13 @@ def main():
 
     for result in results:
         logger.info(f"\n{result.package} - {result.operation}")
-        logger.info(f"  Cold start: {result.cold_start_ms:.2f}ms")
+        logger.info(
+            f"  Fresh-process first result: {result.fresh_process_first_result_ms:.2f}ms "
+            f"({result.fresh_process_sample_count} sample)"
+        )
         logger.info(f"  Warm mean:  {result.warm_mean_ms:.2f}ms ± {result.warm_std_ms:.2f}ms")
-        logger.info(f"  Warm p95:   {result.warm_p95_ms:.2f}ms")
-        logger.info(f"  Memory:     {result.memory_peak_mb:.2f}MB")
+        logger.info(f"  Warm max:   {result.warm_max_ms:.2f}ms ({result.warm_sample_count} samples)")
+        logger.info(f"  CPython tracemalloc peak (untimed call): {result.python_tracemalloc_peak_mb:.2f}MB")
         logger.info(f"  Shape:      {result.data_shape}")
 
     # Calculate speedups

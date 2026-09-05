@@ -160,8 +160,7 @@ impl Engine {
     }
 
     pub fn invalidate_exchange_cache(&self, ticker: Option<&str>) -> Result<(), String> {
-        self.exchange_cache.invalidate(ticker);
-        Ok(())
+        self.exchange_cache.invalidate(ticker)
     }
 
     pub fn save_exchange_cache(&self) -> Result<(), String> {

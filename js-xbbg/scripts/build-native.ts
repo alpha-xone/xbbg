@@ -2,122 +2,65 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { inspectRustCodegen, sha256File } from './native-build-info';
+import type { NativeBuildInfo } from './native-build-info';
 import { nativeBinaryName } from './platform-map';
 
 const packageDir = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(packageDir, '..');
 
-interface SdkLayout {
-  readonly sdkLibDir: string;
-  readonly sdkRoot: string;
+interface CargoEvent {
+  reason: string;
+  package_id?: string;
+  target?: { name: string; crate_types: readonly string[] };
+  filenames?: readonly string[];
+  env?: readonly (readonly [string, string])[];
+  linked_libs?: readonly string[];
+  linked_paths?: readonly string[];
+  message?: { rendered?: string | null };
 }
 
-function exists(target: fs.PathLike): boolean {
-  try {
-    fs.accessSync(target);
-    return true;
-  } catch {
-    return false;
-  }
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item: unknown) => typeof item === 'string');
 }
 
-function parseVersionParts(name: string): number[] | null {
-  const parts = name.split('.').map((part) => Number(part));
-  return parts.every((part) => Number.isInteger(part) && part >= 0) ? parts : null;
-}
-
-function compareSdkRoots(left: string, right: string): number {
-  const leftParts = parseVersionParts(path.basename(left));
-  const rightParts = parseVersionParts(path.basename(right));
-  if (leftParts && rightParts) {
-    const length = Math.max(leftParts.length, rightParts.length);
-    for (let index = 0; index < length; index += 1) {
-      const leftPart = leftParts[index] ?? 0;
-      const rightPart = rightParts[index] ?? 0;
-      if (leftPart !== rightPart) {
-        return rightPart - leftPart;
-      }
-    }
-  }
-  if (leftParts) {
-    return -1;
-  }
-  if (rightParts) {
-    return 1;
-  }
-  return right.localeCompare(left);
-}
-
-function resolveSdkLibDir(sdkRoot: string): string | null {
-  const candidates =
-    process.platform === 'darwin'
-      ? [path.join(sdkRoot, 'Darwin'), path.join(sdkRoot, 'lib'), path.join(sdkRoot, 'lib64')]
-      : process.platform === 'win32'
-        ? [path.join(sdkRoot, 'lib'), path.join(sdkRoot, 'Lib'), path.join(sdkRoot, 'bin')]
-        : [path.join(sdkRoot, 'Linux'), path.join(sdkRoot, 'lib64'), path.join(sdkRoot, 'lib')];
-
-  return candidates.find((candidate) => exists(candidate)) ?? null;
-}
-
-function resolveSdkLayout(root: string | null | undefined): SdkLayout | null {
-  if (root === undefined || root === null || root.length === 0 || !exists(root)) {
-    return null;
-  }
-
-  const candidates = [path.resolve(root)];
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      candidates.push(path.join(root, entry.name));
-    }
-  }
-
-  candidates.sort(compareSdkRoots);
-
-  for (const candidate of candidates) {
-    const includeDir = exists(path.join(candidate, 'include'))
-      ? path.join(candidate, 'include')
-      : exists(path.join(candidate, 'Include'))
-        ? path.join(candidate, 'Include')
-        : null;
-    const libDir = resolveSdkLibDir(candidate);
-    if (includeDir !== null && libDir !== null) {
-      return { sdkLibDir: libDir, sdkRoot: candidate };
-    }
-  }
-
-  return null;
-}
-
-function resolveSdkRoot(): SdkLayout | null {
-  const blpapiRoot = process.env.BLPAPI_ROOT;
-  if (blpapiRoot !== undefined && blpapiRoot.length > 0) {
-    const layout = resolveSdkLayout(path.resolve(blpapiRoot));
-    if (layout !== null) {
-      return layout;
-    }
-  }
-
-  const devSdkRoot = process.env.XBBG_DEV_SDK_ROOT;
-  if (devSdkRoot !== undefined && devSdkRoot.length > 0) {
-    const resolved = path.isAbsolute(devSdkRoot) ? devSdkRoot : path.resolve(repoRoot, devSdkRoot);
-    const layout = resolveSdkLayout(resolved);
-    if (layout !== null) {
-      return layout;
-    }
-  }
-
-  return resolveSdkLayout(path.join(repoRoot, 'vendor', 'blpapi-sdk'));
-}
-
-function resolveBuildArtifact(profile: 'debug' | 'release'): string {
-  const ext = process.platform === 'darwin' ? 'dylib' : process.platform === 'win32' ? 'dll' : 'so';
-  const prefix = process.platform === 'win32' ? '' : 'lib';
-  return path.join(repoRoot, 'target', profile, `${prefix}napi_xbbg.${ext}`);
+function isCargoEvent(value: unknown): value is CargoEvent {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'reason' in value &&
+    typeof value.reason === 'string' &&
+    (!('package_id' in value) || typeof value.package_id === 'string') &&
+    (!('target' in value) ||
+      (typeof value.target === 'object' &&
+        value.target !== null &&
+        'name' in value.target &&
+        typeof value.target.name === 'string' &&
+        'crate_types' in value.target &&
+        isStringArray(value.target.crate_types))) &&
+    (!('filenames' in value) || isStringArray(value.filenames)) &&
+    (!('env' in value) ||
+      (Array.isArray(value.env) &&
+        value.env.every(
+          (entry: unknown) =>
+            Array.isArray(entry) &&
+            entry.length === 2 &&
+            typeof entry[0] === 'string' &&
+            typeof entry[1] === 'string',
+        ))) &&
+    (!('linked_libs' in value) || isStringArray(value.linked_libs)) &&
+    (!('linked_paths' in value) || isStringArray(value.linked_paths)) &&
+    (!('message' in value) ||
+      (typeof value.message === 'object' &&
+        value.message !== null &&
+        (!('rendered' in value.message) ||
+          value.message.rendered === null ||
+          typeof value.message.rendered === 'string')))
+  );
 }
 
 function fail(message: string): never {
-  console.error(`js-xbbg build failed: ${message}`);
-  process.exit(1);
+  throw new Error(message);
 }
 
 function runTool(command: string, args: readonly string[], context: string): string {
@@ -277,69 +220,184 @@ function patchDarwinNativeAddon(binaryPath: string, sdkLibDir: string): void {
   verifyDarwinPortableBinary(binaryPath);
 }
 
-// Release by default: this artifact feeds packaging and benchmarks, and a debug
-// Addon silently bypasses the workspace release profile (fat LTO, opt-level=3,
-// Panic=abort). Pass --debug for local iteration builds.
-const profile: 'debug' | 'release' = process.argv.includes('--debug') ? 'debug' : 'release';
-const artifactPath = resolveBuildArtifact(profile);
-const outputPath = path.join(packageDir, nativeBinaryName);
+function sdkVersion(includeDir: string): string | null {
+  const headerPath = path.join(includeDir, 'blpapi_versionmacros.h');
+  if (!fs.existsSync(headerPath)) {
+    return null;
+  }
+  const header = fs.readFileSync(headerPath, 'utf8');
+  const parts = ['MAJOR', 'MINOR', 'PATCH', 'BUILD'].map(
+    (part) =>
+      new RegExp(`^\\s*#\\s*define\\s+BLPAPI_VERSION_${part}\\s+(\\d+)`, 'mu').exec(header)?.[1],
+  );
+  return parts.some((part) => part === undefined) ? null : parts.join('.');
+}
 
-const sdkLayout = resolveSdkRoot();
-if (!sdkLayout) {
-  fail(
-    'Could not find the Bloomberg SDK. Set BLPAPI_ROOT (or XBBG_DEV_SDK_ROOT) or vendor the SDK under vendor/blpapi-sdk/<version>.',
+function main(): void {
+  // Portable release by default; host tuning is deliberately local-only.
+  const profile = process.argv.includes('--debug') ? 'debug' : 'release';
+  const outputPath = path.join(packageDir, nativeBinaryName);
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if ((env.BLPAPI_ROOT ?? '').length === 0 && (env.XBBG_DEV_SDK_ROOT ?? '').length > 0) {
+    env.BLPAPI_ROOT = path.resolve(repoRoot, env.XBBG_DEV_SDK_ROOT ?? '');
+  }
+  if (process.argv.includes('--target-cpu-native')) {
+    const inherited =
+      env.CARGO_ENCODED_RUSTFLAGS !== undefined
+        ? env.CARGO_ENCODED_RUSTFLAGS.split('\u001F').filter(Boolean)
+        : (env.RUSTFLAGS ?? '').split(/\s+/u).filter(Boolean);
+    env.CARGO_ENCODED_RUSTFLAGS = [...inherited, '-C', 'target-cpu=native'].join('\u001F');
+    delete env.RUSTFLAGS;
+  }
+  // Otherwise leave flag resolution to Cargo, including .cargo/config.toml.
+  // Its build-script event reports the effective values, not this launcher's guesses.
+  const cargoArgs = ['build', '-p', 'napi-xbbg', '--message-format=json-render-diagnostics'];
+  if (profile === 'release') {
+    cargoArgs.push('--release');
+  }
+  const result = spawnSync(
+    process.platform === 'win32' ? (env.ComSpec ?? 'cmd.exe') : 'cargo',
+    process.platform === 'win32' ? ['/d', '/s', '/c', 'cargo', ...cargoArgs] : cargoArgs,
+    {
+      cwd: repoRoot,
+      env,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['inherit', 'pipe', 'inherit'],
+    },
+  );
+  if (result.error !== undefined) {
+    fail(`Cargo invocation failed: ${result.error.message}`);
+  }
+  const events: CargoEvent[] = [];
+  for (const line of (result.stdout ?? '').split(/\r?\n/u)) {
+    if (line.length === 0) {
+      continue;
+    }
+    const event: unknown = JSON.parse(line);
+    if (!isCargoEvent(event)) {
+      fail('Cargo emitted an invalid build event');
+    }
+    if (typeof event.message?.rendered === 'string') {
+      process.stderr.write(event.message.rendered);
+    }
+    events.push(event);
+  }
+  if (result.status !== 0) {
+    process.exitCode = result.status ?? 1;
+    return;
+  }
+  const artifacts = events.filter(
+    (event) =>
+      event.reason === 'compiler-artifact' &&
+      event.target?.name === 'napi_xbbg' &&
+      event.target.crate_types.includes('cdylib'),
+  );
+  if (artifacts.length !== 1 || artifacts[0] === undefined) {
+    fail('Cargo did not identify exactly one current napi-xbbg cdylib artifact');
+  }
+  const artifact = artifacts[0];
+  const files = artifact.filenames?.filter((file) => /\.(?:dll|dylib|so)$/u.test(file)) ?? [];
+  if (files.length !== 1 || files[0] === undefined) {
+    fail('Cargo did not identify exactly one loadable native library');
+  }
+  const artifactPath = files[0];
+  const producer = events.filter(
+    (event) => event.reason === 'build-script-executed' && event.package_id === artifact.package_id,
+  );
+  if (producer.length !== 1 || producer[0] === undefined) {
+    fail('Cargo did not report native compiler provenance');
+  }
+  const buildValues = Object.fromEntries(producer[0].env ?? []);
+  function buildValue(key: string): string {
+    const value = buildValues[`XBBG_BUILD_${key}`];
+    if (value === undefined) {
+      fail(`Compiler provenance is missing ${key}`);
+    }
+    return value;
+  }
+  const actualProfile = buildValue('PROFILE');
+  if (actualProfile !== profile) {
+    fail(`Cargo built profile ${actualProfile}, not requested profile ${profile}`);
+  }
+  const rustFlags = buildValue('RUSTFLAGS').split('\u001F').filter(Boolean);
+  const codegen = inspectRustCodegen(rustFlags);
+  const libraryPattern = /^(dylib|static)=(blpapi3(?:_(?:32|64))?)$/u;
+  const sdkEvent = events.find(
+    (event) =>
+      event.reason === 'build-script-executed' &&
+      event.linked_libs?.some((library) => libraryPattern.test(library)) === true,
+  );
+  const linkedLibrary = sdkEvent?.linked_libs?.find((library) => libraryPattern.test(library));
+  const libraryMatch = linkedLibrary === undefined ? null : libraryPattern.exec(linkedLibrary);
+  const kind = libraryMatch?.[1];
+  const stem = libraryMatch?.[2];
+  if (sdkEvent === undefined || kind === undefined || stem === undefined) {
+    fail('Cargo did not report the Bloomberg SDK link input');
+  }
+  const target = buildValue('TARGET');
+  const libraryNames = target.includes('windows')
+    ? [`${stem}.lib`]
+    : kind === 'static'
+      ? [`lib${stem}.a`]
+      : target.includes('darwin')
+        ? [`lib${stem}.dylib`, `lib${stem}.so`, `lib${stem}.a`]
+        : [`lib${stem}.so`, `lib${stem}.a`];
+  const libraryFile = (sdkEvent.linked_paths ?? [])
+    .filter((directory) => directory.startsWith('native='))
+    .flatMap((directory) => libraryNames.map((name) => path.join(directory.slice(7), name)))
+    .find((file) => fs.existsSync(file));
+  if (libraryFile === undefined) {
+    fail(`Cannot fingerprint the SDK library Cargo linked: ${linkedLibrary}`);
+  }
+  const sdkValues = Object.fromEntries(sdkEvent.env ?? []);
+  const sdkIncludeDir = sdkValues.XBBG_SDK_INCLUDE_DIR;
+  if (sdkIncludeDir === undefined || sdkIncludeDir.length === 0) {
+    fail('Cargo did not report the Bloomberg SDK headers used by the build');
+  }
+  const headerVersion = sdkVersion(sdkIncludeDir);
+  if (headerVersion === null) {
+    fail('The compiled Bloomberg SDK headers do not provide version macros');
+  }
+  const sdkLibDir = path.dirname(libraryFile);
+  const preparedOutput = path.join(packageDir, `.${nativeBinaryName}.${process.pid}.build.tmp`);
+  const infoPath = path.join(packageDir, '.native-build-info.json');
+  const preparedInfo = `${infoPath}.${process.pid}.tmp`;
+  try {
+    fs.copyFileSync(artifactPath, preparedOutput);
+    fs.chmodSync(preparedOutput, 0o755);
+    patchDarwinNativeAddon(preparedOutput, sdkLibDir);
+    const buildInfo: NativeBuildInfo = {
+      allocator: buildValue('ALLOCATOR'),
+      artifactSha256: sha256File(preparedOutput),
+      gitCommit: buildValue('GIT_COMMIT'),
+      optLevel: buildValue('OPT_LEVEL'),
+      portable: codegen.portable,
+      profile,
+      rustcVersion: buildValue('RUSTC_VERSION'),
+      rustFlags,
+      schemaVersion: 1,
+      sdkLibrary: { file: path.basename(libraryFile), sha256: sha256File(libraryFile) },
+      sdkVersion: headerVersion,
+      target,
+      targetCpu: codegen.targetCpu,
+      targetFeatures: buildValue('TARGET_FEATURES').split(',').filter(Boolean),
+    };
+    fs.writeFileSync(preparedInfo, `${JSON.stringify(buildInfo, null, 2)}\n`);
+    fs.renameSync(preparedOutput, outputPath);
+    fs.renameSync(preparedInfo, infoPath);
+  } finally {
+    fs.rmSync(preparedOutput, { force: true });
+    fs.rmSync(preparedInfo, { force: true });
+  }
+  console.log(
+    `Copied ${path.relative(repoRoot, artifactPath)} -> ${path.relative(repoRoot, outputPath)}`,
   );
 }
 
-const { sdkRoot } = sdkLayout;
-const blpapiLibDir = process.env.BLPAPI_LIB_DIR;
-const sdkLibDir =
-  blpapiLibDir !== undefined && blpapiLibDir.length > 0
-    ? path.resolve(blpapiLibDir)
-    : sdkLayout.sdkLibDir;
-if (!exists(sdkLibDir)) {
-  fail(`Resolved Bloomberg SDK lib dir does not exist: ${sdkLibDir}`);
+try {
+  main();
+} catch (error) {
+  console.error(`js-xbbg build failed: ${String(error)}`);
+  process.exitCode = 1;
 }
-
-const extraRustFlags: string[] = [];
-if (process.argv.includes('--target-cpu-native')) {
-  // Host-tuned build for internal deployments/benchmarks; not for published packages.
-  extraRustFlags.push('-C target-cpu=native');
-}
-if (process.platform === 'darwin') {
-  extraRustFlags.push('-C link-arg=-Wl,-headerpad_max_install_names');
-}
-
-const env: NodeJS.ProcessEnv = { ...process.env };
-env.BLPAPI_ROOT = sdkRoot;
-env.BLPAPI_LIB_DIR = sdkLibDir;
-env.RUSTFLAGS = [process.env.RUSTFLAGS, ...extraRustFlags].filter(Boolean).join(' ').trim();
-
-const cargoArgs = ['build', '-p', 'napi-xbbg'];
-if (profile === 'release') {
-  cargoArgs.push('--release');
-}
-
-const result = spawnSync('cargo', cargoArgs, {
-  cwd: repoRoot,
-  env,
-  stdio: 'inherit',
-});
-
-if (result.status !== 0) {
-  process.exit(result.status ?? 1);
-}
-
-if (!exists(artifactPath)) {
-  fail(`Expected build artifact was not produced: ${artifactPath}`);
-}
-
-fs.copyFileSync(artifactPath, outputPath);
-fs.chmodSync(outputPath, 0o755);
-patchDarwinNativeAddon(outputPath, sdkLibDir);
-// Record build provenance so packaging can refuse to stage a debug addon.
-fs.writeFileSync(path.join(packageDir, '.native-build-profile'), `${profile}\n`);
-
-console.log(
-  `Copied ${path.relative(repoRoot, artifactPath)} -> ${path.relative(repoRoot, outputPath)}`,
-);

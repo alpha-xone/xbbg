@@ -14,12 +14,16 @@ Results are saved per version:
 from __future__ import annotations
 import argparse
 import inspect
+from dataclasses import asdict, is_dataclass
 
 from datetime import datetime
 import json
 import logging
 from pathlib import Path
 import sys
+
+from benchmark_contracts import close_shared_sessions, collect_provenance
+import config as benchmark_config
 
 logger = logging.getLogger(__name__)
 
@@ -78,123 +82,71 @@ def run_benchmark_module(module_name: str):
 
 
 def generate_markdown_report(all_results: dict, output_path: Path, version: str, timestamp: str):
-    """Generate markdown report from results."""
-    with output_path.open("w") as f:
-        f.write("# xbbg Benchmark Results\n\n")
-        f.write(f"**Version:** {version}\n")
-        f.write(f"**Generated:** {timestamp}\n\n")
-        f.write("---\n\n")
-
+    """Generate a compact report whose labels match each measurement boundary."""
+    with output_path.open("w", encoding="utf-8") as file:
+        file.write("# xbbg Benchmark Results\n\n")
+        file.write(f"**Version:** {version}\n")
+        file.write(f"**Generated:** {timestamp}\n\n")
         for operation, results in all_results.items():
-            f.write(f"## {operation}\n\n")
-
+            file.write(f"## {operation}\n\n")
             if not results:
-                f.write("*No results*\n\n")
+                file.write("*No results*\n\n")
                 continue
-
-            # Table header
-            f.write("| Package | Cold Start (ms) | Warm Mean (ms) | Warm Std (ms) | Memory (MB) | Shape |\n")
-            f.write("|---------|-----------------|----------------|---------------|-------------|-------|\n")
-
-            # Find best warm mean for highlighting
-            warm_means = [r.warm_mean_ms for r in results if hasattr(r, "warm_mean_ms")]
-            best_warm = min(warm_means) if warm_means else 0
-
-            for result in results:
-                is_best = abs(result.warm_mean_ms - best_warm) < 0.01
-                marker = " ✅" if is_best else ""
-
-                f.write(
-                    f"| {result.package}{marker} | "
-                    f"{result.cold_start_ms:.2f} | "
-                    f"{result.warm_mean_ms:.2f} | "
-                    f"{result.warm_std_ms:.2f} | "
-                    f"{result.memory_peak_mb:.2f} | "
-                    f"{result.data_shape} |\n"
+            first = results[0]
+            if hasattr(first, "warm_mean_ms"):
+                file.write(
+                    "| Package | Fresh-process first result (ms, n=1) | "
+                    "Warm-session mean (ms) | Warm max (ms) | Warm n | "
+                    "CPython tracemalloc peak (MB, separate run) | Shape |\n"
                 )
-
-            f.write("\n")
-
-            # Calculate speedups
-            rust_results = [r for r in results if "rust" in r.package.lower()]
-            legacy_results = [r for r in results if "legacy" in r.package.lower()]
-
-            if rust_results and legacy_results:
-                rust_time = rust_results[0].warm_mean_ms
-                legacy_time = legacy_results[0].warm_mean_ms
-                speedup = legacy_time / rust_time if rust_time > 0 else 0
-
-                f.write(f"**Speedup vs legacy:** {speedup:.2f}x faster\n\n")
-
-            f.write("---\n\n")
-
-        # Summary section
-        f.write("## Summary\n\n")
-
-        rust_total = 0
-        legacy_total = 0
-        pdblp_total = 0
-
-        for results in all_results.values():
-            for result in results:
-                if "rust" in result.package.lower():
-                    rust_total += result.warm_mean_ms
-                elif "legacy" in result.package.lower():
-                    legacy_total += result.warm_mean_ms
-                elif "pdblp" in result.package.lower():
-                    pdblp_total += result.warm_mean_ms
-
-        f.write("**Total execution time (warm):**\n\n")
-        f.write(f"- xbbg (Rust): {rust_total:.2f}ms\n")
-        if legacy_total > 0:
-            f.write(f"- xbbg (legacy): {legacy_total:.2f}ms ({legacy_total / rust_total:.2f}x slower)\n")
-        if pdblp_total > 0:
-            f.write(f"- pdblp: {pdblp_total:.2f}ms ({pdblp_total / rust_total:.2f}x slower)\n")
-
-        f.write("\n")
+                file.write("|---|---:|---:|---:|---:|---:|---|\n")
+                for result in results:
+                    file.write(
+                        f"| {result.package} | {result.fresh_process_first_result_ms:.2f} | "
+                        f"{result.warm_mean_ms:.2f} | {result.warm_max_ms:.2f} | "
+                        f"{result.warm_sample_count} | {result.python_tracemalloc_peak_mb:.2f} | "
+                        f"{result.data_shape} |\n"
+                    )
+            else:
+                file.write(
+                    "| Scenario | Case | Consumer boundary | Median (ms) | Max (ms) | n | "
+                    "CPython tracemalloc peak (MB, separate run) |\n"
+                )
+                file.write("|---|---|---|---:|---:|---:|---:|\n")
+                for result in results:
+                    file.write(
+                        f"| {result.scenario} | {result.operation.rsplit(':', 1)[-1]} | "
+                        f"{result.consumer_scope} | {result.median_ms:.4f} | "
+                        f"{result.max_ms:.4f} | {result.timing_sample_count} | "
+                        f"{result.python_tracemalloc_peak_mb:.2f} |\n"
+                    )
+            file.write("\n")
 
 
-def generate_json_report(all_results: dict, output_path: Path, version: str, timestamp: str):
-    """Generate JSON report from results."""
+def generate_json_report(
+    all_results: dict,
+    output_path: Path,
+    version: str,
+    timestamp: str,
+    provenance: dict,
+):
+    """Generate JSON without reintroducing legacy ambiguous metric aliases."""
     json_data = {
+        "schema_version": 2,
         "version": version,
         "timestamp": timestamp,
+        "provenance": provenance,
         "benchmarks": {},
     }
-
     for operation, results in all_results.items():
         entries = []
-        for r in results:
-            entry = {
-                "package": r.package,
-                "operation": r.operation,
-                "cold_start_ms": r.cold_start_ms,
-                "warm_mean_ms": r.warm_mean_ms,
-                "warm_median_ms": r.warm_median_ms,
-                "warm_p95_ms": r.warm_p95_ms,
-                "warm_p99_ms": r.warm_p99_ms,
-                "warm_std_ms": r.warm_std_ms,
-                "memory_peak_mb": r.memory_peak_mb,
-                "data_shape": r.data_shape,
-                "iterations": r.iterations,
-            }
-            for extra in (
-                "warm_min_ms",
-                "warmup_iterations",
-                "offline",
-                "scenario",
-                "rows",
-                "columns",
-                "build_profile",
-                "extension_path",
-            ):
-                if hasattr(r, extra):
-                    entry[extra] = getattr(r, extra)
-            entries.append(entry)
+        for result in results:
+            if not is_dataclass(result):
+                raise TypeError(f"{operation} returned a non-dataclass benchmark record")
+            entries.append(asdict(result))
         json_data["benchmarks"][operation] = entries
-
-    with output_path.open("w") as f:
-        json.dump(json_data, f, indent=2)
+    with output_path.open("w", encoding="utf-8") as file:
+        json.dump(json_data, file, indent=2, default=str)
 
 
 def parse_args(argv: list[str] | None = None):
@@ -242,6 +194,32 @@ def main(argv: list[str] | None = None):
     ]
     if args.include_offline:
         benchmarks.append(("bench_handoff_offline", "Binding Handoff - Offline"))
+    provenance = collect_provenance(
+        inputs={
+            "benchmark_modules": [module_name for module_name, _ in benchmarks],
+            "include_offline": args.include_offline,
+            "tickers_single": benchmark_config.TICKERS_SINGLE,
+            "tickers_multi": benchmark_config.TICKERS_MULTI,
+            "fields_single": benchmark_config.FIELDS_SINGLE,
+            "fields_multi": benchmark_config.FIELDS_MULTI,
+            "bdh_range": [benchmark_config.BDH_START, benchmark_config.BDH_END],
+            "bdib": [
+                benchmark_config.BDIB_DATE,
+                benchmark_config.BDIB_START_TIME,
+                benchmark_config.BDIB_END_TIME,
+                benchmark_config.BDIB_INTERVAL,
+            ],
+            "bdtick": [
+                benchmark_config.BDTICK_DATE,
+                benchmark_config.BDTICK_START_TIME,
+                benchmark_config.BDTICK_END_TIME,
+            ],
+            "bql": [benchmark_config.BQL_SIMPLE, benchmark_config.BQL_MULTI],
+            "iterations": benchmark_config.ITERATIONS,
+            "warmup_iterations": benchmark_config.WARMUP_ITERATIONS,
+        },
+        benchmark_file=Path(__file__).name,
+    )
 
     for module_name, description in benchmarks:
         try:
@@ -250,6 +228,7 @@ def main(argv: list[str] | None = None):
         except Exception as e:
             logger.error(f"Failed to run {module_name}: {e}")
             all_results[description] = []
+    close_shared_sessions()
 
     # Generate reports with version-based naming
     timestamp_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -268,7 +247,7 @@ def main(argv: list[str] | None = None):
     logger.info(f"{'=' * 70}\n")
 
     # Generate version-specific files (overwrites)
-    generate_json_report(all_results, version_json, version, timestamp_full)
+    generate_json_report(all_results, version_json, version, timestamp_full, provenance)
     logger.info(f"✓ Version JSON: {version_json}")
 
     generate_markdown_report(all_results, version_md, version, timestamp_full)

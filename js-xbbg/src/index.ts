@@ -91,6 +91,7 @@ import type {
   Socks5Config,
   StreamOptions,
   StringPair,
+  SubscriptionReadOptions,
   SubscriptionStats,
   TickerParts,
   TimeRange,
@@ -1376,29 +1377,501 @@ export class Tick {
   }
 }
 
-export class ArrowSubscription implements AsyncIterator<Table>, AsyncIterable<Table> {
-  public constructor(private readonly inner: NativeSubscription) {}
+class SubscriptionReadQueue {
+  private tail: Promise<void> = Promise.resolve();
 
-  /** Return the next zero-copy Arrow table; one native crossing may contain many rows. */
-  public async next(): Promise<IteratorResult<Table>> {
-    try {
-      const batch = await this.inner.nextArrowBatch();
-      if (batch === null) {
-        return { done: true, value: undefined };
-      }
-      return { done: false, value: toArrowTableFromNative(batch) };
-    } catch (error) {
-      throw wrapError(error);
+  public enqueue<T>(read: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(read);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  public barrier(): Promise<void> {
+    return this.tail;
+  }
+}
+
+type SubscriptionIteratorPhase = 'open' | 'closing' | 'closed';
+type SubscriptionReadMode = 'scalar' | 'arrow';
+
+type SubscriptionBatchProjection<TBatch, TValue> =
+  | {
+      readonly cardinality: 'many';
+      readonly project: (batch: TBatch) => TValue[];
+    }
+  | {
+      readonly cardinality: 'one';
+      readonly project: (batch: TBatch) => TValue;
+    };
+
+class SubscriptionCoordinator {
+  public readonly reads = new SubscriptionReadQueue();
+  private phase: SubscriptionIteratorPhase = 'open';
+  private readMode: SubscriptionReadMode | undefined;
+  private readonly closeObservers = new Set<(owner: object | undefined) => void>();
+  private readonly closed: Promise<void>;
+  private readonly resolveClosed: () => void;
+  private closeError: Error | undefined;
+  private lateReadError: Error | undefined;
+
+  public constructor() {
+    let resolveClosed!: () => void;
+    this.closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
+    this.resolveClosed = resolveClosed;
+  }
+
+  public get isOpen(): boolean {
+    return this.phase === 'open';
+  }
+
+  public get closeReadError(): Error | undefined {
+    return this.lateReadError;
+  }
+
+  public recordCloseReadError(error: unknown): void {
+    this.lateReadError ??= error instanceof Error ? error : wrapError(error);
+  }
+
+  public claimReadMode(mode: SubscriptionReadMode): void {
+    const mismatch = this.readModeMismatch(mode);
+    if (mismatch !== undefined) {
+      throw mismatch;
+    }
+    this.readMode = mode;
+  }
+
+  public readModeMismatch(mode: SubscriptionReadMode): TypeError | undefined {
+    if (this.readMode !== undefined && this.readMode !== mode) {
+      return new TypeError(
+        `subscription is already being read as ${this.readMode}; cannot also read as ${mode}`,
+      );
+    }
+    return undefined;
+  }
+
+  public observeClose(observer: (owner: object | undefined) => void): void {
+    if (this.phase === 'open') {
+      this.closeObservers.add(observer);
+    } else {
+      observer(undefined);
     }
   }
 
-  public async unsubscribe(drain = false): Promise<Table[]> {
-    try {
-      const drained = await this.inner.unsubscribeArrow(drain);
-      return drained?.map(toArrowTableFromNative) ?? [];
-    } catch (error) {
-      throw wrapError(error);
+  public beginClose(owner: object): { readonly barrier: Promise<void>; readonly started: boolean } {
+    if (this.phase !== 'open') {
+      return { barrier: this.closed, started: false };
     }
+    this.phase = 'closing';
+    for (const observer of this.closeObservers) {
+      observer(owner);
+    }
+    this.closeObservers.clear();
+    return { barrier: this.reads.barrier(), started: true };
+  }
+
+  public finishNaturalClose(owner: object): void {
+    if (this.phase !== 'open') {
+      return;
+    }
+    this.phase = 'closed';
+    for (const observer of this.closeObservers) {
+      observer(owner);
+    }
+    this.closeObservers.clear();
+    this.resolveClosed();
+  }
+
+  public finishClose(error: Error | undefined): void {
+    if (this.phase === 'closed') {
+      return;
+    }
+    this.phase = 'closed';
+    this.closeError = error;
+    this.lateReadError = undefined;
+    this.closeObservers.clear();
+    this.resolveClosed();
+  }
+
+  public async whenClosed(): Promise<void> {
+    await this.closed;
+    if (this.closeError !== undefined) {
+      throw this.closeError;
+    }
+  }
+}
+
+const subscriptionCoordinators = new WeakMap<NativeSubscription, SubscriptionCoordinator>();
+
+function subscriptionCoordinatorFor(inner: NativeSubscription): SubscriptionCoordinator {
+  const existing = subscriptionCoordinators.get(inner);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = new SubscriptionCoordinator();
+  subscriptionCoordinators.set(inner, created);
+  return created;
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('The operation was aborted', 'AbortError');
+}
+
+function throwIfSubscriptionReadAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw abortReason(signal);
+  }
+}
+
+async function rejectAfterSubscriptionCleanup(
+  primary: Error,
+  cleanup: Promise<unknown>,
+): Promise<never> {
+  try {
+    await cleanup;
+  } catch (cleanupError) {
+    if (cleanupError === primary) {
+      throw primary;
+    }
+    throw new AggregateError(
+      [primary, cleanupError],
+      `${primary.message}; subscription cleanup failed`,
+      { cause: cleanupError },
+    );
+  }
+  throw primary;
+}
+
+class SubscriptionIterator<TBatch, TValue> {
+  private pending: (TValue | undefined)[] = [];
+  private pendingCursor = 0;
+  private phase: SubscriptionIteratorPhase = 'open';
+  private closeDrain = false;
+  private readonly closingPending: TValue[] = [];
+  private closeInFlight: Promise<TValue[]> | undefined;
+  private readonly owner = {};
+  private readonly nextSerializedWithoutSignal = this.nextSerialized.bind(this, undefined);
+
+  public constructor(
+    private readonly readBatch: () => Promise<TBatch | null>,
+    private readonly closeNative: (drain: boolean) => Promise<readonly TBatch[] | null>,
+    private readonly projection: SubscriptionBatchProjection<TBatch, TValue>,
+    private readonly coordinator: SubscriptionCoordinator,
+    private readonly readMode: SubscriptionReadMode,
+  ) {
+    this.coordinator.observeClose((owner) => {
+      if (owner === this.owner) {
+        return;
+      }
+      this.phase = 'closing';
+      this.closeDrain = false;
+      this.clearPending();
+      this.closingPending.length = 0;
+    });
+  }
+
+  private isOpen(): boolean {
+    return this.phase === 'open';
+  }
+
+  public next(options?: SubscriptionReadOptions): Promise<IteratorResult<TValue, undefined>> {
+    const signal = options?.signal;
+    return signal === undefined ? this.nextWithoutSignal() : this.nextWithSignal(signal);
+  }
+
+  private async nextWithoutSignal(): Promise<IteratorResult<TValue, undefined>> {
+    if (!this.isOpen()) {
+      return { done: true, value: undefined };
+    }
+
+    this.coordinator.claimReadMode(this.readMode);
+    const queued = this.coordinator.reads.enqueue(this.nextSerializedWithoutSignal);
+    try {
+      return await queued;
+    } catch (error) {
+      return await rejectAfterSubscriptionCleanup(wrapError(error), this.startClose(false));
+    }
+  }
+
+  private async nextWithSignal(signal: AbortSignal): Promise<IteratorResult<TValue, undefined>> {
+    if (signal.aborted) {
+      return await rejectAfterSubscriptionCleanup(abortReason(signal), this.startClose(false));
+    }
+    if (!this.isOpen()) {
+      return { done: true, value: undefined };
+    }
+
+    this.coordinator.claimReadMode(this.readMode);
+
+    let abortError: Error | undefined;
+    const onAbort = (): void => {
+      abortError = abortReason(signal);
+      void this.startClose(false).catch(() => undefined);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    const queued = this.coordinator.reads.enqueue(this.nextSerialized.bind(this, signal));
+    try {
+      return await queued;
+    } catch (error) {
+      const primary = abortError ?? wrapError(error);
+      return await rejectAfterSubscriptionCleanup(primary, this.startClose(false));
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  private async nextSerialized(
+    signal: AbortSignal | undefined,
+  ): Promise<IteratorResult<TValue, undefined>> {
+    throwIfSubscriptionReadAborted(signal);
+    if (!this.isOpen()) {
+      return { done: true, value: undefined };
+    }
+
+    const pending = this.takePending();
+    if (pending !== undefined) {
+      return { done: false, value: pending };
+    }
+
+    while (this.isOpen()) {
+      let batch: TBatch | null;
+      try {
+        batch = await this.readBatch();
+      } catch (error) {
+        if (!this.isOpen()) {
+          this.coordinator.recordCloseReadError(error);
+          throwIfSubscriptionReadAborted(signal);
+          return { done: true, value: undefined };
+        }
+        throwIfSubscriptionReadAborted(signal);
+        throw error;
+      }
+
+      if (!this.isOpen()) {
+        if (batch !== null && this.closeDrain) {
+          try {
+            this.appendBatch(this.closingPending, batch);
+          } catch (error) {
+            this.coordinator.recordCloseReadError(error);
+          }
+        }
+        throwIfSubscriptionReadAborted(signal);
+        return { done: true, value: undefined };
+      }
+      throwIfSubscriptionReadAborted(signal);
+      if (batch === null) {
+        this.phase = 'closed';
+        this.clearPending();
+        this.coordinator.finishNaturalClose(this.owner);
+        return { done: true, value: undefined };
+      }
+
+      if (this.projection.cardinality === 'one') {
+        return { done: false, value: this.projection.project(batch) };
+      }
+      const values = this.projection.project(batch);
+      if (values.length === 0) {
+        continue;
+      }
+
+      this.pending = values;
+      this.pendingCursor = 0;
+      const value = this.takePending();
+      if (value !== undefined) {
+        return { done: false, value };
+      }
+    }
+
+    return { done: true, value: undefined };
+  }
+
+  private appendBatch(target: TValue[], batch: TBatch): void {
+    if (this.projection.cardinality === 'one') {
+      target.push(this.projection.project(batch));
+      return;
+    }
+    for (const value of this.projection.project(batch)) {
+      target.push(value);
+    }
+  }
+
+  private takePending(): TValue | undefined {
+    const value = this.pending[this.pendingCursor];
+    if (value === undefined) {
+      this.clearPending();
+      return undefined;
+    }
+    this.pending[this.pendingCursor] = undefined;
+    this.pendingCursor += 1;
+    if (this.pendingCursor === this.pending.length) {
+      this.pending = [];
+      this.pendingCursor = 0;
+    }
+    return value;
+  }
+
+  private drainPendingToClosing(): void {
+    for (let index = this.pendingCursor; index < this.pending.length; index += 1) {
+      const value = this.pending[index];
+      this.pending[index] = undefined;
+      if (value !== undefined) {
+        this.closingPending.push(value);
+      }
+    }
+    this.pending = [];
+    this.pendingCursor = 0;
+  }
+
+  private clearPending(): void {
+    this.pending.fill(undefined);
+    this.pending = [];
+    this.pendingCursor = 0;
+  }
+
+  public unsubscribe(drain = false): Promise<TValue[]> {
+    return this.startClose(drain);
+  }
+
+  private async startClose(drain: boolean): Promise<TValue[]> {
+    const formatError = drain ? this.coordinator.readModeMismatch(this.readMode) : undefined;
+    if (formatError !== undefined) {
+      const cleanup = this.coordinator.isOpen ? this.startClose(false) : this.waitForSharedClose();
+      return await rejectAfterSubscriptionCleanup(formatError, cleanup);
+    }
+    if (drain) {
+      this.coordinator.claimReadMode(this.readMode);
+    }
+    if (this.closeInFlight !== undefined) {
+      return await this.closeInFlight;
+    }
+    if (!this.coordinator.isOpen) {
+      return await this.waitForSharedClose();
+    }
+
+    this.phase = 'closing';
+    this.closeDrain = drain;
+    if (drain) {
+      this.drainPendingToClosing();
+    } else {
+      this.clearPending();
+    }
+
+    const { barrier: readBarrier, started } = this.coordinator.beginClose(this.owner);
+    if (!started) {
+      return await this.waitForSharedClose();
+    }
+
+    let nativeClose: Promise<readonly TBatch[] | null>;
+    try {
+      nativeClose = this.closeNative(drain);
+    } catch (error) {
+      nativeClose = Promise.reject(error instanceof Error ? error : wrapError(error));
+    }
+    const closePromise = (async (): Promise<TValue[]> => {
+      let nativeBatches: readonly TBatch[] | null = null;
+      let nativeError: Error | undefined;
+      let closeError: Error | undefined;
+      try {
+        try {
+          nativeBatches = await nativeClose;
+        } catch (error) {
+          nativeError = error instanceof Error ? error : wrapError(error);
+        }
+        await readBarrier;
+
+        const readError = this.coordinator.closeReadError;
+        if (nativeError !== undefined && readError !== undefined && nativeError !== readError) {
+          const cleanupError = wrapError(nativeError);
+          closeError = new AggregateError(
+            [wrapError(readError), cleanupError],
+            `${readError.message}; subscription cleanup failed`,
+            { cause: cleanupError },
+          );
+          throw closeError;
+        }
+        if (nativeError !== undefined) {
+          throw nativeError;
+        }
+        if (readError !== undefined) {
+          throw readError;
+        }
+        if (!drain) {
+          return [];
+        }
+        const drained = [...this.closingPending];
+        for (const batch of nativeBatches ?? []) {
+          this.appendBatch(drained, batch);
+        }
+        return drained;
+      } catch (error) {
+        closeError ??= wrapError(error);
+        throw closeError;
+      } finally {
+        this.phase = 'closed';
+        this.closeDrain = false;
+        this.clearPending();
+        this.closingPending.length = 0;
+        this.coordinator.finishClose(closeError);
+      }
+    })();
+    this.closeInFlight = closePromise;
+    const releaseClose = (): void => {
+      if (this.closeInFlight === closePromise) {
+        this.closeInFlight = undefined;
+      }
+    };
+    void closePromise.then(releaseClose, releaseClose);
+    return await closePromise;
+  }
+
+  private async waitForSharedClose(): Promise<TValue[]> {
+    try {
+      await this.coordinator.whenClosed();
+      return [];
+    } finally {
+      this.phase = 'closed';
+      this.closeDrain = false;
+      this.clearPending();
+      this.closingPending.length = 0;
+    }
+  }
+}
+export class ArrowSubscription
+  implements
+    AsyncIterator<Table, undefined, SubscriptionReadOptions | undefined>,
+    AsyncIterable<Table>
+{
+  private readonly iterator: SubscriptionIterator<NativeArrowZeroCopyBatch, Table>;
+
+  public constructor(inner: NativeSubscription) {
+    const coordinator = subscriptionCoordinatorFor(inner);
+    this.iterator = new SubscriptionIterator(
+      inner.nextArrowBatch.bind(inner),
+      inner.unsubscribeArrow.bind(inner),
+      { cardinality: 'one', project: toArrowTableFromNative },
+      coordinator,
+      'arrow',
+    );
+  }
+
+  /** Return the next zero-copy Arrow table; one native crossing may contain many rows. */
+  public next(options?: SubscriptionReadOptions): Promise<IteratorResult<Table, undefined>> {
+    return this.iterator.next(options);
+  }
+
+  public unsubscribe(drain = false): Promise<Table[]> {
+    return this.iterator.unsubscribe(drain);
+  }
+
+  public async return(): Promise<IteratorResult<Table, undefined>> {
+    await this.unsubscribe(false);
+    return { done: true, value: undefined };
   }
 
   public [Symbol.asyncIterator](): this {
@@ -1406,28 +1879,29 @@ export class ArrowSubscription implements AsyncIterator<Table>, AsyncIterable<Ta
   }
 }
 
-export class Subscription implements AsyncIterator<Tick>, AsyncIterable<Tick> {
+export class Subscription
+  implements
+    AsyncIterator<Tick, undefined, SubscriptionReadOptions | undefined>,
+    AsyncIterable<Tick>
+{
   private readonly layouts = new Map<number, TickLayout>();
-  private readonly pending: Tick[] = [];
+  private readonly coordinator: SubscriptionCoordinator;
+  private readonly iterator: SubscriptionIterator<NativeSubscriptionUpdateBatch, Tick>;
+  private arrowView: ArrowSubscription | undefined;
 
-  public constructor(private readonly inner: NativeSubscription) {}
+  public constructor(private readonly inner: NativeSubscription) {
+    this.coordinator = subscriptionCoordinatorFor(this.inner);
+    this.iterator = new SubscriptionIterator(
+      this.inner.nextUpdates.bind(this.inner),
+      this.inner.unsubscribe.bind(this.inner),
+      { cardinality: 'many', project: (batch) => this.ticksFromBatch(batch) },
+      this.coordinator,
+      'scalar',
+    );
+  }
 
-  public async next(): Promise<IteratorResult<Tick>> {
-    try {
-      const pending = this.pending.shift();
-      if (pending !== undefined) {
-        return { done: false, value: pending };
-      }
-      const batch = await this.inner.nextUpdates();
-      if (batch === null) {
-        return { done: true, value: undefined };
-      }
-      this.pending.push(...this.ticksFromBatch(batch));
-      const next = this.pending.shift();
-      return next === undefined ? { done: true, value: undefined } : { done: false, value: next };
-    } catch (error) {
-      throw wrapError(error);
-    }
+  public next(options?: SubscriptionReadOptions): Promise<IteratorResult<Tick, undefined>> {
+    return this.iterator.next(options);
   }
 
   private ticksFromBatch(batch: NativeSubscriptionUpdateBatch): Tick[] {
@@ -1459,13 +1933,13 @@ export class Subscription implements AsyncIterator<Tick>, AsyncIterable<Tick> {
     }
   }
 
-  public async unsubscribe(drain = false): Promise<Tick[]> {
-    try {
-      const drained = await this.inner.unsubscribe(drain);
-      return drained?.flatMap((batch) => this.ticksFromBatch(batch)) ?? [];
-    } catch (error) {
-      throw wrapError(error);
-    }
+  public unsubscribe(drain = false): Promise<Tick[]> {
+    return this.iterator.unsubscribe(drain);
+  }
+
+  public async return(): Promise<IteratorResult<Tick, undefined>> {
+    await this.unsubscribe(false);
+    return { done: true, value: undefined };
   }
 
   public field(name: string): FieldHandle {
@@ -1473,7 +1947,8 @@ export class Subscription implements AsyncIterator<Tick>, AsyncIterable<Tick> {
   }
 
   public arrow(): ArrowSubscription {
-    return new ArrowSubscription(this.inner);
+    this.arrowView ??= new ArrowSubscription(this.inner);
+    return this.arrowView;
   }
 
   public get tickers(): string[] {
@@ -2909,6 +3384,7 @@ export type {
   Socks5Config,
   StreamOptions,
   StringPair,
+  SubscriptionReadOptions,
   SubscriptionStats,
   TickerParts,
   TimeRange,

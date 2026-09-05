@@ -39,7 +39,9 @@ if "BLPAPI_ROOT" not in os.environ:
             os.environ["BLPAPI_ROOT"] = str(bundled_sdk)
             break
 
-known_sdk_lib = Path(__file__).resolve().parents[2] / "vendor" / "blpapi-sdk" / "3.26.5.1" / "Darwin" / "libblpapi3_64.so"
+known_sdk_lib = (
+    Path(__file__).resolve().parents[2] / "vendor" / "blpapi-sdk" / "3.26.5.1" / "Darwin" / "libblpapi3_64.so"
+)
 known_runtime_lib = Path(__file__).resolve().parents[2] / ".pixi" / "envs" / "default" / "lib" / "libblpapi3_64.so"
 if known_sdk_lib.is_file() and known_runtime_lib.parent.is_dir() and not known_runtime_lib.exists():
     try:
@@ -101,51 +103,85 @@ from xbbg.backend import Backend, convert_backend_frame
 logger = logging.getLogger(__name__)
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
-DEFAULT_SHAPES: tuple[tuple[int, int], ...] = ((100, 5), (10_000, 10), (100_000, 10))
 DEFAULT_WARMUP = 2
-DEFAULT_ITERATIONS = 10
+DEFAULT_ITERATIONS = 30
 QUICK_WARMUP = 1
 QUICK_ITERATIONS = 3
 
 
 @dataclass(frozen=True)
-class BenchmarkResult:
-    """Result from one offline handoff benchmark lane."""
-
-    package: str
-    operation: str
-    cold_start_ms: float
-    warm_mean_ms: float
-    warm_median_ms: float
-    warm_p95_ms: float
-    warm_p99_ms: float
-    warm_std_ms: float
-    memory_peak_mb: float
-    data_shape: tuple[int, int]
-    iterations: int
-    warm_min_ms: float
-    warmup_iterations: int
-    offline: bool
-    scenario: str
+class ShapeCase:
+    name: str
     rows: int
     columns: int
-    build_profile: str
-    extension_path: str | None
+    batch_rows: int
+    null_every: int
+    string_bytes: int
+    string_cardinality: int
+
+
+DEFAULT_CASES: tuple[ShapeCase, ...] = (
+    ShapeCase("small_dense", 100, 5, 100, 0, 12, 100),
+    ShapeCase("chunked_nullable", 4_096, 8, 64, 10, 64, 256),
+    ShapeCase("wide_string_heavy", 1_024, 25, 128, 2, 256, 1_024),
+    ShapeCase("large_mixed", 100_000, 10, 1_024, 0, 16, 10_000),
+)
 
 
 @dataclass(frozen=True)
 class FixtureTable:
-    """Pre-built native table for one shape."""
+    case: ShapeCase
+    native_batches: tuple[Any, ...]
+    setup_ms: float
+    input_checksum: int
 
+
+@dataclass(frozen=True)
+class ConversionObservation:
+    shape: tuple[int, int]
+    checksum: int
+    retained: Any
+
+
+@dataclass(frozen=True)
+class BenchmarkResult:
+    package: str
+    operation: str
+    scenario: str
+    consumer_scope: str
     rows: int
     columns: int
-    native: Any
+    native_batches: int
+    batch_rows: int
+    null_every: int
+    string_bytes: int
+    string_cardinality: int
+    timing_scope: str
+    mean_ms: float
+    median_ms: float
+    min_ms: float
+    max_ms: float
+    p95_ms: float | None
+    p99_ms: float | None
+    timing_sample_count: int
+    warmup_iterations: int
     setup_ms: float
+    python_tracemalloc_peak_mb: float
+    memory_sample_count: int
+    memory_scope: str
+    pyarrow_pool_before_bytes: int | None
+    pyarrow_pool_after_bytes: int | None
+    pyarrow_pool_max_bytes: int | None
+    pyarrow_pool_scope: str
+    data_shape: tuple[int, int]
+    checksum: int
+    input_checksum: int
+    offline: bool
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Offline xbbg native handoff benchmark")
-    parser.add_argument("--quick", action="store_true", help="Run fewer iterations for smoke checks")
+    parser.add_argument("--quick", action="store_true", help="Run fewer iterations and only the first two cases")
     parser.add_argument("--iterations", type=positive_int, default=None, help="Measured iterations per lane")
     parser.add_argument("--warmup", type=non_negative_int, default=None, help="Warmup iterations per lane")
     parser.add_argument(
@@ -153,7 +189,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="append",
         default=None,
         metavar="ROWSxCOLS",
-        help="Shape to benchmark; may be repeated (default: 100x5, 10000x10, 100000x10)",
+        help="Custom dense single-batch shape; may be repeated",
     )
     parser.add_argument(
         "--results-dir",
@@ -179,7 +215,7 @@ def non_negative_int(value: str) -> int:
     return parsed
 
 
-def parse_shape(value: str) -> tuple[int, int]:
+def parse_shape(value: str) -> ShapeCase:
     normalized = value.lower().replace("_", "")
     try:
         rows_text, columns_text = normalized.split("x", 1)
@@ -189,174 +225,248 @@ def parse_shape(value: str) -> tuple[int, int]:
         raise argparse.ArgumentTypeError(f"invalid shape {value!r}; expected ROWSxCOLS") from exc
     if rows <= 0 or columns <= 0:
         raise argparse.ArgumentTypeError("shape dimensions must be positive")
-    return rows, columns
+    return ShapeCase(f"custom_{rows}x{columns}", rows, columns, rows, 0, 16, min(rows, 10_000))
 
 
-def selected_shapes(shape_args: Sequence[str] | None) -> tuple[tuple[int, int], ...]:
-    if not shape_args:
-        return DEFAULT_SHAPES
-    return tuple(parse_shape(shape) for shape in shape_args)
-
-
-def detect_extension_profile() -> tuple[str, str | None]:
-    module = sys.modules.get("xbbg._core")
-    module_file = getattr(module, "__file__", None)
-    extension_path = str(module_file) if module_file else None
-    parts = {part.lower() for part in Path(extension_path).parts} if extension_path else set()
-    if "debug" in parts or (extension_path and "debug" in extension_path.lower()):
-        return "debug", extension_path
-    if "release" in parts or (extension_path and "release" in extension_path.lower()):
-        return "release", extension_path
-    return "unknown", extension_path
+def selected_cases(shape_args: Sequence[str] | None, quick: bool) -> tuple[ShapeCase, ...]:
+    if shape_args:
+        return tuple(parse_shape(shape) for shape in shape_args)
+    return DEFAULT_CASES[:2] if quick else DEFAULT_CASES
 
 
 def column_name(index: int) -> str:
-    kind = index % 4
-    prefix = ("float", "int", "string", "timestamp")[kind]
+    prefix = ("float", "int", "string", "timestamp")[index % 4]
     return f"{prefix}_{index:02d}"
 
 
-def fixture_value(row_index: int, column_index: int) -> Any:
+def fixture_value(case: ShapeCase, row_index: int, column_index: int) -> Any:
+    if case.null_every and (row_index + column_index) % case.null_every == 0:
+        return None
     kind = column_index % 4
     if kind == 0:
         return row_index * 0.25 + column_index / 10
     if kind == 1:
         return row_index * 10_000 + column_index
     if kind == 2:
-        return f"SEC{row_index % 10_000:04d}:{column_index:02d}"
+        identity = row_index % case.string_cardinality
+        prefix = f"S{identity}:{column_index}:"
+        return (prefix + "x" * case.string_bytes)[: case.string_bytes]
     base = datetime(2024, 1, 2, 9, 30)
     return base + timedelta(microseconds=row_index * 1_000 + column_index)
 
 
-def build_rows(rows: int, columns: int) -> list[dict[str, Any]]:
-    names = [column_name(index) for index in range(columns)]
-    return [
-        {name: fixture_value(row_index, column_index) for column_index, name in enumerate(names)}
-        for row_index in range(rows)
-    ]
+def value_checksum(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value % 997
+    if isinstance(value, float):
+        return int(value * 1000) % 997
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, datetime):
+        return value.microsecond % 997
+    return len(str(value))
 
 
-def build_fixture(rows: int, columns: int) -> FixtureTable:
+def build_fixture(case: ShapeCase) -> FixtureTable:
     started = time.perf_counter()
-    native = xbbg.ArrowTable.from_pylist(build_rows(rows, columns))
-    setup_ms = (time.perf_counter() - started) * 1000
-    return FixtureTable(rows=rows, columns=columns, native=native, setup_ms=setup_ms)
+    names = [column_name(index) for index in range(case.columns)]
+    native_batches: list[Any] = []
+    checksum = 0
+    for batch_start in range(0, case.rows, case.batch_rows):
+        rows: list[dict[str, Any]] = []
+        for row_index in range(batch_start, min(case.rows, batch_start + case.batch_rows)):
+            row: dict[str, Any] = {}
+            for column_index, name in enumerate(names):
+                value = fixture_value(case, row_index, column_index)
+                row[name] = value
+                checksum += value_checksum(value)
+            rows.append(row)
+        native_batches.append(xbbg.ArrowTable.from_pylist(rows))
+    return FixtureTable(
+        case=case,
+        native_batches=tuple(native_batches),
+        setup_ms=(time.perf_counter() - started) * 1000,
+        input_checksum=checksum,
+    )
 
 
-def shape_of(result: Any, fallback: tuple[int, int]) -> tuple[int, int]:
+def boundary_converter(converter: Callable[[Any], Any]) -> Callable[[FixtureTable], ConversionObservation]:
+    def convert(fixture: FixtureTable) -> ConversionObservation:
+        outputs = tuple(converter(batch) for batch in fixture.native_batches)
+        return ConversionObservation(
+            shape=(fixture.case.rows, fixture.case.columns),
+            checksum=sum(_shape_checksum(output) for output in outputs),
+            retained=outputs,
+        )
+
+    return convert
+
+
+def pyarrow_checked_cells(fixture: FixtureTable) -> ConversionObservation:
+    pa = importlib.import_module("pyarrow")
+    outputs = tuple(pa.table(batch) for batch in fixture.native_batches)
+    checksum = 0
+    for table in outputs:
+        for row in table.to_pylist():
+            for value in row.values():
+                checksum += value_checksum(value)
+    return ConversionObservation(
+        shape=(fixture.case.rows, fixture.case.columns),
+        checksum=checksum,
+        retained=outputs,
+    )
+
+
+def native_checked_cells(fixture: FixtureTable) -> ConversionObservation:
+    outputs = tuple(batch.to_pylist() for batch in fixture.native_batches)
+    checksum = sum(value_checksum(value) for rows in outputs for row in rows for value in row.values())
+    return ConversionObservation(
+        shape=(fixture.case.rows, fixture.case.columns),
+        checksum=checksum,
+        retained=outputs,
+    )
+
+
+def _shape_checksum(result: Any) -> int:
     shape = getattr(result, "shape", None)
     if isinstance(shape, tuple) and len(shape) >= 2:
-        return int(shape[0]), int(shape[1])
-    num_rows = getattr(result, "num_rows", None)
-    num_columns = getattr(result, "num_columns", None)
-    if num_rows is not None and num_columns is not None:
-        return int(num_rows), int(num_columns)
-    if isinstance(result, list):
-        return len(result), len(result[0]) if result and isinstance(result[0], dict) else fallback[1]
-    return fallback
+        return int(shape[0]) * 31 + int(shape[1])
+    rows = getattr(result, "num_rows", 0)
+    columns = getattr(result, "num_columns", 0)
+    return int(rows) * 31 + int(columns)
 
 
-def percentile(sorted_values: Sequence[float], percentile_value: float) -> float:
-    if not sorted_values:
-        return 0.0
-    index = min(len(sorted_values) - 1, int((percentile_value / 100) * len(sorted_values)))
-    return sorted_values[index]
+def available_converters() -> Iterable[tuple[str, str, Callable[[FixtureTable], ConversionObservation]]]:
+    pa = importlib.import_module("pyarrow")
+    yield "native_to_pyarrow_c_stream", "boundary_only_no_cell_reads", boundary_converter(pa.table)
+    yield "native_to_pyarrow_checked_cells", "inclusive_all_cells_to_python_objects", pyarrow_checked_cells
+    yield (
+        "native_to_pandas_xbbg_backend",
+        "boundary_and_backend_conversion_without_additional_consumer_cell_reads",
+        boundary_converter(lambda table: convert_backend_frame(table, Backend.PANDAS)),
+    )
+    if importlib.util.find_spec("polars") is not None:
+        yield (
+            "native_to_polars",
+            "boundary_and_backend_conversion_without_additional_consumer_cell_reads",
+            boundary_converter(lambda table: convert_backend_frame(table, Backend.POLARS)),
+        )
+    yield "native_to_pylist_checked_cells", "inclusive_native_all_cell_materialization", native_checked_cells
 
 
-def round_ms(value: float) -> float:
-    return round(value, 6)
+def _pyarrow_pool_snapshot() -> tuple[int | None, int | None]:
+    try:
+        pool = importlib.import_module("pyarrow").default_memory_pool()
+        current = int(pool.bytes_allocated())
+        maximum = int(pool.max_memory())
+        return current, maximum
+    except (AttributeError, ImportError):
+        return None, None
 
 
 def benchmark_conversion(
     *,
     fixture: FixtureTable,
     scenario: str,
-    converter: Callable[[Any], Any],
+    consumer_scope: str,
+    converter: Callable[[FixtureTable], ConversionObservation],
     iterations: int,
     warmup: int,
     package_label: str,
-    build_profile: str,
-    extension_path: str | None,
 ) -> BenchmarkResult:
-    durations: list[float] = []
-    result: Any = None
-
     for _ in range(warmup):
-        result = converter(fixture.native)
+        converter(fixture)
 
-    tracemalloc.start()
+    durations: list[float] = []
+    observed_checksum: int | None = None
+    observation: ConversionObservation | None = None
     for _ in range(iterations):
         started = time.perf_counter()
-        result = converter(fixture.native)
+        observation = converter(fixture)
         durations.append((time.perf_counter() - started) * 1000)
-    _current, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
+        if observed_checksum is None:
+            observed_checksum = observation.checksum
+        elif observation.checksum != observed_checksum:
+            raise RuntimeError(f"{scenario} produced an unstable checksum")
 
-    sorted_durations = sorted(durations)
-    warm_mean = statistics.mean(durations) if durations else 0.0
-    warm_median = statistics.median(durations) if durations else 0.0
-    warm_std = statistics.stdev(durations) if len(durations) > 1 else 0.0
-    data_shape = shape_of(result, (fixture.rows, fixture.columns))
+    pool_before, _ = _pyarrow_pool_snapshot()
+    tracemalloc.start()
+    try:
+        memory_observation = converter(fixture)
+        _current, python_peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    pool_after, pool_max = _pyarrow_pool_snapshot()
+    if observation is None or memory_observation.checksum != observed_checksum:
+        raise RuntimeError(f"{scenario} memory run changed the observable result")
+
+    from benchmark_contracts import PYTHON_MEMORY_SCOPE, empirical_percentile
 
     return BenchmarkResult(
         package=package_label,
-        operation=f"handoff_offline:{scenario}:{fixture.rows}x{fixture.columns}",
-        cold_start_ms=round_ms(durations[0] if durations else 0.0),
-        warm_mean_ms=round_ms(warm_mean),
-        warm_median_ms=round_ms(warm_median),
-        warm_p95_ms=round_ms(percentile(sorted_durations, 95)),
-        warm_p99_ms=round_ms(percentile(sorted_durations, 99)),
-        warm_std_ms=round_ms(warm_std),
-        memory_peak_mb=round(peak / 1024 / 1024, 6),
-        data_shape=data_shape,
-        iterations=iterations,
-        warm_min_ms=round_ms(min(durations) if durations else 0.0),
-        warmup_iterations=warmup,
-        offline=True,
+        operation=f"handoff_offline:{scenario}:{fixture.case.name}",
         scenario=scenario,
-        rows=fixture.rows,
-        columns=fixture.columns,
-        build_profile=build_profile,
-        extension_path=extension_path,
+        consumer_scope=consumer_scope,
+        rows=fixture.case.rows,
+        columns=fixture.case.columns,
+        native_batches=len(fixture.native_batches),
+        batch_rows=fixture.case.batch_rows,
+        null_every=fixture.case.null_every,
+        string_bytes=fixture.case.string_bytes,
+        string_cardinality=fixture.case.string_cardinality,
+        timing_scope="uninstrumented warm conversion; fixture construction excluded",
+        mean_ms=round(statistics.mean(durations), 6),
+        median_ms=round(statistics.median(durations), 6),
+        min_ms=round(min(durations), 6),
+        max_ms=round(max(durations), 6),
+        p95_ms=_round_optional(empirical_percentile(durations, 95)),
+        p99_ms=_round_optional(empirical_percentile(durations, 99)),
+        timing_sample_count=len(durations),
+        warmup_iterations=warmup,
+        setup_ms=round(fixture.setup_ms, 6),
+        python_tracemalloc_peak_mb=round(python_peak / 1024 / 1024, 6),
+        memory_sample_count=1,
+        memory_scope=PYTHON_MEMORY_SCOPE,
+        pyarrow_pool_before_bytes=pool_before,
+        pyarrow_pool_after_bytes=pool_after,
+        pyarrow_pool_max_bytes=pool_max,
+        pyarrow_pool_scope=(
+            "PyArrow default pool bytes before/after the separate untimed run and process-lifetime "
+            "max_memory; the max is not attributable to this scenario"
+        ),
+        data_shape=observation.shape,
+        checksum=observation.checksum,
+        input_checksum=fixture.input_checksum,
+        offline=True,
     )
 
 
-def pyarrow_converter() -> Callable[[Any], Any]:
-    pa = importlib.import_module("pyarrow")
-    return pa.table
+def _round_optional(value: float | None) -> float | None:
+    return None if value is None else round(value, 6)
 
 
-def pandas_converter(table: Any) -> Any:
-    return convert_backend_frame(table, Backend.PANDAS)
+def result_document(
+    results: Sequence[BenchmarkResult],
+    output_path: Path | None,
+    cases: Sequence[ShapeCase],
+) -> dict[str, Any]:
+    from benchmark_contracts import collect_provenance
 
-
-def polars_converter(table: Any) -> Any:
-    return convert_backend_frame(table, Backend.POLARS)
-
-
-def to_pylist_converter(table: Any) -> list[dict[str, Any]]:
-    return table.to_pylist()
-
-
-def available_converters() -> Iterable[tuple[str, Callable[[Any], Any]]]:
-    yield "native_to_pyarrow_c_stream", pyarrow_converter()
-    yield "native_to_pandas_xbbg_backend", pandas_converter
-    if importlib.util.find_spec("polars") is not None:
-        yield "native_to_polars", polars_converter
-    yield "native_to_pylist_slow_path", to_pylist_converter
-
-
-def result_document(results: Sequence[BenchmarkResult], output_path: Path | None) -> dict[str, Any]:
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    inputs = [asdict(case) for case in cases]
     return {
+        "schema_version": 2,
         "version": getattr(xbbg, "__version__", "unknown"),
-        "timestamp": timestamp,
+        "timestamp": datetime.now().astimezone().isoformat(),
         "offline": True,
+        "coverage": "synthetic native Arrow carriers only; no Bloomberg SDK event or network coverage",
         "benchmark_file": Path(__file__).name,
         "output_path": str(output_path) if output_path is not None else None,
-        "benchmarks": {
-            "Binding Handoff - Offline": [asdict(result) for result in results],
-        },
+        "provenance": collect_provenance(inputs=inputs, benchmark_file=Path(__file__).name),
+        "benchmarks": {"Binding Handoff - Offline": [asdict(result) for result in results]},
     }
 
 
@@ -367,58 +477,62 @@ def write_results(document: dict[str, Any], results_dir: Path) -> Path:
     document["output_path"] = str(output_path)
     with output_path.open("w", encoding="utf-8") as file:
         json.dump(document, file, indent=2, default=str)
-    latest_path = results_dir / "handoff_offline_latest.json"
-    with latest_path.open("w", encoding="utf-8") as file:
+    with (results_dir / "handoff_offline_latest.json").open("w", encoding="utf-8") as file:
         json.dump(document, file, indent=2, default=str)
     return output_path
 
 
 def run(args: argparse.Namespace) -> tuple[list[BenchmarkResult], dict[str, Any], Path]:
-    iterations = args.iterations if args.iterations is not None else (QUICK_ITERATIONS if args.quick else DEFAULT_ITERATIONS)
+    iterations = (
+        args.iterations if args.iterations is not None else (QUICK_ITERATIONS if args.quick else DEFAULT_ITERATIONS)
+    )
     warmup = args.warmup if args.warmup is not None else (QUICK_WARMUP if args.quick else DEFAULT_WARMUP)
-    shapes = selected_shapes(args.shape)
-    build_profile, extension_path = detect_extension_profile()
-    package_label = f"xbbg-python-extension ({build_profile})"
+    cases = selected_cases(args.shape, args.quick)
+    from benchmark_contracts import collect_provenance
 
-    logger.info("=" * 70)
+    provenance = collect_provenance(inputs=[asdict(case) for case in cases], benchmark_file=Path(__file__).name)
+    build_info = provenance["artifact"]["build_info"]
+    profile = build_info.get("profile", "unknown") if isinstance(build_info, dict) else "unknown"
+    package_label = f"xbbg-python-extension ({profile})"
+
     logger.info("Offline Native Handoff Benchmark")
-    logger.info("=" * 70)
-    logger.info("Iterations: %s", iterations)
-    logger.info("Warmup: %s", warmup)
-    logger.info("Extension profile: %s", build_profile)
-    if extension_path:
-        logger.info("Extension path: %s", extension_path)
-
+    logger.info("Iterations: %s; warmup: %s; build profile: %s", iterations, warmup, profile)
     converters = tuple(available_converters())
     results: list[BenchmarkResult] = []
-
-    for rows, columns in shapes:
-        logger.info("\nBuilding fixture %sx%s (setup excluded from timings)...", rows, columns)
-        fixture = build_fixture(rows, columns)
-        logger.info("  setup: %.2fms", fixture.setup_ms)
-        for scenario, converter in converters:
-            logger.info("  Running %s...", scenario)
+    for case in cases:
+        logger.info(
+            "Building %s: %sx%s, batch_rows=%s, null_every=%s, string_bytes=%s",
+            case.name,
+            case.rows,
+            case.columns,
+            case.batch_rows,
+            case.null_every,
+            case.string_bytes,
+        )
+        fixture = build_fixture(case)
+        for scenario, consumer_scope, converter in converters:
             result = benchmark_conversion(
                 fixture=fixture,
                 scenario=scenario,
+                consumer_scope=consumer_scope,
                 converter=converter,
                 iterations=iterations,
                 warmup=warmup,
                 package_label=package_label,
-                build_profile=build_profile,
-                extension_path=extension_path,
             )
             results.append(result)
             logger.info(
-                "    median %.4fms, min %.4fms, peak %.2fMB",
-                result.warm_median_ms,
-                result.warm_min_ms,
-                result.memory_peak_mb,
+                "  %s: median %.4fms, max %.4fms (%s timing samples); Python peak %.2fMB",
+                scenario,
+                result.median_ms,
+                result.max_ms,
+                result.timing_sample_count,
+                result.python_tracemalloc_peak_mb,
             )
 
-    document = result_document(results, None)
+    document = result_document(results, None, cases)
     output_path = write_results(document, args.results_dir)
-    logger.info("\nWrote JSON results: %s", output_path)
+    logger.info("Wrote JSON results: %s", output_path)
     return results, document, output_path
 
 

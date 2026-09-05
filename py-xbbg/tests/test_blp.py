@@ -6,6 +6,7 @@ These tests verify selected Python API behavior without requiring a Bloomberg co
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextvars
 import inspect
 from pathlib import Path
@@ -95,7 +96,7 @@ class TestNotebookSyncBridge:
             blp._stop_notebook_sync_loop()
 
         _CASE.assertEqual(value, "active-engine")
-        _CASE.assertEqual(thread_name, "xbbg-notebook-sync-bridge")
+        _CASE.assertNotEqual(thread_name, threading.current_thread().name)
 
     def test_notebook_context_propagates_async_exceptions(self, monkeypatch):
         """Async failures should surface unchanged to the sync caller."""
@@ -118,6 +119,112 @@ class TestNotebookSyncBridge:
                 asyncio.run(call_wrapper())
         finally:
             blp._stop_notebook_sync_loop()
+
+    def test_notebook_context_propagates_base_exceptions_without_hanging(self):
+        from xbbg import blp
+
+        class BridgeAbort(BaseException):
+            pass
+
+        expected = BridgeAbort("abort")
+        received: list[BaseException] = []
+
+        async def fake_request():
+            raise expected
+
+        def call_bridge():
+            try:
+                blp._run_in_notebook_sync_bridge(fake_request, (), {})
+            except BaseException as error:
+                received.append(error)
+
+        caller = threading.Thread(target=call_bridge, daemon=True)
+        caller.start()
+        caller.join(timeout=1)
+        try:
+            assert not caller.is_alive()
+            assert received == [expected]
+        finally:
+            blp._stop_notebook_sync_loop()
+
+    def test_stopping_notebook_bridge_cancels_active_call_and_releases_thread(self):
+        from xbbg import blp
+
+        started = threading.Event()
+        received: list[BaseException] = []
+
+        async def fake_request():
+            started.set()
+            await asyncio.Event().wait()
+
+        def call_bridge():
+            try:
+                blp._run_in_notebook_sync_bridge(fake_request, (), {})
+            except BaseException as error:
+                received.append(error)
+
+        caller = threading.Thread(target=call_bridge, daemon=True)
+        caller.start()
+        assert started.wait(timeout=1)
+
+        blp._stop_notebook_sync_loop()
+        caller.join(timeout=1)
+
+        assert not caller.is_alive()
+        assert len(received) == 1
+        assert isinstance(received[0], concurrent.futures.CancelledError)
+        assert not any(
+            thread.name == "xbbg-notebook-sync-bridge" and thread.is_alive() for thread in threading.enumerate()
+        )
+
+    def test_stop_cancels_call_accepted_before_loop_dispatch(self, monkeypatch):
+        from xbbg import blp
+
+        loop = blp._ensure_notebook_sync_loop()
+        loop_blocked = threading.Event()
+        release_loop = threading.Event()
+        call_accepted = threading.Event()
+        received: list[BaseException] = []
+
+        def block_loop():
+            loop_blocked.set()
+            release_loop.wait(timeout=1)
+
+        loop.call_soon_threadsafe(block_loop)
+        assert loop_blocked.wait(timeout=1)
+
+        original_start = blp._notebook_sync_bridge.start
+
+        def mark_accepted(*args, **kwargs):
+            call = original_start(*args, **kwargs)
+            call_accepted.set()
+            return call
+
+        async def fake_request():
+            return "too late"
+
+        def call_bridge():
+            try:
+                blp._run_in_notebook_sync_bridge(fake_request, (), {})
+            except BaseException as error:
+                received.append(error)
+
+        monkeypatch.setattr(blp._notebook_sync_bridge, "start", mark_accepted)
+        caller = threading.Thread(target=call_bridge, daemon=True)
+        caller.start()
+        assert call_accepted.wait(timeout=1)
+
+        stopper = threading.Thread(target=blp._stop_notebook_sync_loop, daemon=True)
+        stopper.start()
+        try:
+            caller.join(timeout=1)
+            assert not caller.is_alive()
+            assert len(received) == 1
+            assert isinstance(received[0], concurrent.futures.CancelledError)
+        finally:
+            release_loop.set()
+            stopper.join(timeout=1)
+            assert not stopper.is_alive()
 
     def test_public_bridge_scope_is_one_shot_only(self, monkeypatch):
         """Installed public wrappers should bridge one-shot APIs, not streams."""
@@ -147,6 +254,68 @@ class TestNotebookSyncBridge:
         _CASE.assertEqual(request_kwargs["service"], "//blp/refdata")
         with pytest.raises(RuntimeError, match="await asubscribe"):
             asyncio.run(call_subscribe())
+
+
+class TestEngineContextScopes:
+    """Scoped engines restore routing across nesting and concurrent tasks."""
+
+    @staticmethod
+    def _make_engine(monkeypatch):
+        from xbbg import _core, blp
+
+        native_engine = object()
+
+        class FakeConfig:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        class FakePyEngine:
+            @staticmethod
+            def with_config(_config):
+                return native_engine
+
+        monkeypatch.setattr(_core, "PyEngineConfig", FakeConfig)
+        monkeypatch.setattr(_core, "PyEngine", FakePyEngine)
+        return blp, blp.Engine(), native_engine
+
+    def test_nested_same_engine_scope_restores_previous_routing(self, monkeypatch):
+        blp, engine, native_engine = self._make_engine(monkeypatch)
+        previous = object()
+        previous_token = blp._active_engine.set(previous)
+        try:
+            with engine:
+                assert blp._get_engine() is native_engine
+                with engine:
+                    assert blp._get_engine() is native_engine
+                assert blp._get_engine() is native_engine
+            assert blp._active_engine.get() is previous
+        finally:
+            blp._active_engine.reset(previous_token)
+
+    def test_concurrent_same_engine_scopes_restore_each_task_context(self, monkeypatch):
+        blp, engine, native_engine = self._make_engine(monkeypatch)
+
+        async def exercise_scopes():
+            entered = 0
+            both_entered = asyncio.Event()
+
+            async def worker(previous):
+                nonlocal entered
+                previous_token = blp._active_engine.set(previous)
+                try:
+                    async with engine:
+                        entered += 1
+                        if entered == 2:
+                            both_entered.set()
+                        await both_entered.wait()
+                        assert blp._get_engine() is native_engine
+                    assert blp._active_engine.get() is previous
+                finally:
+                    blp._active_engine.reset(previous_token)
+
+            await asyncio.gather(worker(object()), worker(object()))
+
+        asyncio.run(exercise_scopes())
 
 
 class TestExtSyncify:
@@ -243,6 +412,35 @@ class TestBdtick:
 
 class TestGeneratedEndpointFieldTypeCache:
     """Generated endpoint plans reuse resolved field metadata without leaking overrides."""
+
+    def test_invalidation_during_resolution_does_not_republish_stale_entry(self, monkeypatch):
+        from xbbg import blp
+
+        async def exercise_invalidation():
+            started = asyncio.Event()
+            release = asyncio.Event()
+
+            class FakeEngine:
+                async def resolve_field_types(self, fields, overrides, default_type):
+                    started.set()
+                    await release.wait()
+                    return dict.fromkeys(fields, default_type)
+
+            monkeypatch.setattr(blp, "_get_engine", lambda: FakeEngine())
+            blp._clear_field_type_resolution_cache()
+            resolution = asyncio.create_task(blp._resolve_field_types_cached(["PX_LAST"], None, "float64"))
+            await started.wait()
+            blp._clear_field_type_resolution_cache()
+            release.set()
+
+            assert await resolution == {"PX_LAST": "float64"}
+            with blp._FIELD_TYPE_RESOLUTION_CACHE_LOCK:
+                assert blp._FIELD_TYPE_RESOLUTION_CACHE == {}
+
+        try:
+            asyncio.run(exercise_invalidation())
+        finally:
+            blp._clear_field_type_resolution_cache()
 
     @pytest.mark.parametrize(
         ("builder_name", "default_type", "extra_args"),

@@ -40,7 +40,7 @@ class BenchmarkResult:
 
     name: str
     library: str
-    cold_ms: float  # First call (includes any setup)
+    first_call_same_process_ms: float
     warm_mean_ms: float  # Mean of subsequent calls
     warm_std_ms: float  # Std dev of subsequent calls
     iterations: int
@@ -48,11 +48,10 @@ class BenchmarkResult:
 
 
 def benchmark_func(name: str, library: str, func: Callable, iterations: int = ITERATIONS) -> BenchmarkResult:
-    """Benchmark a function with cold start and warm iterations."""
-    # Cold start
+    """Benchmark a first same-process call and subsequent warm calls."""
     start = time.perf_counter()
     result = func()
-    cold_ms = (time.perf_counter() - start) * 1000
+    first_call_same_process_ms = (time.perf_counter() - start) * 1000
 
     # Get shape
     if hasattr(result, "shape"):
@@ -72,8 +71,8 @@ def benchmark_func(name: str, library: str, func: Callable, iterations: int = IT
     return BenchmarkResult(
         name=name,
         library=library,
-        cold_ms=cold_ms,
-        warm_mean_ms=statistics.mean(warm_times) if warm_times else cold_ms,
+        first_call_same_process_ms=first_call_same_process_ms,
+        warm_mean_ms=statistics.mean(warm_times) if warm_times else first_call_same_process_ms,
         warm_std_ms=statistics.stdev(warm_times) if len(warm_times) > 1 else 0,
         iterations=iterations,
         data_shape=shape,
@@ -88,10 +87,17 @@ def print_comparison(xbbg_result: BenchmarkResult, plbbg_result: BenchmarkResult
     logger.info(f"  {'Metric':<20} {'xbbg':>15} {'polars-bbg':>15} {'Ratio':>10}")
     logger.info(f"  {'-' * 60}")
 
-    cold_ratio = xbbg_result.cold_ms / plbbg_result.cold_ms if plbbg_result.cold_ms > 0 else 0
     warm_ratio = xbbg_result.warm_mean_ms / plbbg_result.warm_mean_ms if plbbg_result.warm_mean_ms > 0 else 0
 
-    logger.info(f"  {'Cold (ms)':<20} {xbbg_result.cold_ms:>15.2f} {plbbg_result.cold_ms:>15.2f} {cold_ratio:>10.2f}x")
+    logger.info(
+        f"  {'First call, same process (ms)':<30} "
+        f"{xbbg_result.first_call_same_process_ms:>15.2f} "
+        f"{plbbg_result.first_call_same_process_ms:>15.2f} {'n/a':>10}"
+    )
+    logger.info(
+        "  First-call ratio withheld: xbbg may lazily initialize its process-global "
+        "engine, while BQuery is established before timing."
+    )
     logger.info(
         f"  {'Warm mean (ms)':<20} {xbbg_result.warm_mean_ms:>15.2f} {plbbg_result.warm_mean_ms:>15.2f} {warm_ratio:>10.2f}x"
     )
